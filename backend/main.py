@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import re
+
 
 
 
@@ -22,6 +24,77 @@ app.add_middleware(
 class ProcessTextRequest(BaseModel):
     text: str
 
+def analyze_text(text: str) -> dict:
+    """
+    Simula un análisis 'inteligente' del texto.
+    Extrae cliente, acción y fecha usando reglas simples.
+    """
+    lower = text.lower()
+    cliente = None
+    accion = None
+    fecha = None
+
+    # --- Cliente ---
+    # Busca patrones tipo "cliente Carlos" o "con Carlos"
+    match_cliente = re.search(
+        r"cliente\s+([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ]+)*)",
+        text,
+    )
+    if match_cliente:
+        cliente = match_cliente.group(1)
+    else:
+        match_con = re.search(
+            r"con\s+([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ]+)", text
+        )
+        if match_con:
+            cliente = match_con.group(1)
+
+    # --- Acción ---
+    action_map = {
+        "presupuesto": "Enviar presupuesto",
+        "oferta": "Enviar oferta",
+        "reunión": "Concertar reunión",
+        "reunion": "Concertar reunión",
+        "llamada": "Realizar llamada de seguimiento",
+        "visita": "Registrar visita comercial",
+    }
+
+    for palabra, accion_descripcion in action_map.items():
+        if palabra in lower:
+            accion = accion_descripcion
+            break
+
+    # --- Fecha ---
+    # Palabras tipo "hoy", "mañana", "martes", etc.
+    fecha_keywords = [
+        "hoy",
+        "mañana",
+        "lunes",
+        "martes",
+        "miércoles",
+        "miercoles",
+        "jueves",
+        "viernes",
+        "sábado",
+        "sabado",
+        "domingo",
+    ]
+    for fk in fecha_keywords:
+        if fk in lower:
+            fecha = fk
+            break
+
+    # Formato numérico tipo 10/12/2025
+    match_fecha_num = re.search(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b", text)
+    if match_fecha_num:
+        fecha = match_fecha_num.group(1)
+
+    return {
+        "cliente": cliente,
+        "accion": accion,
+        "fecha": fecha,
+        "comentario": text,
+    }
 
 @app.get("/")
 def read_root():
@@ -34,11 +107,9 @@ def ping():
 
 @app.post("/process-text")
 def process_text(body: ProcessTextRequest):
-    text = body.text
-
-    # Lógica simple por ahora: devolver el texto y su longitud
-    return {
-        "original_text": text,
-        "length": len(text),
-        "info": "Procesado correctamente en backend (simulación IA básica)",
-    }
+    """
+    Recibe un texto libre y devuelve una estructura
+    con cliente, acción, fecha y comentario.
+    """
+    result = analyze_text(body.text)
+    return result
