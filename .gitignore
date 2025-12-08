@@ -1,0 +1,20 @@
+# General
+.vscode/
+.idea/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Flutter
+**/build/
+.dart_tool/
+.packages
+.pub-cache/
+
+# OS
+Thumbs.db
+.DS_Store
