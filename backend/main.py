@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+
 
 app = FastAPI(
     title="CRM Voice API",
@@ -16,6 +19,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class ProcessTextRequest(BaseModel):
+    text: str
+
 
 @app.get("/")
 def read_root():
@@ -25,3 +31,14 @@ def read_root():
 @app.get("/ping")
 def ping():
     return {"status": "ok", "message": "pong"}
+
+@app.post("/process-text")
+def process_text(body: ProcessTextRequest):
+    text = body.text
+
+    # Lógica simple por ahora: devolver el texto y su longitud
+    return {
+        "original_text": text,
+        "length": len(text),
+        "info": "Procesado correctamente en backend (simulación IA básica)",
+    }
