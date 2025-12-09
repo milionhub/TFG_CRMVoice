@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import re
@@ -113,3 +113,20 @@ def process_text(body: ProcessTextRequest):
     """
     result = analyze_text(body.text)
     return result
+
+# 🔴 NUEVO: endpoint para audio
+@app.post("/process-audio")
+async def process_audio(file: UploadFile = File(...)):
+    """
+    Recibe un archivo de audio y devuelve información básica
+    para confirmar que ha llegado bien.
+    """
+    content = await file.read()
+    size_kb = round(len(content) / 1024, 2)
+
+    return {
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size_kb": size_kb,
+        "detail": "Audio recibido correctamente en el backend",
+    }

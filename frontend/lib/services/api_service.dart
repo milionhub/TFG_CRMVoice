@@ -37,5 +37,33 @@ class ApiService {
       throw Exception("Error al procesar el texto");
     }
   }
+
+   /// 🔴 NUEVO: POST /process-audio (multipart/form-data)
+  static Future<Map<String, dynamic>> uploadAudio({
+    required List<int> bytes,
+    required String filename,
+  }) async {
+    final url = Uri.parse("$baseUrl/process-audio");
+
+    final request = http.MultipartRequest("POST", url);
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file', // nombre del campo en FastAPI
+        bytes,
+        filename: filename,
+      ),
+    );
+
+    final streamedResponse = await request.send();
+    final body = await streamedResponse.stream.bytesToString();
+
+    if (streamedResponse.statusCode == 200) {
+      return jsonDecode(body) as Map<String, dynamic>;
+    } else {
+      throw Exception(
+          "Error al enviar audio (${streamedResponse.statusCode}): $body");
+    }
+  }
 }
+
 
