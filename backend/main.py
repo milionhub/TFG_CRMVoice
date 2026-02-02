@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from db import get_connection, init_db
 import re
 
 
@@ -11,6 +12,8 @@ app = FastAPI(
     version="0.1.0",
     description="Backend base del TFG CRM Voice",
 )
+
+init_db()
 
 # Configuración CORS básica (luego la afinamos)
 app.add_middleware(
@@ -117,26 +120,39 @@ def process_text(body: ProcessTextRequest):
 # 🔴 NUEVO: endpoint para audio
 @app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...)):
-    """
-    Simulación Speech To Text:
-    - Recibe audio
-    - Genera texto falso
-    - Analiza ese texto
-    - Devuelve resultado completo
-    """
     content = await file.read()
     size_kb = round(len(content) / 1024, 2)
 
-    # 🟣 1) Texto simulado (Speech To Text falso)
+    # 🔹 Simulación Speech to Text
     fake_text = (
         "He estado con el cliente Carlos, quiere presupuesto para el martes."
     )
 
-    # 🟣 2) Reutilizar análisis de texto existente
     analysis = analyze_text(fake_text)
 
-    # 🟣 3) Devolver todo al frontend
+    # 🔹 GUARDAR EN BD
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO activities (cliente, accion, fecha, comentario)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            analysis["cliente"],
+            analysis["accion"],
+            analysis["fecha"],
+            analysis["comentario"],
+        ),
+    )
+
+    conn.commit()
+    activity_id = cursor.lastrowid
+    conn.close()
+
     return {
+        "id": activity_id,
         "filename": file.filename,
         "content_type": file.content_type,
         "size_kb": size_kb,
@@ -145,5 +161,5 @@ async def process_audio(file: UploadFile = File(...)):
         "accion": analysis["accion"],
         "fecha": analysis["fecha"],
         "comentario": analysis["comentario"],
-        "detail": "Audio recibido y analizado (simulación STT)",
+        "detail": "Audio recibido, analizado y guardado en BD",
     }
