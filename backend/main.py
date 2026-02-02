@@ -118,15 +118,32 @@ def process_text(body: ProcessTextRequest):
 @app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...)):
     """
-    Recibe un archivo de audio y devuelve información básica
-    para confirmar que ha llegado bien.
+    Simulación Speech To Text:
+    - Recibe audio
+    - Genera texto falso
+    - Analiza ese texto
+    - Devuelve resultado completo
     """
     content = await file.read()
     size_kb = round(len(content) / 1024, 2)
 
+    # 🟣 1) Texto simulado (Speech To Text falso)
+    fake_text = (
+        "He estado con el cliente Carlos, quiere presupuesto para el martes."
+    )
+
+    # 🟣 2) Reutilizar análisis de texto existente
+    analysis = analyze_text(fake_text)
+
+    # 🟣 3) Devolver todo al frontend
     return {
         "filename": file.filename,
         "content_type": file.content_type,
         "size_kb": size_kb,
-        "detail": "Audio recibido correctamente en el backend",
+        "texto": fake_text,
+        "cliente": analysis["cliente"],
+        "accion": analysis["accion"],
+        "fecha": analysis["fecha"],
+        "comentario": analysis["comentario"],
+        "detail": "Audio recibido y analizado (simulación STT)",
     }

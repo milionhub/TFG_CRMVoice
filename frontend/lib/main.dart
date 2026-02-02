@@ -5,6 +5,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:cross_file/cross_file.dart';
+import 'dart:io';
+import 'package:http/http.dart' as http;
 
 
 void main() {
@@ -202,41 +204,49 @@ Future<void> _toggleRecording() async {
 Future<void> _sendLastAudioToBackend() async {
   if (_lastAudioRef == null) {
     setState(() {
-      analysisResult = "No hay ninguna grabación para enviar.";
+      analysisResult = "No hay ningún audio para enviar.";
     });
     return;
   }
 
   setState(() {
     isLoading = true;
-    analysisResult = "";
+    analysisResult = "Procesando audio...";
   });
 
   try {
-    // XFile distinto en web / nativo
-    final xfile = XFile(_lastAudioRef!);
-    final bytes = await xfile.readAsBytes();
+    // 🔹 Convertir referencia a bytes
+    late List<int> bytes;
+    late String filename;
 
+    if (kIsWeb) {
+      final response = await http.get(Uri.parse(_lastAudioRef!));
+      bytes = response.bodyBytes;
+      filename = "audio_web.wav";
+    } else {
+      final file = File(_lastAudioRef!);
+      bytes = await file.readAsBytes();
+      filename = file.path.split('/').last;
+    }
 
-    // nombre de archivo “bonito”
-    final filename = _lastAudioRef!.split('/').last;
-
-    final resp = await ApiService.uploadAudio(
+    // 🔹 Enviar audio al backend
+    final data = await ApiService.uploadAudio(
       bytes: bytes,
       filename: filename,
     );
 
+    // 🔹 Mostrar análisis directamente
     setState(() {
       analysisResult =
-          "Audio enviado correctamente.\n\n"
-          "Archivo: ${resp['filename']}\n"
-          "Tipo: ${resp['content_type']}\n"
-          "Tamaño: ${resp['size_kb']} KB\n"
-          "Mensaje backend: ${resp['detail']}";
+          "Texto detectado:\n${data['texto']}\n\n"
+          "Cliente: ${data['cliente'] ?? '-'}\n"
+          "Acción: ${data['accion'] ?? '-'}\n"
+          "Fecha: ${data['fecha'] ?? '-'}\n\n"
+          "Comentario:\n${data['comentario']}";
     });
   } catch (e) {
     setState(() {
-      analysisResult = "Error al enviar audio: $e";
+      analysisResult = "Error procesando el audio.";
     });
   } finally {
     setState(() {
@@ -244,6 +254,7 @@ Future<void> _sendLastAudioToBackend() async {
     });
   }
 }
+
 
 
   @override
