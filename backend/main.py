@@ -178,7 +178,7 @@ def get_activities():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, cliente, accion, fecha, comentario
+        SELECT id, cliente, accion, fecha, comentario, transcripcion
         FROM activities
         ORDER BY id DESC
     """)
@@ -193,6 +193,8 @@ def get_activities():
             "accion": r[2],
             "fecha": r[3],
             "comentario": r[4],
+            "trasncripcion": r[5],
+
         })
 
     return {"count": len(activities), "activities": activities}
