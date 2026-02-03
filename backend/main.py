@@ -142,14 +142,15 @@ async def process_audio(file: UploadFile = File(...)):
 
     cursor.execute(
         """
-        INSERT INTO activities (cliente, accion, fecha, comentario)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO activities (cliente, accion, fecha, comentario, transcripcion)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             analysis["cliente"],
             analysis["accion"],
             analysis["fecha"],
             analysis["comentario"],
+            text_transcribed,
         ),
     )
 

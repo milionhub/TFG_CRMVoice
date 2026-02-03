@@ -16,7 +16,8 @@ def init_db():
             cliente TEXT,
             accion TEXT,
             fecha TEXT,
-            comentario TEXT
+            comentario TEXT,
+            transcripcion TEXT
         )
     """)
 
