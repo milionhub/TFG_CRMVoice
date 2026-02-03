@@ -7,7 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:cross_file/cross_file.dart';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-
+import 'history_page.dart';
 
 void main() {
   runApp(const CRMVoiceApp());
@@ -315,6 +315,15 @@ Future<void> _sendLastAudioToBackend() async {
                 onPressed: isLoading ? null : _sendLastAudioToBackend,
                 icon: const Icon(Icons.cloud_upload),
                 label: const Text("Enviar audio al backend"),
+              ),ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const HistoryPage()),
+                  );
+                },
+                icon: const Icon(Icons.list),
+                label: const Text("Ver histórico"),
               ),
             ],
 

@@ -64,6 +64,20 @@ class ApiService {
           "Error al enviar audio (${streamedResponse.statusCode}): $body");
     }
   }
+
+  static Future<List<Map<String, dynamic>>> getActivities() async {
+  final url = Uri.parse("$baseUrl/activities");
+  final response = await http.get(url);
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final list = (data["activities"] as List).cast<Map<String, dynamic>>();
+    return list;
+  } else {
+    throw Exception("Error al obtener actividades");
+  }
+}
+
 }
 
 
