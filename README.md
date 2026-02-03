@@ -1,99 +1,154 @@
-# CRM Voice
+🧠 CRM Voice
 
-Sistema inteligente para el registro automatizado de actividades comerciales mediante voz con integración en CRM.
+Sistema inteligente para el registro automatizado de actividades comerciales mediante voz, con procesamiento de audio real, Inteligencia Artificial y almacenamiento estructurado en CRM.
 
-Proyecto de Trabajo de Fin de Grado (TFG).
+Proyecto desarrollado como Trabajo de Fin de Grado (TFG).
 
-# Objetivo del proyecto
+🎯 Objetivo del proyecto
 
-Permitir que un comercial registre visitas y tareas hablando, de manera que el sistema sea capaz de:
+El objetivo de CRM Voice es permitir que un comercial registre visitas, llamadas y tareas simplemente hablando, eliminando la necesidad de introducir datos manualmente.
 
-Transcribir el audio a texto.
+El sistema es capaz de:
 
-Analizar el texto mediante técnicas de Inteligencia Artificial.
+Grabar audio de voz desde una aplicación web.
 
-Extraer datos relevantes (cliente, fecha, acción, notas).
+Transcribir audio real a texto mediante Speech To Text basado en IA (Whisper).
+
+Analizar automáticamente el texto generado.
+
+Extraer información relevante:
+
+Cliente
+
+Acción comercial
+
+Fecha
+
+Comentarios
 
 Almacenar la información en un CRM interno.
 
-Crear eventos automáticamente en Google Calendar cuando se detecten fechas.
+Mantener trazabilidad completa entre audio, transcripción y actividad.
 
-# Tecnologías utilizadas
+Preparar el sistema para futuras integraciones (calendarios, clientes, empresas).
 
-Frontend: Flutter (Web)
+🧩 Flujo funcional del sistema
+Grabación de voz (Flutter)
+→ Envío de audio al backend
+→ Transcripción automática con IA (Whisper)
+→ Análisis semántico del texto
+→ Enriquecimiento de la actividad CRM
+→ Almacenamiento en base de datos
+→ Visualización en histórico
 
-Backend: FastAPI (Python)
+🛠️ Tecnologías utilizadas
+Frontend
 
-Control de versiones: GitHub
+Flutter (Web)
 
-Entorno operativo: Windows 10
+Grabación de audio desde navegador
 
-Servidor backend: Uvicorn
+Comunicación HTTP con backend
 
-Documentación API: Swagger (OpenAPI /docs)
+Backend
 
-Gestión de dependencias: pip + venv
+FastAPI (Python)
 
-# Estructura del proyecto
+Motor ASR: Whisper (Speech To Text)
 
+Base de datos: SQLite
+
+Servidor ASGI: Uvicorn
+
+Análisis semántico basado en reglas
+
+Herramientas adicionales
+
+Git & GitHub (control de versiones)
+
+Swagger / OpenAPI (documentación API)
+
+Entornos virtuales Python (venv)
+
+FFmpeg (procesamiento de audio)
+
+📁 Estructura del proyecto
 TFG_CRMVoice/
-├─ backend/ → API FastAPI
-│ ├─ main.py
-│ └─ venv/
-├─ frontend/ → Aplicación Flutter
-│ ├─ lib/
-│ │ └─ main.dart
-│ └─ web/
-├─ docs/ → Documentación del TFG
+├─ backend/                 → API FastAPI
+│  ├─ main.py               → Endpoints principales
+│  ├─ whisper_service.py    → Servicio de transcripción con IA
+│  ├─ db.py                 → Gestión de base de datos
+│  ├─ requirements.txt
+│  └─ venv/
+│
+├─ frontend/                → Aplicación Flutter Web
+│  ├─ lib/
+│  │  ├─ main.dart
+│  │  ├─ history_page.dart
+│  │  └─ services/
+│  │     └─ api_service.dart
+│  └─ web/
+│
+├─ docs/                    → Documentación del TFG
 ├─ README.md
 └─ .gitignore
 
-# Instalación y ejecución
-1. Clonar el repositorio
-
+🚀 Instalación y ejecución
+1️⃣ Clonar el repositorio
 git clone https://github.com/milionhub/TFG_CRMVoice.git
-
 cd TFG_CRMVoice
 
-# Backend (FastAPI)
-2. Crear entorno virtual
-
+2️⃣ Backend (FastAPI)
 cd backend
 python -m venv venv
 venv\Scripts\activate
-
-3. Instalar dependencias
-
 pip install -r requirements.txt
-
-4. Ejecutar servidor
-
 uvicorn main:app --reload --port 8000
 
-5. Probar API en navegador
+Endpoints disponibles
 
 Root: http://127.0.0.1:8000/
 
 Ping: http://127.0.0.1:8000/ping
 
-Documentación Swagger: http://127.0.0.1:8000/docs
+Swagger UI: http://127.0.0.1:8000/docs
 
-# Frontend (Flutter Web)
-
+3️⃣ Frontend (Flutter Web)
 cd frontend
 flutter run -d chrome
 
-# Estado del proyecto
 
-✅ Infraestructura creada
+Desde la interfaz se puede:
 
-✅ Frontend base operativo
+Grabar audio
 
-✅ Backend funcional
+Enviar audio al backend
 
-✅ Primer sprint completado
+Ver el histórico de actividades CRM
 
-# Autor
+📊 Estado actual del proyecto
+
+✅ Arquitectura completa frontend–backend
+✅ Grabación de audio real
+✅ Transcripción automática con IA (Whisper)
+✅ Análisis semántico del texto
+✅ Persistencia completa en base de datos
+✅ Histórico de actividades CRM
+✅ Flujo extremo a extremo validado
+
+🔮 Trabajo futuro
+
+Gestión avanzada de clientes y empresas.
+
+Asociación automática con datos fiscales (CIF, teléfono, email).
+
+Integración con Google Calendar.
+
+Mejora del análisis semántico con NLP avanzado.
+
+Autenticación y control de usuarios.
+
+👤 Autor
 
 Juan Marín Escolano
 Trabajo de Fin de Grado — CRM Voice
