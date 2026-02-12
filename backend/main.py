@@ -4,101 +4,132 @@ from pydantic import BaseModel
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
 import re
-
-
+from datetime import datetime, timedelta
 
 
 app = FastAPI(
     title="CRM Voice API",
-    version="0.1.0",
-    description="Backend base del TFG CRM Voice",
+    version="0.3.0",
+    description="Backend del TFG CRM Voice",
 )
 
 init_db()
 
-# Configuración CORS básica (luego la afinamos)
+# -------------------------
+# CORS
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # en desarrollo permitimos todo
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# -------------------------
+# MODELOS
+# -------------------------
 class ProcessTextRequest(BaseModel):
     text: str
 
-def analyze_text(text: str) -> dict:
-    """
-    Simula un análisis 'inteligente' del texto.
-    Extrae cliente, acción y fecha usando reglas simples.
-    """
+
+# =========================
+# UTILIDADES IA
+# =========================
+
+def normalize_name(name: str) -> str:
+    return " ".join(word.capitalize() for word in name.split())
+
+
+def detect_cliente(text: str) -> str | None:
+    patterns = [
+        r"cliente\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+){0,2})",
+        r"con\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+(?:corp|sl|s\.l\.|industries|group|company))?)",
+        r"he hablado con\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)",
+        r"hablé con\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return normalize_name(match.group(1))
+
+    return None
+
+
+def detect_action(text: str) -> str | None:
+    rules = [
+        (r"enviar.*presupuesto|presupuesto", "Enviar presupuesto"),
+        (r"enviar.*oferta|oferta", "Enviar oferta"),
+        (r"concertar.*reunión|reunión|reunion", "Concertar reunión"),
+        (r"visita", "Registrar visita comercial"),
+        (r"llamada|llamar", "Realizar llamada de seguimiento"),
+    ]
+
     lower = text.lower()
-    cliente = None
-    accion = None
-    fecha = None
+    for pattern, action in rules:
+        if re.search(pattern, lower):
+            return action
 
-    # --- Cliente ---
-    # Busca patrones tipo "cliente Carlos" o "con Carlos"
-    match_cliente = re.search(
-        r"cliente\s+([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ]+)*)",
-        text,
-    )
-    if match_cliente:
-        cliente = match_cliente.group(1)
-    else:
-        match_con = re.search(
-            r"con\s+([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ]+)", text
-        )
-        if match_con:
-            cliente = match_con.group(1)
+    return None
 
-    # --- Acción ---
-    action_map = {
-        "presupuesto": "Enviar presupuesto",
-        "oferta": "Enviar oferta",
-        "reunión": "Concertar reunión",
-        "reunion": "Concertar reunión",
-        "llamada": "Realizar llamada de seguimiento",
-        "visita": "Registrar visita comercial",
+
+def normalize_fecha(text: str) -> str | None:
+    """
+    Convierte fechas relativas a formato ISO YYYY-MM-DD
+    """
+    today = datetime.today()
+    lower = text.lower()
+
+    if "hoy" in lower:
+        return today.strftime("%Y-%m-%d")
+
+    if "mañana" in lower:
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    weekdays = {
+        "lunes": 0,
+        "martes": 1,
+        "miércoles": 2,
+        "miercoles": 2,
+        "jueves": 3,
+        "viernes": 4,
+        "sábado": 5,
+        "sabado": 5,
+        "domingo": 6,
     }
 
-    for palabra, accion_descripcion in action_map.items():
-        if palabra in lower:
-            accion = accion_descripcion
-            break
+    for day, weekday in weekdays.items():
+        if day in lower:
+            days_ahead = (weekday - today.weekday() + 7) % 7
+            days_ahead = 7 if days_ahead == 0 else days_ahead
+            return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
-    # --- Fecha ---
-    # Palabras tipo "hoy", "mañana", "martes", etc.
-    fecha_keywords = [
-        "hoy",
-        "mañana",
-        "lunes",
-        "martes",
-        "miércoles",
-        "miercoles",
-        "jueves",
-        "viernes",
-        "sábado",
-        "sabado",
-        "domingo",
-    ]
-    for fk in fecha_keywords:
-        if fk in lower:
-            fecha = fk
-            break
+    # Fecha explícita 10/12/2025
+    match = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", text)
+    if match:
+        day, month, year = match.groups()
+        year = "20" + year if len(year) == 2 else year
+        try:
+            return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
 
-    # Formato numérico tipo 10/12/2025
-    match_fecha_num = re.search(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b", text)
-    if match_fecha_num:
-        fecha = match_fecha_num.group(1)
+    return None
 
+
+def analyze_text(text: str) -> dict:
     return {
-        "cliente": cliente,
-        "accion": accion,
-        "fecha": fecha,
+        "cliente": detect_cliente(text),
+        "accion": detect_action(text),
+        "fecha": normalize_fecha(text),
         "comentario": text,
     }
+
+
+# =========================
+# ENDPOINTS
+# =========================
 
 @app.get("/")
 def read_root():
@@ -107,36 +138,25 @@ def read_root():
 
 @app.get("/ping")
 def ping():
-    return {"status": "ok", "message": "pong"}
+    return {"status": "ok"}
+
 
 @app.post("/process-text")
 def process_text(body: ProcessTextRequest):
-    """
-    Recibe un texto libre y devuelve una estructura
-    con cliente, acción, fecha y comentario.
-    """
-    result = analyze_text(body.text)
-    return result
+    return analyze_text(body.text)
 
-# 🔴 NUEVO: endpoint para audio
+
 @app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...)):
     content = await file.read()
-    size_kb = round(len(content) / 1024, 2)
 
-   # 🔹 Speech To Text REAL con Whisper
     try:
         text_transcribed = transcribe_audio(content)
     except Exception as e:
-        return {
-            "error": "Error al transcribir el audio",
-            "detail": str(e)
-        }
+        return {"error": str(e)}
 
     analysis = analyze_text(text_transcribed)
 
-
-    # 🔹 GUARDAR EN BD
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -155,20 +175,12 @@ async def process_audio(file: UploadFile = File(...)):
     )
 
     conn.commit()
-    activity_id = cursor.lastrowid
     conn.close()
 
     return {
-        "id": activity_id,
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "size_kb": size_kb,
         "texto": text_transcribed,
-        "cliente": analysis["cliente"],
-        "accion": analysis["accion"],
-        "fecha": analysis["fecha"],
-        "comentario": analysis["comentario"],
-        "detail": "Audio recibido, analizado y guardado en BD",
+        **analysis,
+        "detail": "Audio procesado y fecha normalizada",
     }
 
 
@@ -178,23 +190,24 @@ def get_activities():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, cliente, accion, fecha, comentario, transcripcion
+        SELECT id, cliente, accion, fecha, comentario
         FROM activities
         ORDER BY id DESC
     """)
+
     rows = cursor.fetchall()
     conn.close()
 
-    activities = []
-    for r in rows:
-        activities.append({
-            "id": r[0],
-            "cliente": r[1],
-            "accion": r[2],
-            "fecha": r[3],
-            "comentario": r[4],
-            "trasncripcion": r[5],
-
-        })
-
-    return {"count": len(activities), "activities": activities}
+    return {
+        "count": len(rows),
+        "activities": [
+            {
+                "id": r[0],
+                "cliente": r[1],
+                "accion": r[2],
+                "fecha": r[3],
+                "comentario": r[4],
+            }
+            for r in rows
+        ],
+    }
