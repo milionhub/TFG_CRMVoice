@@ -5,6 +5,8 @@ from db import get_connection, init_db
 from whisper_service import transcribe_audio
 import re
 from datetime import datetime, timedelta
+from entity_resolver import resolve_client, resolve_activity_type
+
 
 
 app = FastAPI(
@@ -157,20 +159,49 @@ async def process_audio(file: UploadFile = File(...)):
 
     analysis = analyze_text(text_transcribed)
 
+    # RAW detectado por IA
+    cliente_raw = analysis["cliente"]
+    accion_raw = analysis["accion"]
+    fecha_iso = analysis["fecha"]
+
+    # Resolver entidades reales
+    client_id = resolve_client(cliente_raw)
+    activity_type_id = resolve_activity_type(accion_raw)
+
+    # Determinar estado de resolución
+    if client_id and activity_type_id:
+        resolution_status = "auto"
+    elif client_id or activity_type_id:
+        resolution_status = "partial"
+    else:
+        resolution_status = "partial"
+
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute(
         """
-        INSERT INTO activities (cliente, accion, fecha, comentario, transcripcion)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO activities (
+            fecha_iso,
+            client_id,
+            activity_type_id,
+            comentario,
+            transcripcion,
+            cliente_raw,
+            accion_raw,
+            resolution_status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            analysis["cliente"],
-            analysis["accion"],
-            analysis["fecha"],
+            fecha_iso,
+            client_id,
+            activity_type_id,
             analysis["comentario"],
             text_transcribed,
+            cliente_raw,
+            accion_raw,
+            resolution_status
         ),
     )
 
@@ -179,9 +210,14 @@ async def process_audio(file: UploadFile = File(...)):
 
     return {
         "texto": text_transcribed,
-        **analysis,
-        "detail": "Audio procesado y fecha normalizada",
+        "cliente_detectado": cliente_raw,
+        "accion_detectada": accion_raw,
+        "fecha_detectada": fecha_iso,
+        "client_id": client_id,
+        "activity_type_id": activity_type_id,
+        "resolution_status": resolution_status,
     }
+
 
 
 @app.get("/activities")
@@ -190,9 +226,17 @@ def get_activities():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, cliente, accion, fecha, comentario
-        FROM activities
-        ORDER BY id DESC
+        SELECT 
+            a.id,
+            a.fecha_iso,
+            a.comentario,
+            a.resolution_status,
+            c.razon_social AS cliente,
+            at.accion AS accion
+        FROM activities a
+        LEFT JOIN clients c ON a.client_id = c.id
+        LEFT JOIN activity_types at ON a.activity_type_id = at.id
+        ORDER BY a.id DESC
     """)
 
     rows = cursor.fetchall()
@@ -202,11 +246,12 @@ def get_activities():
         "count": len(rows),
         "activities": [
             {
-                "id": r[0],
-                "cliente": r[1],
-                "accion": r[2],
-                "fecha": r[3],
-                "comentario": r[4],
+                "id": r["id"],
+                "fecha": r["fecha_iso"],
+                "cliente": r["cliente"],
+                "accion": r["accion"],
+                "comentario": r["comentario"],
+                "resolution_status": r["resolution_status"]
             }
             for r in rows
         ],

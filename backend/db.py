@@ -112,6 +112,16 @@ def init_db():
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_fecha ON activities(fecha_iso);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_client ON activities(client_id);")
+    # Añadir resolution_status si no existe
+    cur.execute("PRAGMA table_info(activities);")
+    columns = [row["name"] for row in cur.fetchall()]
+
+    if "resolution_status" not in columns:
+        cur.execute("""
+            ALTER TABLE activities
+            ADD COLUMN resolution_status TEXT DEFAULT 'auto';
+        """)
+
 
     # --- Facturación (para futuro, ya preparada) ---
     cur.execute("""
