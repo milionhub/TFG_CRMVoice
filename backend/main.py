@@ -165,16 +165,19 @@ async def process_audio(file: UploadFile = File(...)):
     fecha_iso = analysis["fecha"]
 
     # Resolver entidades reales
-    client_id = resolve_client(cliente_raw)
+    client_id, resolution_confidence = resolve_client(cliente_raw)
     activity_type_id = resolve_activity_type(accion_raw)
 
-    # Determinar estado de resolución
-    if client_id and activity_type_id:
+    # Determinar estado basado en confidence real
+    if resolution_confidence == 100:
+        resolution_status = "exact"
+    elif resolution_confidence >= 80:
         resolution_status = "auto"
-    elif client_id or activity_type_id:
+    elif resolution_confidence > 0:
         resolution_status = "partial"
     else:
-        resolution_status = "partial"
+        resolution_status = "unresolved"
+
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -189,9 +192,10 @@ async def process_audio(file: UploadFile = File(...)):
             transcripcion,
             cliente_raw,
             accion_raw,
-            resolution_status
+            resolution_status,
+            resolution_confidence
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             fecha_iso,
@@ -201,7 +205,8 @@ async def process_audio(file: UploadFile = File(...)):
             text_transcribed,
             cliente_raw,
             accion_raw,
-            resolution_status
+            resolution_status,
+            resolution_confidence
         ),
     )
 
@@ -216,6 +221,8 @@ async def process_audio(file: UploadFile = File(...)):
         "client_id": client_id,
         "activity_type_id": activity_type_id,
         "resolution_status": resolution_status,
+        "resolution_confidence": resolution_confidence,
+
     }
 
 

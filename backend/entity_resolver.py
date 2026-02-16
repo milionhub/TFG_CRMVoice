@@ -36,7 +36,7 @@ def calculate_similarity(a: str, b: str) -> int:
 
 def resolve_client(cliente_raw: str):
     if not cliente_raw:
-        return None
+        return None, 0
 
     cliente_norm = normalize_text(cliente_raw)
 
@@ -53,8 +53,8 @@ def resolve_client(cliente_raw: str):
         razon = normalize_text(c["razon_social"])
         alias = normalize_text(c["alias"] or "")
 
-        score_razon = calculate_similarity(cliente_norm, razon)
-        score_alias = calculate_similarity(cliente_norm, alias)
+        score_razon = fuzz.token_sort_ratio(cliente_norm, razon)
+        score_alias = fuzz.token_sort_ratio(cliente_norm, alias)
 
         score = max(score_razon, score_alias)
 
@@ -65,9 +65,9 @@ def resolve_client(cliente_raw: str):
     conn.close()
 
     if best_score >= FUZZY_THRESHOLD:
-        return best_client_id
+        return best_client_id, best_score
 
-    return None
+    return None, best_score
 
 
 
