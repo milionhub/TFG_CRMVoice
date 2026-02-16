@@ -9,6 +9,7 @@ from db import get_connection, init_db
 from whisper_service import transcribe_audio
 from entity_resolver import resolve_client, resolve_activity_type
 from openai_service import generate_embedding
+from context_service import build_context
 
 import os
 import re
@@ -360,3 +361,6 @@ def semantic_search(request: SemanticSearchRequest):
     # 5️⃣ Devolver top 3
     return results[:3]
 
+@app.get("/client-context/{client_id}")
+def get_client_context(client_id: int):
+    return build_context(client_id)
