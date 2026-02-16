@@ -102,6 +102,8 @@ def init_db():
             contacto_raw TEXT,
             producto_raw TEXT,
             accion_raw TEXT,
+            resolution_status TEXT,
+            resolution_confidence INTEGER,
 
             FOREIGN KEY (client_id) REFERENCES clients(id),
             FOREIGN KEY (contact_id) REFERENCES contacts(id),
@@ -122,6 +124,23 @@ def init_db():
             ADD COLUMN resolution_status TEXT DEFAULT 'auto';
         """)
 
+    # --- Embeddings (Sprint 6) ---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS activity_embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            embedding_vector TEXT NOT NULL,
+            embedding_model TEXT,
+            content_type TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE
+        );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_embeddings_activity
+        ON activity_embeddings(activity_id);
+    """)
 
     # --- Facturación (para futuro, ya preparada) ---
     cur.execute("""
