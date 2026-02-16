@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
 from entity_resolver import resolve_client, resolve_activity_type
-from openai_service import generate_embedding
+from openai_service import generate_embedding, generate_meeting_summary
 from context_service import build_context
 
 import os
@@ -364,3 +364,25 @@ def semantic_search(request: SemanticSearchRequest):
 @app.get("/client-context/{client_id}")
 def get_client_context(client_id: int):
     return build_context(client_id)
+
+class PrepareMeetingRequest(BaseModel):
+    client_id: int
+
+
+@app.post("/prepare-meeting")
+def prepare_meeting(request: PrepareMeetingRequest):
+
+    context_data = build_context(request.client_id)
+
+    if not context_data:
+        return {"error": "Cliente no encontrado"}
+
+    try:
+        summary = generate_meeting_summary(context_data)
+    except Exception as e:
+        return {"error": f"Error generando resumen: {str(e)}"}
+
+    return {
+        "client_id": request.client_id,
+        "meeting_preparation": summary
+    }
