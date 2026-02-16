@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -6,6 +10,10 @@ from whisper_service import transcribe_audio
 import re
 from datetime import datetime, timedelta
 from entity_resolver import resolve_client, resolve_activity_type
+import os
+from openai_service import generate_embedding
+
+
 
 
 
@@ -209,6 +217,40 @@ async def process_audio(file: UploadFile = File(...)):
             resolution_confidence
         ),
     )
+     
+    activity_id = cursor.lastrowid
+
+    embedding_text = f"""
+    Cliente: {cliente_raw}
+    Acción: {accion_raw}
+    Comentario: {analysis["comentario"]}
+    Transcripción: {text_transcribed}
+    """
+
+    try:
+        vector = generate_embedding(embedding_text)
+    except Exception as e:
+        print("Error generando embedding:", e)
+        vector = None
+
+    if vector:
+        cursor.execute(
+        """
+            INSERT INTO activity_embeddings (
+                activity_id,
+                embedding_vector,
+                embedding_model,
+                content_type
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                activity_id,
+                str(vector),
+                "text-embedding-3-small",
+                "activity_full"
+            ),
+        )
 
     conn.commit()
     conn.close()
