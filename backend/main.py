@@ -1,17 +1,23 @@
 from dotenv import load_dotenv
-
 load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
-import re
-from datetime import datetime, timedelta
 from entity_resolver import resolve_client, resolve_activity_type
-import os
 from openai_service import generate_embedding
+
+import os
+import re
+import json
+import numpy as np
+from datetime import datetime, timedelta
+
+class SemanticSearchRequest(BaseModel):
+    query: str
 
 
 
@@ -305,3 +311,52 @@ def get_activities():
             for r in rows
         ],
     }
+
+@app.post("/semantic-search")
+def semantic_search(request: SemanticSearchRequest):
+
+    query_text = request.query
+
+    # 1️⃣ Generar embedding del query
+    query_vector = generate_embedding(query_text)
+    query_vector = np.array(query_vector)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # 2️⃣ Obtener todos los embeddings almacenados
+    cursor.execute("""
+        SELECT ae.activity_id, ae.embedding_vector, a.fecha_iso, a.cliente_raw, a.comentario
+        FROM activity_embeddings ae
+        JOIN activities a ON a.id = ae.activity_id
+    """)
+
+    rows = cursor.fetchall()
+
+    results = []
+
+    for row in rows:
+        activity_id = row["activity_id"]
+        stored_vector = np.array(json.loads(row["embedding_vector"]))
+
+        # 3️⃣ Calcular similitud coseno
+        similarity = np.dot(query_vector, stored_vector) / (
+            np.linalg.norm(query_vector) * np.linalg.norm(stored_vector)
+        )
+
+        results.append({
+            "id": activity_id,
+            "fecha": row["fecha_iso"],
+            "cliente": row["cliente_raw"],
+            "comentario": row["comentario"],
+            "score_similitud": float(similarity)
+        })
+
+    conn.close()
+
+    # 4️⃣ Ordenar por similitud descendente
+    results = sorted(results, key=lambda x: x["score_similitud"], reverse=True)
+
+    # 5️⃣ Devolver top 3
+    return results[:3]
+
