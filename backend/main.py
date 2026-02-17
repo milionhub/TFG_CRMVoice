@@ -10,12 +10,13 @@ from whisper_service import transcribe_audio
 from entity_resolver import resolve_client, resolve_activity_type
 from openai_service import generate_embedding, generate_meeting_summary
 from context_service import build_context
+from date_resolver import resolve_relative_date
 
 import os
 import re
 import json
 import numpy as np
-from datetime import datetime, timedelta
+
 
 class SemanticSearchRequest(BaseModel):
     query: str
@@ -91,57 +92,17 @@ def detect_action(text: str) -> str | None:
     return None
 
 
-def normalize_fecha(text: str) -> str | None:
-    """
-    Convierte fechas relativas a formato ISO YYYY-MM-DD
-    """
-    today = datetime.today()
-    lower = text.lower()
 
-    if "hoy" in lower:
-        return today.strftime("%Y-%m-%d")
-
-    if "mañana" in lower:
-        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    weekdays = {
-        "lunes": 0,
-        "martes": 1,
-        "miércoles": 2,
-        "miercoles": 2,
-        "jueves": 3,
-        "viernes": 4,
-        "sábado": 5,
-        "sabado": 5,
-        "domingo": 6,
-    }
-
-    for day, weekday in weekdays.items():
-        if day in lower:
-            days_ahead = (weekday - today.weekday() + 7) % 7
-            days_ahead = 7 if days_ahead == 0 else days_ahead
-            return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-    # Fecha explícita 10/12/2025
-    match = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", text)
-    if match:
-        day, month, year = match.groups()
-        year = "20" + year if len(year) == 2 else year
-        try:
-            return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
-        except ValueError:
-            return None
-
-    return None
 
 
 def analyze_text(text: str) -> dict:
     return {
         "cliente": detect_cliente(text),
         "accion": detect_action(text),
-        "fecha": normalize_fecha(text),
+        "fecha": resolve_relative_date(text),
         "comentario": text,
     }
+
 
 
 # =========================
