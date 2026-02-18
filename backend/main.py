@@ -167,7 +167,6 @@ def ping():
 def process_text(body: ProcessTextRequest):
     return analyze_text(body.text)
 
-
 @app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...)):
     content = await file.read()
@@ -179,67 +178,60 @@ async def process_audio(file: UploadFile = File(...)):
 
     analysis = analyze_text(text_transcribed)
 
-    # RAW detectado por IA
+    # -------------------------------
+    # 1️⃣ RAW detectado
+    # -------------------------------
     cliente_raw = analysis["cliente"]
     accion_raw = analysis["accion"]
     fecha_iso = analysis["fecha"]
+    contacto_raw = analysis["contacto"]
 
-    # Resolver entidades reales
+    # -------------------------------
+    # 2️⃣ Resolver entidades
+    # -------------------------------
     client_id, client_confidence = resolve_client(cliente_raw)
     activity_type_id = resolve_activity_type(accion_raw)
-    contacto_raw = analysis["contacto"]
     contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
 
+    # -------------------------------
+    # 3️⃣ Herencias inteligentes
+    # -------------------------------
 
-    # ---------------------------------------------------------
-    # 1️⃣ Si detectamos contacto pero NO cliente → heredamos cliente del contacto
-    # ---------------------------------------------------------
+    # Contacto detectado pero no cliente → heredar cliente
     if contact_id and not client_id:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT client_id FROM contacts WHERE id = ?",
-            (contact_id,)
-        )
+        cursor.execute("SELECT client_id FROM contacts WHERE id = ?", (contact_id,))
         row = cursor.fetchone()
         conn.close()
 
         if row:
             client_id = row["client_id"]
-            client_confidence = contact_confidence  # heredamos confianza
+            client_confidence = contact_confidence
 
-
-    # ---------------------------------------------------------
-    # 2️⃣ Si detectamos cliente pero NO contacto → reintentar dentro del cliente
-    # ---------------------------------------------------------
+    # Cliente detectado pero no contacto → reintentar dentro cliente
     if client_id and contacto_raw and not contact_id:
         contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
 
-
-    # ---------------------------------------------------------
-    # 3️⃣ Si tenemos contacto pero cliente_raw es None → rellenar cliente_raw
-    # ---------------------------------------------------------
+    # Si tenemos contacto pero no cliente_raw → rellenarlo
     if contact_id and not cliente_raw:
         conn = get_connection()
         cursor = conn.cursor()
-
         cursor.execute("""
             SELECT c.razon_social
             FROM clients c
             JOIN contacts ct ON ct.client_id = c.id
             WHERE ct.id = ?
         """, (contact_id,))
-
         row = cursor.fetchone()
         conn.close()
 
         if row:
             cliente_raw = row["razon_social"]
 
-
-    # ---------------------------------------------------------
-    # 4️⃣ Confidence global REAL
-    # ---------------------------------------------------------
+    # -------------------------------
+    # 4️⃣ Confidence global
+    # -------------------------------
     if client_id and contact_id:
         overall_confidence = min(client_confidence, contact_confidence)
     elif client_id:
@@ -248,7 +240,6 @@ async def process_audio(file: UploadFile = File(...)):
         overall_confidence = contact_confidence
     else:
         overall_confidence = 0
-
 
     if overall_confidence == 100:
         resolution_status = "exact"
@@ -259,47 +250,9 @@ async def process_audio(file: UploadFile = File(...)):
     else:
         resolution_status = "unresolved"
 
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        INSERT INTO activities (
-            fecha_iso,
-            client_id,
-            contact_id,
-            activity_type_id,
-            comentario,
-            transcripcion,
-            cliente_raw,
-            contacto_raw,
-            accion_raw,
-            resolution_status,
-            resolution_confidence
-
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        """,
-        (
-            fecha_iso,
-            client_id,
-            contact_id,
-            activity_type_id,
-            analysis["comentario"],
-            text_transcribed,
-            cliente_raw,
-            contacto_raw,
-            accion_raw,
-            resolution_status,
-            overall_confidence
-
-        ),
-    )
-     
-    activity_id = cursor.lastrowid
-
+    # -------------------------------
+    # 5️⃣ Generar embedding ANTES del INSERT
+    # -------------------------------
     embedding_text = f"""
     Cliente: {cliente_raw}
     Acción: {accion_raw}
@@ -313,9 +266,68 @@ async def process_audio(file: UploadFile = File(...)):
         print("Error generando embedding:", e)
         vector = None
 
+    # -------------------------------
+    # 6️⃣ Control de duplicados (ANTES de insertar)
+    # -------------------------------
+    if vector and client_id:
+        from openai_service import is_duplicate_activity
+
+        is_dup, similarity_score = is_duplicate_activity(
+            vector,
+            client_id,
+            activity_type_id,
+            fecha_iso
+        )
+
+
+        if is_dup:
+            return {
+                "error": "Actividad duplicada detectada",
+                "similarity": similarity_score
+            }
+
+    # -------------------------------
+    # 7️⃣ INSERT activity (solo si NO duplicada)
+    # -------------------------------
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO activities (
+            fecha_iso,
+            client_id,
+            contact_id,
+            activity_type_id,
+            comentario,
+            transcripcion,
+            cliente_raw,
+            contacto_raw,
+            accion_raw,
+            resolution_status,
+            resolution_confidence
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        fecha_iso,
+        client_id,
+        contact_id,
+        activity_type_id,
+        analysis["comentario"],
+        text_transcribed,
+        cliente_raw,
+        contacto_raw,
+        accion_raw,
+        resolution_status,
+        overall_confidence
+    ))
+
+    activity_id = cursor.lastrowid
+
+    # -------------------------------
+    # 8️⃣ Guardar embedding
+    # -------------------------------
     if vector:
-        cursor.execute(
-        """
+        cursor.execute("""
             INSERT INTO activity_embeddings (
                 activity_id,
                 embedding_vector,
@@ -323,38 +335,33 @@ async def process_audio(file: UploadFile = File(...)):
                 content_type
             )
             VALUES (?, ?, ?, ?)
-            """,
-            (
-                activity_id,
-                str(vector),
-                "text-embedding-3-small",
-                "activity_full"
-            ),
-        )
+        """, (
+            activity_id,
+            str(vector),
+            "text-embedding-3-small",
+            "activity_full"
+        ))
 
     conn.commit()
     conn.close()
 
+    # -------------------------------
+    # 9️⃣ Response
+    # -------------------------------
     return {
         "texto": text_transcribed,
-
         "cliente_detectado": cliente_raw,
         "cliente_id": client_id,
-
         "contacto_detectado": contacto_raw,
         "contacto_id": contact_id,
-
         "accion_detectada": accion_raw,
         "activity_type_id": activity_type_id,
-
         "fecha_detectada": fecha_iso,
-
         "cliente_confidence": client_confidence,
         "contacto_confidence": contact_confidence,
         "overall_confidence": overall_confidence,
-
         "resolution_status": resolution_status,
-}
+    }
 
 
 
