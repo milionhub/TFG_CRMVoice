@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
-from entity_resolver import resolve_client, resolve_activity_type
+from entity_resolver import resolve_client, resolve_activity_type, resolve_contact
 from openai_service import generate_embedding, generate_meeting_summary
 from context_service import build_context
 from date_resolver import resolve_relative_date
@@ -60,19 +60,29 @@ def normalize_name(name: str) -> str:
 
 
 def detect_cliente(text: str) -> str | None:
+    """
+    Detecta empresa tras:
+    - de García Sistemas
+    - empresa García Sistemas
+    """
+
     patterns = [
-        r"cliente\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ]+){0,2})",
-        r"con\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:\s+(?:corp|sl|s\.l\.|industries|group|company))?)",
-        r"he hablado con\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)",
-        r"hablé con\s+([A-Za-zÁÉÍÓÚÑáéíóúñ]+)",
+        r"(?:empresa|cliente)\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\s]+)",
+        r"de\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ\s]+?)(?:\s|$)",
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, text)
         if match:
-            return normalize_name(match.group(1))
+            candidate = match.group(1).strip()
+
+            # Limitar a máximo 3 palabras (evita capturar frases enteras)
+            words = candidate.split()
+            if len(words) <= 3:
+                return normalize_name(candidate)
 
     return None
+
 
 
 def detect_action(text: str) -> str | None:
@@ -92,16 +102,50 @@ def detect_action(text: str) -> str | None:
     return None
 
 
+def detect_contact(text: str) -> str | None:
+    """
+    Detecta:
+    - Laura Gómez
+    - Laura
+    - He hablado con Laura
+    - Reunión con Laura Gómez
+    """
+
+    patterns = [
+        # Laura Gómez
+        r"(?:hablado con|reunión con|con)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?)",
+
+        # Nombre completo aislado
+        r"\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)\b",
+
+        # Solo primer nombre (pero NO si va seguido de 'de')
+        r"\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)\b(?!\s+de)"
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+
 
 
 
 def analyze_text(text: str) -> dict:
+    contacto = detect_contact(text)
+    cliente = detect_cliente(text)
+
     return {
-        "cliente": detect_cliente(text),
+        "cliente": cliente,
+        "contacto": contacto,
         "accion": detect_action(text),
         "fecha": resolve_relative_date(text),
         "comentario": text,
     }
+
 
 
 
@@ -141,15 +185,76 @@ async def process_audio(file: UploadFile = File(...)):
     fecha_iso = analysis["fecha"]
 
     # Resolver entidades reales
-    client_id, resolution_confidence = resolve_client(cliente_raw)
+    client_id, client_confidence = resolve_client(cliente_raw)
     activity_type_id = resolve_activity_type(accion_raw)
+    contacto_raw = analysis["contacto"]
+    contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
 
-    # Determinar estado basado en confidence real
-    if resolution_confidence == 100:
+
+    # ---------------------------------------------------------
+    # 1️⃣ Si detectamos contacto pero NO cliente → heredamos cliente del contacto
+    # ---------------------------------------------------------
+    if contact_id and not client_id:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT client_id FROM contacts WHERE id = ?",
+            (contact_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            client_id = row["client_id"]
+            client_confidence = contact_confidence  # heredamos confianza
+
+
+    # ---------------------------------------------------------
+    # 2️⃣ Si detectamos cliente pero NO contacto → reintentar dentro del cliente
+    # ---------------------------------------------------------
+    if client_id and contacto_raw and not contact_id:
+        contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
+
+
+    # ---------------------------------------------------------
+    # 3️⃣ Si tenemos contacto pero cliente_raw es None → rellenar cliente_raw
+    # ---------------------------------------------------------
+    if contact_id and not cliente_raw:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT c.razon_social
+            FROM clients c
+            JOIN contacts ct ON ct.client_id = c.id
+            WHERE ct.id = ?
+        """, (contact_id,))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            cliente_raw = row["razon_social"]
+
+
+    # ---------------------------------------------------------
+    # 4️⃣ Confidence global REAL
+    # ---------------------------------------------------------
+    if client_id and contact_id:
+        overall_confidence = min(client_confidence, contact_confidence)
+    elif client_id:
+        overall_confidence = client_confidence
+    elif contact_id:
+        overall_confidence = contact_confidence
+    else:
+        overall_confidence = 0
+
+
+    if overall_confidence == 100:
         resolution_status = "exact"
-    elif resolution_confidence >= 80:
+    elif overall_confidence >= 80:
         resolution_status = "auto"
-    elif resolution_confidence > 0:
+    elif overall_confidence > 0:
         resolution_status = "partial"
     else:
         resolution_status = "unresolved"
@@ -163,26 +268,33 @@ async def process_audio(file: UploadFile = File(...)):
         INSERT INTO activities (
             fecha_iso,
             client_id,
+            contact_id,
             activity_type_id,
             comentario,
             transcripcion,
             cliente_raw,
+            contacto_raw,
             accion_raw,
             resolution_status,
             resolution_confidence
+
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
         """,
         (
             fecha_iso,
             client_id,
+            contact_id,
             activity_type_id,
             analysis["comentario"],
             text_transcribed,
             cliente_raw,
+            contacto_raw,
             accion_raw,
             resolution_status,
-            resolution_confidence
+            overall_confidence
+
         ),
     )
      
@@ -225,15 +337,25 @@ async def process_audio(file: UploadFile = File(...)):
 
     return {
         "texto": text_transcribed,
-        "cliente_detectado": cliente_raw,
-        "accion_detectada": accion_raw,
-        "fecha_detectada": fecha_iso,
-        "client_id": client_id,
-        "activity_type_id": activity_type_id,
-        "resolution_status": resolution_status,
-        "resolution_confidence": resolution_confidence,
 
-    }
+        "cliente_detectado": cliente_raw,
+        "cliente_id": client_id,
+
+        "contacto_detectado": contacto_raw,
+        "contacto_id": contact_id,
+
+        "accion_detectada": accion_raw,
+        "activity_type_id": activity_type_id,
+
+        "fecha_detectada": fecha_iso,
+
+        "cliente_confidence": client_confidence,
+        "contacto_confidence": contact_confidence,
+        "overall_confidence": overall_confidence,
+
+        "resolution_status": resolution_status,
+}
+
 
 
 

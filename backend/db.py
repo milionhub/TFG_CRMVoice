@@ -124,6 +124,23 @@ def init_db():
             ADD COLUMN resolution_status TEXT DEFAULT 'auto';
         """)
 
+    # Añadir contacto_raw si no existe
+    cur.execute("PRAGMA table_info(activities);")
+    columns = [row["name"] for row in cur.fetchall()]
+
+    if "contacto_raw" not in columns:
+        cur.execute("""
+            ALTER TABLE activities
+            ADD COLUMN contacto_raw TEXT;
+        """)
+
+    if "contact_id" not in columns:
+        cur.execute("""
+            ALTER TABLE activities
+            ADD COLUMN contact_id INTEGER;
+        """)
+
+
     # --- Embeddings (Sprint 6) ---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS activity_embeddings (
