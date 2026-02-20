@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:http/http.dart' as http;
 import 'dart:io';
-
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../services/api_service.dart';
-import 'history_screen.dart';
+import 'package:http/http.dart' as http;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,338 +14,469 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // --- Estado backend ---
-  String backendStatus = "Comprobando conexión...";
-  String analysisResult = "";
-  bool isLoading = false;
+  bool isConnected = false;
+  bool isChecking = true;
 
-  final TextEditingController _textController = TextEditingController(
-    text:
-        "He estado con el cliente Carlos, quiere presupuesto para el martes.",
-  );
-
-  // --- Grabación ---
-  final AudioRecorder _recorder = AudioRecorder();
-  bool _isRecording = false;
-  String? _lastAudioRef;
+  Map<String, dynamic>? analysisResult;
+  bool isAnalyzing = false;
+  String? errorMessage;
 
   @override
   void initState() {
     super.initState();
     _checkBackend();
-    _requestMicrophonePermissionIfNeeded();
+  }
+
+  Future<void> _checkBackend() async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    try {
+      // Aquí luego llamaremos a ApiService.ping()
+      // Por ahora simulamos desconectado
+      setState(() {
+        isConnected = false;
+        isChecking = false;
+      });
+    } catch (_) {
+      setState(() {
+        isConnected = false;
+        isChecking = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F6F8),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "CRM Voice",
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              StatusCard(
+                isConnected: isConnected,
+                isChecking: isChecking,
+              ),
+
+              const SizedBox(height: 24),
+
+              Expanded(
+                child: Center(
+                  child: _RecorderCard(
+                    onLoading: () {
+                      setState(() {
+                        isAnalyzing = true;
+                        errorMessage = null;
+                      });
+                    },
+                    onSuccess: (result) {
+                      setState(() {
+                        isAnalyzing = false;
+                        analysisResult = result;
+                      });
+                    },
+                    onError: (msg) {
+                      setState(() {
+                        isAnalyzing = false;
+                        errorMessage = msg;
+                      });
+                    },
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              _ResultCard(
+                result: analysisResult,
+                isLoading: isAnalyzing,
+                error: errorMessage,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+/// ===============================
+/// STATUS CARD
+/// ===============================
+
+class StatusCard extends StatelessWidget {
+  final bool isConnected;
+  final bool isChecking;
+
+  const StatusCard({
+    super.key,
+    required this.isConnected,
+    required this.isChecking,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Color iconColor;
+    IconData icon;
+    String text;
+
+    if (isChecking) {
+      iconColor = Colors.orange;
+      icon = Icons.sync;
+      text = "Comprobando conexión...";
+    } else if (isConnected) {
+      iconColor = const Color(0xFF1E88E5);
+      icon = Icons.cloud_done;
+      text = "Backend conectado";
+    } else {
+      iconColor = Colors.red;
+      icon = Icons.cloud_off;
+      text = "Backend desconectado";
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor),
+          const SizedBox(width: 12),
+          Text(
+            text,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}
+
+
+/// ===============================
+/// RECORDER CARD
+/// ===============================
+
+class _RecorderCard extends StatefulWidget {
+  final Function(Map<String, dynamic>) onSuccess;
+  final Function() onLoading;
+  final Function(String) onError;
+
+  const _RecorderCard({
+    required this.onSuccess,
+    required this.onLoading,
+    required this.onError,
+  });
+
+  @override
+  State<_RecorderCard> createState() => _RecorderCardState();
+}
+
+class _RecorderCardState extends State<_RecorderCard>
+    with SingleTickerProviderStateMixin {
+  final AudioRecorder _recorder = AudioRecorder();
+
+  bool isRecording = false;
+  bool isLoading = false;
+
+  String? _audioPath;
+
+  late AnimationController _pulseController;
+  late Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+
+    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(
+        parent: _pulseController,
+        curve: Curves.easeInOut,
+      ),
+    );
+  }
+
+  Future<void> _startRecording() async {
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) return;
+
+    String path;
+
+    if (kIsWeb) {
+      path = 'audio_${DateTime.now().millisecondsSinceEpoch}.webm';
+    } else {
+      final dir = await getTemporaryDirectory();
+      path =
+          '${dir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    }
+
+    await _recorder.start(
+      const RecordConfig(
+        encoder: AudioEncoder.aacLc,
+        bitRate: 128000,
+        sampleRate: 44100,
+      ),
+      path: path,
+    );
+
+    setState(() {
+      isRecording = true;
+      _audioPath = path;
+    });
+
+    _pulseController.repeat(reverse: true);
+  }
+
+  Future<void> _stopRecording() async {
+    final path = await _recorder.stop();
+
+    _pulseController.stop();
+    _pulseController.value = 1.0;
+
+    setState(() {
+      isRecording = false;
+      isLoading = true;
+    });
+    widget.onLoading();
+    if (path == null) return;
+
+    try {
+      List<int> bytes;
+
+      if (kIsWeb) {
+        final response = await http.get(Uri.parse(path));
+        bytes = response.bodyBytes;
+      } else {
+        final file = File(path);
+        bytes = await file.readAsBytes();
+      }
+
+      final result = await ApiService.uploadAudio(
+        bytes: bytes,
+        filename: path.split('/').last,
+      );
+
+     widget.onSuccess(result);
+    } catch (e) {
+        widget.onError("Error enviando audio");
+      }
+
+    setState(() {
+      isLoading = false;
+    });
   }
 
   @override
   void dispose() {
+    _pulseController.dispose();
     _recorder.dispose();
-    _textController.dispose();
     super.dispose();
   }
 
-  // -----------------------------
-  // Permisos
-  // -----------------------------
-  Future<void> _requestMicrophonePermissionIfNeeded() async {
-    if (kIsWeb) return;
-
-    final status = await Permission.microphone.request();
-    if (!status.isGranted) {
-      setState(() {
-        backendStatus =
-            "⚠ Sin permiso de micrófono (actívalo en ajustes del sistema)";
-      });
-    }
-  }
-
-  // -----------------------------
-  // Backend ping
-  // -----------------------------
-  Future<void> _checkBackend() async {
-    try {
-      final result = await ApiService.ping();
-      setState(() {
-        backendStatus = "Backend OK: $result";
-      });
-    } catch (e) {
-      setState(() {
-        backendStatus = "❌ Error al conectar con backend";
-      });
-    }
-  }
-
-  // -----------------------------
-  // Enviar texto
-  // -----------------------------
-  Future<void> _sendText() async {
-    final text = _textController.text.trim();
-    if (text.isEmpty) {
-      setState(() {
-        analysisResult = "Introduce un texto para analizar.";
-      });
-      return;
-    }
-
-    setState(() {
-      isLoading = true;
-      analysisResult = "";
-    });
-
-    try {
-      final data = await ApiService.analyzeText(text);
-
-      setState(() {
-        analysisResult =
-            "Cliente: ${data['cliente'] ?? '-'}\n"
-            "Acción: ${data['accion'] ?? '-'}\n"
-            "Fecha: ${data['fecha'] ?? '-'}\n\n"
-            "Comentario:\n${data['comentario']}";
-      });
-    } catch (e) {
-      setState(() {
-        analysisResult = "❌ Error al procesar el texto.";
-      });
-    } finally {
-      setState(() {
-        isLoading = false;
-      });
-    }
-  }
-
-  // -----------------------------
-  // Grabar audio
-  // -----------------------------
-  Future<void> _toggleRecording() async {
-    try {
-      if (!_isRecording) {
-        final hasPermission = await _recorder.hasPermission();
-        if (!hasPermission) {
-          setState(() {
-            analysisResult =
-                "No hay permiso de micrófono. Actívalo en el navegador/sistema.";
-          });
-          return;
-        }
-
-        AudioEncoder encoder;
-        String ext;
-
-        if (kIsWeb) {
-          encoder = AudioEncoder.opus;
-          ext = 'opus';
-        } else {
-          encoder = AudioEncoder.aacLc;
-          ext = 'm4a';
-        }
-
-        final supported = await _recorder.isEncoderSupported(encoder);
-        if (!supported) {
-          encoder = AudioEncoder.wav;
-          ext = 'wav';
-        }
-
-        String? path;
-        final fileName =
-            'crm_voice_${DateTime.now().millisecondsSinceEpoch}.$ext';
-
-        if (kIsWeb) {
-          path = fileName;
-        } else {
-          final dir = await getTemporaryDirectory();
-          path = '${dir.path}/$fileName';
-        }
-
-        await _recorder.start(
-          RecordConfig(
-            encoder: encoder,
-            bitRate: 128000,
-            sampleRate: 44100,
-          ),
-          path: path,
-        );
-
-        setState(() {
-          _isRecording = true;
-          _lastAudioRef = null;
-        });
-      } else {
-        final ref = await _recorder.stop();
-
-        setState(() {
-          _isRecording = false;
-          _lastAudioRef = ref;
-        });
-      }
-    } catch (e) {
-      setState(() {
-        analysisResult = "❌ Error al manejar grabación: $e";
-      });
-    }
-  }
-
-  // -----------------------------
-  // Enviar audio
-  // -----------------------------
-  Future<void> _sendLastAudioToBackend() async {
-    if (_lastAudioRef == null) {
-      setState(() {
-        analysisResult = "No hay audio para enviar.";
-      });
-      return;
-    }
-
-    setState(() {
-      isLoading = true;
-      analysisResult = "Procesando audio...";
-    });
-
-    try {
-      late List<int> bytes;
-      late String filename;
-
-      if (kIsWeb) {
-        final response = await http.get(Uri.parse(_lastAudioRef!));
-        bytes = response.bodyBytes;
-        filename = "audio_web.wav";
-      } else {
-        final file = File(_lastAudioRef!);
-        bytes = await file.readAsBytes();
-        filename = file.path.split('/').last;
-      }
-
-      final data = await ApiService.uploadAudio(
-        bytes: bytes,
-        filename: filename,
-      );
-
-      setState(() {
-        analysisResult =
-            "Texto detectado:\n${data['texto']}\n\n"
-            "Cliente: ${data['cliente_detectado'] ?? '-'}\n"
-            "Contacto: ${data['contacto_detectado'] ?? '-'}\n"
-            "Acción: ${data['accion_detectada'] ?? '-'}\n"
-            "Fecha: ${data['fecha_detectada'] ?? '-'}\n"
-            "Estado: ${data['resolution_status'] ?? '-'}";
-      });
-    } catch (e) {
-      setState(() {
-        analysisResult = "❌ Error procesando el audio.";
-      });
-    } finally {
-      setState(() {
-        isLoading = false;
-      });
-    }
-  }
-
-  // -----------------------------
-  // UI
-  // -----------------------------
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("CRM Voice"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.list),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const HistoryScreen(),
-                ),
-              );
-            },
+    final Color buttonColor =
+        isRecording ? Colors.red : const Color(0xFF1E88E5);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
           )
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              backendStatus,
-              style: const TextStyle(color: Colors.grey),
-            ),
-            const SizedBox(height: 20),
-
-            // GRABACIÓN
-            const Text(
-              "Grabación de voz",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _toggleRecording,
-                  icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                  label: Text(
-                      _isRecording ? "Detener grabación" : "Grabar voz"),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onLongPressStart: (_) => _startRecording(),
+            onLongPressEnd: (_) => _stopRecording(),
+            child: ScaleTransition(
+              scale: _scaleAnimation,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                height: 90,
+                width: 90,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: buttonColor,
                 ),
-                const SizedBox(width: 16),
-                Text(
-                  _isRecording ? "🎙 Grabando..." : "⏹️ No grabando",
-                  style: TextStyle(
-                    color: _isRecording ? Colors.red : Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-
-            if (_lastAudioRef != null) ...[
-              const SizedBox(height: 10),
-              ElevatedButton.icon(
-                onPressed: isLoading ? null : _sendLastAudioToBackend,
-                icon: const Icon(Icons.cloud_upload),
-                label: const Text("Enviar audio al backend"),
-              ),
-            ],
-
-            const Divider(height: 40),
-
-            // TEXTO
-            const Text(
-              "Texto a analizar",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _textController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: isLoading ? null : _sendText,
                 child: isLoading
-                    ? const CircularProgressIndicator()
-                    : const Text("Enviar y analizar"),
+                    ? const CircularProgressIndicator(
+                        color: Colors.white,
+                      )
+                    : const Icon(
+                        Icons.mic,
+                        color: Colors.white,
+                        size: 42,
+                      ),
               ),
             ),
-
-            const SizedBox(height: 20),
-
-            const Text(
-              "Resultado",
-              style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            isRecording
+                ? "Grabando..."
+                : isLoading
+                    ? "Procesando audio..."
+                    : "Mantén pulsado para grabar",
+            style: const TextStyle(
+              fontSize: 15,
+              color: Colors.black54,
             ),
-            const SizedBox(height: 8),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-            Expanded(
-              child: SingleChildScrollView(
-                child: Text(analysisResult),
-              ),
-            ),
-          ],
+
+
+/// ===============================
+/// RESULT CARD
+/// ===============================
+
+class _ResultCard extends StatelessWidget {
+  final Map<String, dynamic>? result;
+  final bool isLoading;
+  final String? error;
+
+  const _ResultCard({
+    required this.result,
+    required this.isLoading,
+    required this.error,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return _buildLoading();
+    }
+
+    if (error != null) {
+      return _buildError();
+    }
+
+    if (result == null) {
+      return _buildPlaceholder();
+    }
+
+    return _buildResult();
+  }
+
+  Widget _buildLoading() {
+    return Container(
+      height: 140,
+      decoration: _decoration(),
+      child: const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF1E88E5),
         ),
       ),
+    );
+  }
+
+  Widget _buildError() {
+    return Container(
+      height: 140,
+      padding: const EdgeInsets.all(16),
+      decoration: _decoration(),
+      child: Text(
+        error!,
+        style: const TextStyle(
+          color: Colors.red,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      height: 140,
+      padding: const EdgeInsets.all(16),
+      decoration: _decoration(),
+      child: const Align(
+        alignment: Alignment.topLeft,
+        child: Text(
+          "Aquí aparecerá el resultado del análisis IA...",
+          style: TextStyle(
+            fontSize: 14,
+            color: Colors.black54,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResult() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _decoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Cliente: ${result?['cliente'] ?? '-'}"),
+          Text("Acción: ${result?['accion'] ?? '-'}"),
+          Text("Fecha: ${result?['fecha'] ?? '-'}"),
+          const SizedBox(height: 8),
+          Text(result?['comentario'] ?? ""),
+        ],
+      ),
+    );
+  }
+
+  BoxDecoration _decoration() {
+    return BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 12,
+          offset: const Offset(0, 6),
+        )
+      ],
     );
   }
 }
