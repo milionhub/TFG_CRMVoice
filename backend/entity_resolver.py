@@ -147,3 +147,89 @@ def resolve_contact(contacto_raw: str, client_id: int | None = None):
     return None, best_score
 
 
+
+
+PRODUCT_THRESHOLD = 85
+
+
+def resolve_products(text: str):
+    """
+    Detecta múltiples productos mencionados en el texto.
+    Devuelve lista de dicts con:
+    - product_id
+    - product_raw
+    - confidence
+    """
+
+    if not text:
+        return []
+
+    text_norm = normalize_text(text)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # 1️⃣ Obtener productos
+    cursor.execute("SELECT id, nombre FROM products")
+    products = cursor.fetchall()
+
+    # 2️⃣ Obtener alias
+    cursor.execute("""
+        SELECT pa.product_id, pa.alias
+        FROM product_aliases pa
+    """)
+    aliases = cursor.fetchall()
+
+    conn.close()
+
+    matches = []
+
+    # ============================
+    # Buscar contra nombre oficial
+    # ============================
+
+    for p in products:
+        nombre_norm = normalize_text(p["nombre"])
+
+        score_full = fuzz.token_set_ratio(text_norm, nombre_norm)
+        score_partial = fuzz.partial_ratio(text_norm, nombre_norm)
+
+        score = max(score_full, score_partial)
+
+        if score >= PRODUCT_THRESHOLD:
+            matches.append({
+                "product_id": p["id"],
+                "product_raw": p["nombre"],
+                "confidence": score
+            })
+
+    # ============================
+    # Buscar contra alias
+    # ============================
+
+    for a in aliases:
+        alias_norm = normalize_text(a["alias"])
+
+        score = fuzz.partial_ratio(text_norm, alias_norm)
+
+        if score >= PRODUCT_THRESHOLD:
+            matches.append({
+                "product_id": a["product_id"],
+                "product_raw": a["alias"],
+                "confidence": score
+            })
+
+    # ============================
+    # Eliminar duplicados (mismo product_id)
+    # ============================
+
+    unique = {}
+    for m in matches:
+        pid = m["product_id"]
+
+        if pid not in unique or m["confidence"] > unique[pid]["confidence"]:
+            unique[pid] = m
+
+    return list(unique.values())
+
+

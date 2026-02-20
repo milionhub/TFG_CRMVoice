@@ -6,8 +6,8 @@ DB_PATH = Path(__file__).parent / "crm.db"
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # más cómodo para dicts
-    conn.execute("PRAGMA foreign_keys = ON;")  # IMPORTANTÍSIMO en SQLite
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
@@ -15,7 +15,10 @@ def init_db():
     conn = get_connection()
     cur = conn.cursor()
 
-    # --- Catálogos / maestros ---
+    # =====================================================
+    # CATÁLOGOS
+    # =====================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS client_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +68,17 @@ def init_db():
         );
     """)
 
+    # NUEVA TABLA: alias de productos
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS product_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            alias TEXT NOT NULL,
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_product_alias ON product_aliases(alias);")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS activity_types (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,68 +94,66 @@ def init_db():
         );
     """)
 
-    # --- Actividades (núcleo) ---
-    # OJO: guardamos también texto bruto por si la IA falla (trazabilidad)
+    # =====================================================
+    # ACTIVIDADES (SIN product_id)
+    # =====================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT DEFAULT (datetime('now')),
-            fecha_iso TEXT,                 -- YYYY-MM-DD (normalizado)
-            hora TEXT,                      -- opcional
+            fecha_iso TEXT,
+            hora TEXT,
 
             client_id INTEGER,
             contact_id INTEGER,
-            product_id INTEGER,
             activity_type_id INTEGER,
             salesperson_id INTEGER,
 
-            comentario TEXT,                -- “qué ha pasado”
-            transcripcion TEXT,             -- texto real de Whisper
+            comentario TEXT,
+            transcripcion TEXT,
 
-            cliente_raw TEXT,               -- lo que detectó el parser (por si no hay match)
+            cliente_raw TEXT,
             contacto_raw TEXT,
-            producto_raw TEXT,
             accion_raw TEXT,
+
             resolution_status TEXT,
             resolution_confidence INTEGER,
 
             FOREIGN KEY (client_id) REFERENCES clients(id),
             FOREIGN KEY (contact_id) REFERENCES contacts(id),
-            FOREIGN KEY (product_id) REFERENCES products(id),
             FOREIGN KEY (activity_type_id) REFERENCES activity_types(id),
             FOREIGN KEY (salesperson_id) REFERENCES salespeople(id)
         );
     """)
+
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_fecha ON activities(fecha_iso);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_client ON activities(client_id);")
-    # Añadir resolution_status si no existe
-    cur.execute("PRAGMA table_info(activities);")
-    columns = [row["name"] for row in cur.fetchall()]
 
-    if "resolution_status" not in columns:
-        cur.execute("""
-            ALTER TABLE activities
-            ADD COLUMN resolution_status TEXT DEFAULT 'auto';
-        """)
+    # =====================================================
+    # NUEVA TABLA: RELACIÓN N:M ACTIVIDAD-PRODUCTO
+    # =====================================================
 
-    # Añadir contacto_raw si no existe
-    cur.execute("PRAGMA table_info(activities);")
-    columns = [row["name"] for row in cur.fetchall()]
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS activity_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            product_raw TEXT,
+            confidence_score INTEGER,
+            FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE,
+            FOREIGN KEY (product_id) REFERENCES products(id)
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_activity_products_activity
+        ON activity_products(activity_id);
+    """)
 
-    if "contacto_raw" not in columns:
-        cur.execute("""
-            ALTER TABLE activities
-            ADD COLUMN contacto_raw TEXT;
-        """)
+    # =====================================================
+    # EMBEDDINGS
+    # =====================================================
 
-    if "contact_id" not in columns:
-        cur.execute("""
-            ALTER TABLE activities
-            ADD COLUMN contact_id INTEGER;
-        """)
-
-
-    # --- Embeddings (Sprint 6) ---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS activity_embeddings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,16 +165,18 @@ def init_db():
             FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE
         );
     """)
-
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_embeddings_activity
         ON activity_embeddings(activity_id);
     """)
 
-    # --- Facturación (para futuro, ya preparada) ---
+    # =====================================================
+    # FACTURACIÓN
+    # =====================================================
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS invoices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,   -- num factura interno
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             fecha TEXT,
             client_id INTEGER,
             contact_id INTEGER,

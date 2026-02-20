@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
-from entity_resolver import resolve_client, resolve_activity_type, resolve_contact
+from entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
 from openai_service import generate_embedding, generate_meeting_summary
 from context_service import build_context
 from date_resolver import resolve_relative_date
@@ -192,7 +192,7 @@ async def process_audio(file: UploadFile = File(...)):
     client_id, client_confidence = resolve_client(cliente_raw)
     activity_type_id = resolve_activity_type(accion_raw)
     contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
-
+    products_detected = resolve_products(text_transcribed)
     # -------------------------------
     # 3️⃣ Herencias inteligentes
     # -------------------------------
@@ -232,23 +232,46 @@ async def process_audio(file: UploadFile = File(...)):
     # -------------------------------
     # 4️⃣ Confidence global
     # -------------------------------
-    if client_id and contact_id:
-        overall_confidence = min(client_confidence, contact_confidence)
-    elif client_id:
-        overall_confidence = client_confidence
-    elif contact_id:
-        overall_confidence = contact_confidence
-    else:
-        overall_confidence = 0
+    # Pesos empresariales
+    WEIGHT_CLIENT = 0.4
+    WEIGHT_CONTACT = 0.3
+    WEIGHT_PRODUCT = 0.2
+    WEIGHT_ACTION = 0.1
 
-    if overall_confidence == 100:
+    # Cliente
+    client_score = client_confidence if client_id else 0
+
+    # Contacto
+    contact_score = contact_confidence if contact_id else 0
+
+    # Producto (mínimo si hay varios)
+    product_confidences = [p["confidence"] for p in products_detected]
+    product_score = min(product_confidences) if product_confidences else 0
+
+    # Acción (si existe activity_type_id la consideramos exacta)
+    action_score = 100 if activity_type_id else 0
+
+    # Score compuesto
+    overall_confidence = (
+        client_score * WEIGHT_CLIENT +
+        contact_score * WEIGHT_CONTACT +
+        product_score * WEIGHT_PRODUCT +
+        action_score * WEIGHT_ACTION
+    )
+
+    overall_confidence = round(overall_confidence)
+
+    if overall_confidence >= 95:
         resolution_status = "exact"
-    elif overall_confidence >= 80:
-        resolution_status = "auto"
-    elif overall_confidence > 0:
-        resolution_status = "partial"
+    elif overall_confidence >= 85:
+        resolution_status = "high"
+    elif overall_confidence >= 70:
+        resolution_status = "medium"
+    elif overall_confidence >= 50:
+        resolution_status = "low"
     else:
         resolution_status = "unresolved"
+
 
     # -------------------------------
     # 5️⃣ Generar embedding ANTES del INSERT
@@ -285,6 +308,28 @@ async def process_audio(file: UploadFile = File(...)):
                 "error": "Actividad duplicada detectada",
                 "similarity": similarity_score
             }
+     
+    # -------------------------------
+    # VALIDACIÓN MÍNIMA PARA GUARDAR
+    # -------------------------------
+
+    has_client = client_id is not None
+    has_contact = contact_id is not None
+    has_products = len(products_detected) > 0
+    has_action = activity_type_id is not None
+
+    if not has_client or not (has_contact or has_products or has_action):
+        return {
+            "error": "Información insuficiente para registrar actividad",
+            "detalle": {
+                "cliente_detectado": bool(has_client),
+                "contacto_detectado": bool(has_contact),
+                "productos_detectados": has_products,
+                "accion_detectada": bool(has_action)
+            }
+        }
+
+
 
     # -------------------------------
     # 7️⃣ INSERT activity (solo si NO duplicada)
@@ -324,6 +369,26 @@ async def process_audio(file: UploadFile = File(...)):
     activity_id = cursor.lastrowid
 
     # -------------------------------
+    # Insertar productos asociados
+    # -------------------------------
+    for p in products_detected:
+        cursor.execute("""
+            INSERT INTO activity_products (
+                activity_id,
+                product_id,
+                product_raw,
+                confidence_score
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            activity_id,
+            p["product_id"],
+            p["product_raw"],
+            p["confidence"]
+        ))
+
+
+    # -------------------------------
     # 8️⃣ Guardar embedding
     # -------------------------------
     if vector:
@@ -337,7 +402,7 @@ async def process_audio(file: UploadFile = File(...)):
             VALUES (?, ?, ?, ?)
         """, (
             activity_id,
-            str(vector),
+            json.dumps(vector),
             "text-embedding-3-small",
             "activity_full"
         ))
@@ -476,3 +541,8 @@ def prepare_meeting(request: PrepareMeetingRequest):
         "client_id": request.client_id,
         "meeting_preparation": summary
     }
+
+@app.post("/test-products")
+def test_products(body: ProcessTextRequest):
+    from entity_resolver import resolve_products
+    return resolve_products(body.text)
