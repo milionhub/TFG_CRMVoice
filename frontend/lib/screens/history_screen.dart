@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
-import 'services/api_service.dart';
+import '../services/api_service.dart';
 
-class HistoryPage extends StatefulWidget {
-  const HistoryPage({super.key});
+class HistoryScreen extends StatefulWidget {
+  const HistoryScreen({super.key});
 
   @override
-  State<HistoryPage> createState() => _HistoryPageState();
+  State<HistoryScreen> createState() => _HistoryPageState();
 }
 
-class _HistoryPageState extends State<HistoryPage> {
+class _HistoryPageState extends State<HistoryScreen> {
   bool loading = true;
   String error = "";
   List<Map<String, dynamic>> items = [];
@@ -27,7 +27,9 @@ class _HistoryPageState extends State<HistoryPage> {
 
     try {
       final data = await ApiService.getActivities();
-      setState(() => items = data);
+      setState(() {
+        items = List<Map<String, dynamic>>.from(data);
+      });
     } catch (e) {
       setState(() => error = "Error cargando histórico: $e");
     } finally {

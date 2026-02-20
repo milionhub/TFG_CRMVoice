@@ -65,14 +65,13 @@ class ApiService {
     }
   }
 
-  static Future<List<Map<String, dynamic>>> getActivities() async {
+  static Future<List<dynamic>> getActivities() async {
   final url = Uri.parse("$baseUrl/activities");
   final response = await http.get(url);
 
   if (response.statusCode == 200) {
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final list = (data["activities"] as List).cast<Map<String, dynamic>>();
-    return list;
+    final data = jsonDecode(response.body);
+    return data["activities"];
   } else {
     throw Exception("Error al obtener actividades");
   }
