@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import '../services/api_service.dart';
 import 'package:http/http.dart' as http;
+import 'new_activity_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -28,12 +29,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _checkBackend() async {
-    await Future.delayed(const Duration(milliseconds: 500));
     try {
-      // Aquí luego llamaremos a ApiService.ping()
-      // Por ahora simulamos desconectado
+      final message = await ApiService.ping();
+
       setState(() {
-        isConnected = false;
+        isConnected = message == "ok" || message.isNotEmpty;
         isChecking = false;
       });
     } catch (_) {
@@ -288,7 +288,12 @@ class _RecorderCardState extends State<_RecorderCard>
         filename: path.split('/').last,
       );
 
-     widget.onSuccess(result);
+     Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NewActivityScreen(result: result),
+        ),
+      );
     } catch (e) {
         widget.onError("Error enviando audio");
       }

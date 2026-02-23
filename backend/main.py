@@ -274,154 +274,54 @@ async def process_audio(file: UploadFile = File(...)):
 
 
     # -------------------------------
-    # 5️⃣ Generar embedding ANTES del INSERT
-    # -------------------------------
-    embedding_text = f"""
-    Cliente: {cliente_raw}
-    Acción: {accion_raw}
-    Comentario: {analysis["comentario"]}
-    Transcripción: {text_transcribed}
-    """
-
-    try:
-        vector = generate_embedding(embedding_text)
-    except Exception as e:
-        print("Error generando embedding:", e)
-        vector = None
-
-    # -------------------------------
-    # 6️⃣ Control de duplicados (ANTES de insertar)
-    # -------------------------------
-    if vector and client_id:
-        from openai_service import is_duplicate_activity
-
-        is_dup, similarity_score = is_duplicate_activity(
-            vector,
-            client_id,
-            activity_type_id,
-            fecha_iso
-        )
-
-
-        if is_dup:
-            return {
-                "error": "Actividad duplicada detectada",
-                "similarity": similarity_score
-            }
-     
-    # -------------------------------
-    # VALIDACIÓN MÍNIMA PARA GUARDAR
+    # 9️⃣ Obtener nombres oficiales
     # -------------------------------
 
-    has_client = client_id is not None
-    has_contact = contact_id is not None
-    has_products = len(products_detected) > 0
-    has_action = activity_type_id is not None
+    cliente_nombre = None
+    contacto_nombre = None
 
-    if not has_client or not (has_contact or has_products or has_action):
-        return {
-            "error": "Información insuficiente para registrar actividad",
-            "detalle": {
-                "cliente_detectado": bool(has_client),
-                "contacto_detectado": bool(has_contact),
-                "productos_detectados": has_products,
-                "accion_detectada": bool(has_action)
-            }
-        }
+    if client_id:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT razon_social FROM clients WHERE id = ?", (client_id,))
+        row = cursor.fetchone()
+        conn.close()
 
+        if row:
+            cliente_nombre = row["razon_social"]
 
+    if contact_id:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT nombre FROM contacts WHERE id = ?", (contact_id,))
+        row = cursor.fetchone()
+        conn.close()
 
-    # -------------------------------
-    # 7️⃣ INSERT activity (solo si NO duplicada)
-    # -------------------------------
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        INSERT INTO activities (
-            fecha_iso,
-            client_id,
-            contact_id,
-            activity_type_id,
-            comentario,
-            transcripcion,
-            cliente_raw,
-            contacto_raw,
-            accion_raw,
-            resolution_status,
-            resolution_confidence
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        fecha_iso,
-        client_id,
-        contact_id,
-        activity_type_id,
-        analysis["comentario"],
-        text_transcribed,
-        cliente_raw,
-        contacto_raw,
-        accion_raw,
-        resolution_status,
-        overall_confidence
-    ))
-
-    activity_id = cursor.lastrowid
-
-    # -------------------------------
-    # Insertar productos asociados
-    # -------------------------------
-    for p in products_detected:
-        cursor.execute("""
-            INSERT INTO activity_products (
-                activity_id,
-                product_id,
-                product_raw,
-                confidence_score
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            activity_id,
-            p["product_id"],
-            p["product_raw"],
-            p["confidence"]
-        ))
-
-
-    # -------------------------------
-    # 8️⃣ Guardar embedding
-    # -------------------------------
-    if vector:
-        cursor.execute("""
-            INSERT INTO activity_embeddings (
-                activity_id,
-                embedding_vector,
-                embedding_model,
-                content_type
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            activity_id,
-            json.dumps(vector),
-            "text-embedding-3-small",
-            "activity_full"
-        ))
-
-    conn.commit()
-    conn.close()
+        if row:
+            contacto_nombre = row["nombre"]
 
     # -------------------------------
     # 9️⃣ Response
     # -------------------------------
     return {
         "texto": text_transcribed,
+
+        # Detectado por modelo
         "cliente_detectado": cliente_raw,
-        "cliente_id": client_id,
         "contacto_detectado": contacto_raw,
+
+        # IDs reales
+        "cliente_id": client_id,
         "contacto_id": contact_id,
+
+        # Nombres oficiales BD
+        "cliente_nombre": cliente_nombre,
+        "contacto_nombre": contacto_nombre,
+
         "accion_detectada": accion_raw,
         "activity_type_id": activity_type_id,
         "fecha_detectada": fecha_iso,
+
         "cliente_confidence": client_confidence,
         "contacto_confidence": contact_confidence,
         "overall_confidence": overall_confidence,
@@ -467,6 +367,123 @@ def get_activities():
             for r in rows
         ],
     }
+
+
+@app.post("/activities")
+async def create_activity(data: dict):
+
+    # -------------------------------
+    # 1️⃣ Validación mínima
+    # -------------------------------
+    client_id = data.get("cliente_id")
+    contact_id = data.get("contacto_id")
+    activity_type_id = data.get("activity_type_id")
+
+    if not client_id:
+        return {"error": "Cliente obligatorio"}
+
+    if not (contact_id or activity_type_id):
+        return {"error": "Debe existir contacto o tipo de actividad"}
+
+    # -------------------------------
+    # 2️⃣ Generar embedding
+    # -------------------------------
+    embedding_text = f"""
+    Cliente: {data.get("cliente_detectado")}
+    Acción: {data.get("accion_detectada")}
+    Comentario: {data.get("texto")}
+    """
+
+    try:
+        vector = generate_embedding(embedding_text)
+    except Exception as e:
+        print("Error generando embedding:", e)
+        vector = None
+
+    # -------------------------------
+    # 3️⃣ Control duplicados
+    # -------------------------------
+    if vector:
+        from openai_service import is_duplicate_activity
+
+        is_dup, similarity_score = is_duplicate_activity(
+            vector,
+            client_id,
+            activity_type_id,
+            data.get("fecha_detectada")
+        )
+
+        if is_dup:
+            return {
+                "error": "Actividad duplicada detectada",
+                "similarity": similarity_score
+            }
+
+    # -------------------------------
+    # 4️⃣ Insert activity
+    # -------------------------------
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO activities (
+            fecha_iso,
+            client_id,
+            contact_id,
+            activity_type_id,
+            comentario,
+            transcripcion,
+            cliente_raw,
+            contacto_raw,
+            accion_raw,
+            resolution_status,
+            resolution_confidence
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        data.get("fecha_detectada"),
+        client_id,
+        contact_id,
+        activity_type_id,
+        data.get("texto"),
+        data.get("texto"),
+        data.get("cliente_detectado"),
+        data.get("contacto_detectado"),
+        data.get("accion_detectada"),
+        data.get("resolution_status"),
+        data.get("overall_confidence"),
+    ))
+
+    activity_id = cursor.lastrowid
+
+    # -------------------------------
+    # 5️⃣ Guardar embedding
+    # -------------------------------
+    if vector:
+        cursor.execute("""
+            INSERT INTO activity_embeddings (
+                activity_id,
+                embedding_vector,
+                embedding_model,
+                content_type
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            activity_id,
+            json.dumps(vector),
+            "text-embedding-3-small",
+            "activity_full"
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "activity_id": activity_id
+    }
+
+
 
 @app.post("/semantic-search")
 def semantic_search(request: SemanticSearchRequest):

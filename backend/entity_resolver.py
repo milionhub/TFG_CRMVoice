@@ -91,7 +91,7 @@ def resolve_activity_type(accion_raw: str):
     conn.close()
     return None
 
-from rapidfuzz import fuzz
+
 
 def resolve_contact(contacto_raw: str, client_id: int | None = None):
     if not contacto_raw:

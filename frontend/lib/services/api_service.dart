@@ -77,6 +77,18 @@ class ApiService {
   }
 }
 
+static Future<Map<String, dynamic>> createActivity(
+    Map<String, dynamic> data) async {
+
+  final response = await http.post(
+    Uri.parse("$baseUrl/activities"),
+    headers: {"Content-Type": "application/json"},
+    body: jsonEncode(data),
+  );
+
+  return jsonDecode(response.body);
+}
+
 }
 
 
