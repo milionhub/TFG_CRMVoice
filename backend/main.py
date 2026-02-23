@@ -16,7 +16,8 @@ import os
 import re
 import json
 import numpy as np
-
+from typing import Optional
+from fastapi import Query
 
 class SemanticSearchRequest(BaseModel):
     query: str
@@ -332,11 +333,16 @@ async def process_audio(file: UploadFile = File(...)):
 
 
 @app.get("/activities")
-def get_activities():
+def get_activities(
+    client_id: Optional[int] = Query(None),
+    action_id: Optional[int] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    base_query = """
         SELECT 
             a.id,
             a.fecha_iso,
@@ -347,9 +353,33 @@ def get_activities():
         FROM activities a
         LEFT JOIN clients c ON a.client_id = c.id
         LEFT JOIN activity_types at ON a.activity_type_id = at.id
-        ORDER BY a.id DESC
-    """)
+    """
 
+    conditions = []
+    params = []
+
+    if client_id:
+        conditions.append("a.client_id = ?")
+        params.append(client_id)
+
+    if action_id:
+        conditions.append("a.activity_type_id = ?")
+        params.append(action_id)
+
+    if date_from:
+        conditions.append("a.fecha_iso >= ?")
+        params.append(date_from)
+
+    if date_to:
+        conditions.append("a.fecha_iso <= ?")
+        params.append(date_to)
+
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    base_query += " ORDER BY a.id DESC"
+
+    cursor.execute(base_query, params)
     rows = cursor.fetchall()
     conn.close()
 
@@ -563,3 +593,51 @@ def prepare_meeting(request: PrepareMeetingRequest):
 def test_products(body: ProcessTextRequest):
     from entity_resolver import resolve_products
     return resolve_products(body.text)
+
+@app.get("/clients")
+def get_clients():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, razon_social
+        FROM clients
+        ORDER BY razon_social ASC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        "clients": [
+            {
+                "id": r["id"],
+                "name": r["razon_social"]
+            }
+            for r in rows
+        ]
+    }
+
+@app.get("/activity-types")
+def get_activity_types():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, accion
+        FROM activity_types
+        ORDER BY accion ASC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        "activity_types": [
+            {
+                "id": r["id"],
+                "name": r["accion"]
+            }
+            for r in rows
+        ]
+    }

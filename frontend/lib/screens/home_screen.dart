@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../services/api_service.dart';
 import 'package:http/http.dart' as http;
 import 'new_activity_screen.dart';
+import 'history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -48,22 +49,41 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F8),
+
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        foregroundColor: Colors.black87,
+        title: const Text(
+          "CRM Voice",
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          IconButton(
+            tooltip: "Histórico",
+            icon: const Icon(Icons.menu_book),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const HistoryScreen(),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                "CRM Voice",
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
-              ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 8),
 
               StatusCard(
                 isConnected: isConnected,
@@ -95,14 +115,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                 ),
-              ),
-
-              const SizedBox(height: 24),
-
-              _ResultCard(
-                result: analysisResult,
-                isLoading: isAnalyzing,
-                error: errorMessage,
               ),
             ],
           ),
@@ -375,113 +387,3 @@ class _RecorderCardState extends State<_RecorderCard>
   }
 }
 
-
-
-/// ===============================
-/// RESULT CARD
-/// ===============================
-
-class _ResultCard extends StatelessWidget {
-  final Map<String, dynamic>? result;
-  final bool isLoading;
-  final String? error;
-
-  const _ResultCard({
-    required this.result,
-    required this.isLoading,
-    required this.error,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (isLoading) {
-      return _buildLoading();
-    }
-
-    if (error != null) {
-      return _buildError();
-    }
-
-    if (result == null) {
-      return _buildPlaceholder();
-    }
-
-    return _buildResult();
-  }
-
-  Widget _buildLoading() {
-    return Container(
-      height: 140,
-      decoration: _decoration(),
-      child: const Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF1E88E5),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildError() {
-    return Container(
-      height: 140,
-      padding: const EdgeInsets.all(16),
-      decoration: _decoration(),
-      child: Text(
-        error!,
-        style: const TextStyle(
-          color: Colors.red,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPlaceholder() {
-    return Container(
-      height: 140,
-      padding: const EdgeInsets.all(16),
-      decoration: _decoration(),
-      child: const Align(
-        alignment: Alignment.topLeft,
-        child: Text(
-          "Aquí aparecerá el resultado del análisis IA...",
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.black54,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildResult() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: _decoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text("Cliente: ${result?['cliente'] ?? '-'}"),
-          Text("Acción: ${result?['accion'] ?? '-'}"),
-          Text("Fecha: ${result?['fecha'] ?? '-'}"),
-          const SizedBox(height: 8),
-          Text(result?['comentario'] ?? ""),
-        ],
-      ),
-    );
-  }
-
-  BoxDecoration _decoration() {
-    return BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withOpacity(0.05),
-          blurRadius: 12,
-          offset: const Offset(0, 6),
-        )
-      ],
-    );
-  }
-}

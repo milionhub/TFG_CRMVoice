@@ -65,9 +65,35 @@ class ApiService {
     }
   }
 
-  static Future<List<dynamic>> getActivities() async {
-  final url = Uri.parse("$baseUrl/activities");
-  final response = await http.get(url);
+  static Future<List<dynamic>> getActivities({
+  int? clientId,
+  int? actionId,
+  String? dateFrom,
+  String? dateTo,
+}) async {
+
+  final queryParams = <String, String>{};
+
+  if (clientId != null) {
+    queryParams["client_id"] = clientId.toString();
+  }
+
+  if (actionId != null) {
+    queryParams["action_id"] = actionId.toString();
+  }
+
+  if (dateFrom != null && dateFrom.isNotEmpty) {
+    queryParams["date_from"] = dateFrom;
+  }
+
+  if (dateTo != null && dateTo.isNotEmpty) {
+    queryParams["date_to"] = dateTo;
+  }
+
+  final uri = Uri.parse("$baseUrl/activities")
+      .replace(queryParameters: queryParams);
+
+  final response = await http.get(uri);
 
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
@@ -75,6 +101,9 @@ class ApiService {
   } else {
     throw Exception("Error al obtener actividades");
   }
+
+
+
 }
 
 static Future<Map<String, dynamic>> createActivity(
@@ -89,6 +118,31 @@ static Future<Map<String, dynamic>> createActivity(
   return jsonDecode(response.body);
 }
 
+static Future<List<dynamic>> getClients() async {
+  final response = await http.get(
+    Uri.parse("$baseUrl/clients"),
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    return data["clients"];
+  } else {
+    throw Exception("Error cargando clientes");
+  }
+}
+
+static Future<List<dynamic>> getActivityTypes() async {
+  final response = await http.get(
+    Uri.parse("$baseUrl/activity-types"),
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    return data["activity_types"];
+  } else {
+    throw Exception("Error cargando acciones");
+  }
+}
 }
 
 
