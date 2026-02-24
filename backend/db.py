@@ -90,7 +90,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS salespeople (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
-            email TEXT
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            google_id TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
         );
     """)
 
