@@ -7,6 +7,7 @@ import '../services/api_service.dart';
 import 'package:http/http.dart' as http;
 import 'new_activity_screen.dart';
 import 'history_screen.dart';
+import 'chat_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -69,6 +70,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (_) => const HistoryScreen(),
+                ),
+              );
+            },
+          ),
+          IconButton(
+            tooltip: "Chat IA",
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ChatScreen(),
                 ),
               );
             },

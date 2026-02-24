@@ -8,9 +8,10 @@ from pydantic import BaseModel
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
 from entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
-from openai_service import generate_embedding, generate_meeting_summary
-from context_service import build_context
+from openai_service import generate_embedding, generate_meeting_summary, format_billing_response, generate_client_summary
+from context_service import build_context, get_client_billing_summary
 from date_resolver import resolve_relative_date
+from semantic_search_service import semantic_search_activities
 
 import os
 import re
@@ -18,6 +19,7 @@ import json
 import numpy as np
 from typing import Optional
 from fastapi import Query
+
 
 class SemanticSearchRequest(BaseModel):
     query: str
@@ -570,6 +572,19 @@ def get_client_context(client_id: int):
 class PrepareMeetingRequest(BaseModel):
     client_id: int
 
+def prepare_meeting_by_client_id(client_id: int):
+
+    context_data = build_context(client_id)
+
+    if not context_data:
+        return None, "Cliente no encontrado"
+
+    try:
+        summary = generate_meeting_summary(context_data)
+    except Exception as e:
+        return None, f"Error generando resumen: {str(e)}"
+
+    return summary, None
 
 @app.post("/prepare-meeting")
 def prepare_meeting(request: PrepareMeetingRequest):
@@ -641,3 +656,154 @@ def get_activity_types():
             for r in rows
         ]
     }
+
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+class ChatResponse(BaseModel):
+    type: str
+    content: str
+
+
+@app.post("/chat", response_model=ChatResponse)
+def chat_endpoint(payload: ChatRequest):
+    user_message = payload.message.lower()
+
+    
+    # --- PREPARAR REUNIÓN ---
+    if ("prepar" in user_message) and ("reunion" in user_message or "reunión" in user_message):
+
+        match = re.search(r"con (.+)", payload.message, re.IGNORECASE)
+
+        if not match:
+            return ChatResponse(
+                type="prepare_meeting",
+                content="¿Para qué cliente quieres preparar la reunión?"
+            )
+
+        client_text = match.group(1).strip()
+
+        id_match = re.search(r"\b(\d+)\b", client_text)
+
+        if id_match:
+            client_id = int(id_match.group(1))
+        else:
+            client_id, confidence = resolve_client(client_text)
+
+            if not client_id:
+                return ChatResponse(
+                    type="prepare_meeting",
+                    content=f"No he podido identificar claramente el cliente '{client_text}'."
+                )
+
+        summary, error = prepare_meeting_by_client_id(client_id)
+
+        if error:
+            return ChatResponse(
+                type="prepare_meeting",
+                content=error
+            )
+
+        return ChatResponse(
+            type="prepare_meeting",
+            content=summary
+        )
+
+    # --- FACTURACIÓN ---
+    if "facturación" in user_message or "facturado" in user_message:
+
+        # Intentamos extraer nombre después de "de" o "tiene"
+        match = re.search(r"(de|tiene)\s+(.+)", payload.message, re.IGNORECASE)
+
+        if match:
+            client_text = match.group(2).strip()
+        else:
+            # Si no hay patrón claro, usamos todo el mensaje
+            client_text = payload.message
+
+        client_id, confidence = resolve_client(client_text)
+
+        if not client_id:
+            return ChatResponse(
+                type="billing_query",
+                content="¿De qué cliente quieres consultar la facturación?"
+            )
+
+        billing = get_client_billing_summary(client_id)
+
+        return ChatResponse(
+            type="billing_query",
+            content=format_billing_response(billing)
+        )  
+    
+
+    # --- RESUMEN CLIENTE ---
+    if "resumen cliente" in user_message:
+
+        match = re.search(r"cliente (.+)", payload.message, re.IGNORECASE)
+
+        if match:
+            client_text = match.group(1).strip()
+        else:
+            return ChatResponse(
+                type="client_summary",
+                content="¿De qué cliente quieres el resumen?"
+            )
+
+        client_id, confidence = resolve_client(client_text)
+
+        if not client_id:
+            return ChatResponse(
+                type="client_summary",
+                content=f"No he podido identificar el cliente '{client_text}'."
+            )
+
+        context = build_context(client_id)
+        summary = generate_client_summary(context)
+
+        return ChatResponse(
+            type="client_summary",
+            content=summary
+        )
+    
+    # --- CONTEXTO CLIENTE ---
+    if "contexto" in user_message:
+        return ChatResponse(
+            type="client_context",
+            content="Buscando contexto del cliente..."
+        )
+
+    # --- BÚSQUEDA SEMÁNTICA ---
+    if "hablado" in user_message or "sobre" in user_message or "buscar" in user_message:
+
+        # Intentamos detectar cliente en el mensaje completo
+        client_id, confidence = resolve_client(payload.message)
+
+        if client_id:
+            results = semantic_search_activities(payload.message, client_id=client_id)
+        else:
+            results = semantic_search_activities(payload.message)
+
+        if not results:
+            return ChatResponse(
+                type="semantic_search",
+                content="No he encontrado actividades relacionadas."
+            )
+
+        formatted = "\n\n".join(
+            f"🔎 {r['comentario']}\nSimilitud: {round(r['score'], 3)}"
+            for r in results
+        )
+
+        return ChatResponse(
+            type="semantic_search",
+            content=f"Resultados más relevantes:\n\n{formatted}"
+        )
+
+    # --- DEFAULT ---
+    return ChatResponse(
+        type="text",
+        content=f"🤖 He recibido: {payload.message}"
+    )
