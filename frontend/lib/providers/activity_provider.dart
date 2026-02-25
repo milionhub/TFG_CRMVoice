@@ -3,6 +3,10 @@ import '../models/activity.dart';
 import '../services/api_service.dart';
 
 class ActivityProvider extends ChangeNotifier {
+  final ApiService api;
+
+  ActivityProvider(this.api);
+
   List<Activity> _activities = [];
   bool _isLoading = false;
 
@@ -13,7 +17,7 @@ class ActivityProvider extends ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    final response = await ApiService.getActivities();
+    final response = await api.getActivities();
 
     _activities = response
         .map<Activity>((json) => Activity.fromJson(json))

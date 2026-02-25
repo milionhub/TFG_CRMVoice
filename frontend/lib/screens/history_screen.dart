@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import 'package:provider/provider.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -30,7 +31,9 @@ class _HistoryPageState extends State<HistoryScreen> {
     });
 
     try {
-      final data = await ApiService.getActivities(
+      final api = context.read<ApiService>();
+
+      final data = await api.getActivities(
         clientId: selectedClientId,
         actionId: selectedActionId,
         dateFrom: selectedDateFrom,
@@ -348,8 +351,10 @@ class _FilterModalState extends State<_FilterModal> {
 
   Future<void> _loadData() async {
     try {
-      final c = await ApiService.getClients();
-      final a = await ApiService.getActivityTypes();
+      final api = context.read<ApiService>();
+
+      final c = await api.getClients();
+      final a = await api.getActivityTypes();
 
       setState(() {
         clients = c;

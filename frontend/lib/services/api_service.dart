@@ -1,11 +1,27 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 
 class ApiService {
+  final AuthProvider auth;
+
+ 
   static const String baseUrl = "http://127.0.0.1:8000";
 
+   ApiService(this.auth);
+   
+   Map<String, String> _headers() {
+      final token = auth.token;
+
+      return {
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      };
+    }
+
   /// Llama al endpoint GET /ping
-  static Future<String> ping() async {
+  Future<String> ping() async {
     final url = Uri.parse("$baseUrl/ping");
     final response = await http.get(url);
 
@@ -18,14 +34,12 @@ class ApiService {
   }
 
   /// Llama al endpoint POST /process-text
-  static Future<Map<String, dynamic>> analyzeText(String text) async {
+  Future<Map<String, dynamic>> analyzeText(String text) async {
     final url = Uri.parse("$baseUrl/process-text");
 
     final response = await http.post(
       url,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: _headers(),
       body: jsonEncode({
         "text": text,
       }),
@@ -39,13 +53,16 @@ class ApiService {
   }
 
    /// 🔴 NUEVO: POST /process-audio (multipart/form-data)
-  static Future<Map<String, dynamic>> uploadAudio({
+  Future<Map<String, dynamic>> uploadAudio({
     required List<int> bytes,
     required String filename,
   }) async {
     final url = Uri.parse("$baseUrl/process-audio");
 
     final request = http.MultipartRequest("POST", url);
+    if (auth.token != null) {
+      request.headers['Authorization'] = 'Bearer ${auth.token}';
+    }
     request.files.add(
       http.MultipartFile.fromBytes(
         'file', // nombre del campo en FastAPI
@@ -65,7 +82,7 @@ class ApiService {
     }
   }
 
-  static Future<List<dynamic>> getActivities({
+  Future<List<dynamic>> getActivities({
   int? clientId,
   int? actionId,
   String? dateFrom,
@@ -93,7 +110,7 @@ class ApiService {
   final uri = Uri.parse("$baseUrl/activities")
       .replace(queryParameters: queryParams);
 
-  final response = await http.get(uri);
+  final response = await http.get(uri, headers: _headers());
 
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
@@ -106,21 +123,21 @@ class ApiService {
 
 }
 
-static Future<Map<String, dynamic>> createActivity(
+Future<Map<String, dynamic>> createActivity(
     Map<String, dynamic> data) async {
 
   final response = await http.post(
     Uri.parse("$baseUrl/activities"),
-    headers: {"Content-Type": "application/json"},
+    headers: _headers(),
     body: jsonEncode(data),
   );
 
   return jsonDecode(response.body);
 }
-
-static Future<List<dynamic>> getClients() async {
+Future<List<dynamic>> getClients() async {
   final response = await http.get(
     Uri.parse("$baseUrl/clients"),
+    headers: _headers(),
   );
 
   if (response.statusCode == 200) {
@@ -131,9 +148,10 @@ static Future<List<dynamic>> getClients() async {
   }
 }
 
-static Future<List<dynamic>> getActivityTypes() async {
+Future<List<dynamic>> getActivityTypes() async {
   final response = await http.get(
     Uri.parse("$baseUrl/activity-types"),
+    headers: _headers(),
   );
 
   if (response.statusCode == 200) {
@@ -143,6 +161,44 @@ static Future<List<dynamic>> getActivityTypes() async {
     throw Exception("Error cargando acciones");
   }
 }
+
+
+static Future<Map<String, dynamic>> login(
+    String email, String password) async {
+
+  final response = await http.post(
+    Uri.parse("$baseUrl/login"),
+    headers: {"Content-Type": "application/json"},
+    body: jsonEncode({
+      "email": email,
+      "password": password,
+    }),
+  );
+
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body);
+  } else {
+    throw Exception("Login error");
+  }
 }
 
+static Future<Map<String, dynamic>> register(
+    String nombre, String email, String password) async {
 
+  final response = await http.post(
+    Uri.parse("$baseUrl/register"),
+    headers: {"Content-Type": "application/json"},
+    body: jsonEncode({
+      "nombre": nombre,
+      "email": email,
+      "password": password,
+    }),
+  );
+
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body);
+  } else {
+    throw Exception("Register error");
+  }
+}
+}

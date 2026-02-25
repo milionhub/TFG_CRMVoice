@@ -8,6 +8,8 @@ import 'package:http/http.dart' as http;
 import 'new_activity_screen.dart';
 import 'history_screen.dart';
 import 'chat_screen.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -32,7 +34,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _checkBackend() async {
     try {
-      final message = await ApiService.ping();
+      final api = context.read<ApiService>();
+      final message = await api.ping();
 
       setState(() {
         isConnected = message == "ok" || message.isNotEmpty;
@@ -62,6 +65,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            tooltip: "Cerrar sesión",
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final auth = Provider.of<AuthProvider>(context, listen: false);
+              await auth.logout();
+            },
+          ),
           IconButton(
             tooltip: "Histórico",
             icon: const Icon(Icons.menu_book),
@@ -308,7 +319,8 @@ class _RecorderCardState extends State<_RecorderCard>
         bytes = await file.readAsBytes();
       }
 
-      final result = await ApiService.uploadAudio(
+      final api = context.read<ApiService>();
+      final result = await api.uploadAudio(
         bytes: bytes,
         filename: path.split('/').last,
       );

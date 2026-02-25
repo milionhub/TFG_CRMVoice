@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import 'package:provider/provider.dart';
 
 class NewActivityScreen extends StatelessWidget {
   final Map<String, dynamic> result;
@@ -175,7 +176,8 @@ class NewActivityScreen extends StatelessWidget {
                   elevation: 6,
                 ),
                 onPressed: () async {
-                  final response = await ApiService.createActivity(result);
+                  final api = context.read<ApiService>();
+                  final response = await api.createActivity(result);
 
                   if (response["success"] == true) {
                     ScaffoldMessenger.of(context).showSnackBar(
