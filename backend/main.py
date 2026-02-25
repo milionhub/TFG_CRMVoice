@@ -1,9 +1,11 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from datetime import datetime
 
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
@@ -12,6 +14,8 @@ from openai_service import generate_embedding, generate_meeting_summary, format_
 from context_service import build_context, get_client_billing_summary
 from date_resolver import resolve_relative_date
 from semantic_search_service import semantic_search_activities
+from jwt_utils import create_access_token, verify_token
+from auth_utils import verify_password, hash_password
 
 import os
 import re
@@ -20,13 +24,19 @@ import numpy as np
 from typing import Optional
 from fastapi import Query
 
+security = HTTPBearer()
 
 class SemanticSearchRequest(BaseModel):
     query: str
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
-
-
+class RegisterRequest(BaseModel):
+    nombre: str
+    email: str
+    password: str
 
 app = FastAPI(
     title="CRM Voice API",
@@ -53,6 +63,20 @@ app.add_middleware(
 class ProcessTextRequest(BaseModel):
     text: str
 
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+
+    token = credentials.credentials
+   
+    payload = verify_token(token)
+
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado"
+        )
+    
+    user_id = int(payload.get("sub"))
+    return payload
 
 # =========================
 # UTILIDADES IA
@@ -165,6 +189,119 @@ def read_root():
 def ping():
     return {"status": "ok"}
 
+@app.post("/login")
+def login(request: LoginRequest):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, nombre, email, password_hash
+        FROM salespeople
+        WHERE email = ?
+    """, (request.email,))
+
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+
+    user_id = user[0]
+    nombre = user[1]
+    user_email = user[2]
+    stored_hash = user[3]
+
+    if not verify_password(request.password, stored_hash):
+        raise HTTPException(status_code=401, detail="Password incorrecto")
+
+    token = create_access_token({
+        "sub": str(user_id),
+        "email": user_email
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user_id,
+            "nombre": nombre,
+            "email": user_email
+        }
+    }
+
+@app.post("/register")
+def register(request: RegisterRequest):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Verificar si email ya existe
+    cursor.execute("""
+        SELECT id FROM salespeople WHERE email = ?
+    """, (request.email,))
+    
+    existing_user = cursor.fetchone()
+
+    if existing_user:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail="El email ya está registrado"
+        )
+
+    # Crear hash
+    password_hash = hash_password(request.password)
+
+    # Insertar usuario
+    cursor.execute("""
+        INSERT INTO salespeople (nombre, email, password_hash, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (request.nombre, request.email, password_hash, datetime.utcnow()))
+
+    conn.commit()
+
+    user_id = cursor.lastrowid
+
+    conn.close()
+
+    # Crear token automáticamente
+    token = create_access_token({
+        "sub": str(user_id),
+        "email": request.email
+    })
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+@app.get("/me")
+def get_me(current_user=Depends(get_current_user)):
+
+    user_id = int(current_user.get("sub"))
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, nombre, email, created_at
+        FROM salespeople
+        WHERE id = ?
+    """, (user_id,))
+
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    return {
+        "id": user[0],
+        "nombre": user[1],
+        "email": user[2],
+        "created_at": user[3]
+    }
 
 @app.post("/process-text")
 def process_text(body: ProcessTextRequest):
