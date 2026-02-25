@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
@@ -21,15 +22,7 @@ class AuthProvider extends ChangeNotifier {
     final savedToken = prefs.getString("auth_token");
 
     if (savedToken != null) {
-      _token = savedToken;
-
-      // Opcional: decodificar payload JWT
-      final parts = savedToken.split(".");
-      if (parts.length == 3) {
-        final payload =
-            jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
-        _user = payload;
-      }
+      _setToken(savedToken);
     }
 
     notifyListeners();
@@ -38,19 +31,25 @@ class AuthProvider extends ChangeNotifier {
   /// ==========================
   /// LOGIN
   /// ==========================
-  Future<bool> login(String email, String password) async {
+  Future<bool> login(
+      String email,
+      String password,
+      bool rememberMe,
+  ) async {
     _isLoading = true;
     notifyListeners();
 
     try {
       final response = await ApiService.login(email, password);
 
-      _token = response["access_token"];
+      final newToken = response["access_token"];
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("auth_token", _token!);
+      _setToken(newToken);
 
-      await init();
+      if (rememberMe) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString("auth_token", newToken);
+      }
 
       _isLoading = false;
       notifyListeners();
@@ -66,7 +65,11 @@ class AuthProvider extends ChangeNotifier {
   /// REGISTER
   /// ==========================
   Future<bool> register(
-      String nombre, String email, String password) async {
+      String nombre,
+      String email,
+      String password,
+      bool rememberMe,
+  ) async {
     _isLoading = true;
     notifyListeners();
 
@@ -74,12 +77,14 @@ class AuthProvider extends ChangeNotifier {
       final response =
           await ApiService.register(nombre, email, password);
 
-      _token = response["access_token"];
+      final newToken = response["access_token"];
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("auth_token", _token!);
+      _setToken(newToken);
 
-      await init();
+      if (rememberMe) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString("auth_token", newToken);
+      }
 
       _isLoading = false;
       notifyListeners();
@@ -102,5 +107,24 @@ class AuthProvider extends ChangeNotifier {
     _user = null;
 
     notifyListeners();
+  }
+
+  /// ==========================
+  /// PRIVATE: set token + decode
+  /// ==========================
+  void _setToken(String token) {
+    _token = token;
+
+    final parts = token.split(".");
+    if (parts.length == 3) {
+      final payload = jsonDecode(
+        utf8.decode(
+          base64Url.decode(
+            base64Url.normalize(parts[1]),
+          ),
+        ),
+      );
+      _user = payload;
+    }
   }
 }
