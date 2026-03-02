@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/app_logo.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -91,21 +92,8 @@ class _AuthScreenState extends State<AuthScreen>
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(
-                          Icons.mic_rounded,
-                          size: 72,
-                          color: Color(0xFF1565C0),
-                        ),
-                        const SizedBox(height: 24),
-                        const Text(
-                          "CRM Voice",
-                          style: TextStyle(
-                            fontSize: 36,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.2,
-                            color: Color(0xFF1565C0),
-                          ),
-                        ),
+                        const AppLogo(size: 220),
+                        const SizedBox(height: 32),
                         const SizedBox(height: 12),
                         const Text(
                           "Gestión inteligente de actividades\nimpulsada por voz e IA.",

@@ -10,6 +10,7 @@ import 'history_screen.dart';
 import 'chat_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/app_logo.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -55,24 +56,48 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: const Color(0xFFF4F6F8),
 
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+        backgroundColor: Colors.white,
+        elevation: 1,
         foregroundColor: Colors.black87,
-        title: const Text(
-          "CRM Voice",
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
+        titleSpacing: 20,
+        title: Row(
+          children: const [
+            AppLogo(size: 32),
+            SizedBox(width: 10),
+          ],
         ),
         actions: [
-          IconButton(
-            tooltip: "Cerrar sesión",
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              final auth = Provider.of<AuthProvider>(context, listen: false);
-              await auth.logout();
+          Consumer<AuthProvider>(
+            builder: (context, auth, _) {
+              final email = auth.user?["email"] ?? "";
+              final initial = email.isNotEmpty ? email[0].toUpperCase() : "";
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: const Color(0xFF1565C0),
+                      child: Text(
+                        initial,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      email,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                ),
+              );
             },
           ),
+
           IconButton(
             tooltip: "Histórico",
             icon: const Icon(Icons.menu_book),
@@ -85,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
+
           IconButton(
             tooltip: "Chat IA",
             icon: const Icon(Icons.chat_bubble_outline),
@@ -95,6 +121,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   builder: (_) => const ChatScreen(),
                 ),
               );
+            },
+          ),
+
+          IconButton(
+            tooltip: "Cerrar sesión",
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              await context.read<AuthProvider>().logout();
             },
           ),
         ],
