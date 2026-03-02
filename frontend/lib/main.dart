@@ -53,9 +53,13 @@ class _CRMVoiceAppState extends State<CRMVoiceApp> {
       title: "CRM Voice",
       theme: ThemeData.dark(),
 
-      home: auth.isAuthenticated
-    ? const HomeScreen()
-    : const AuthScreen()
+      home: !auth.isInitialized
+        ? const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          )
+        : auth.isAuthenticated
+            ? const HomeScreen()
+            : const AuthScreen(),
     );
   }
 }

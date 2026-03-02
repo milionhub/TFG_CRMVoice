@@ -66,7 +66,6 @@ class ProcessTextRequest(BaseModel):
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
     token = credentials.credentials
-   
     payload = verify_token(token)
 
     if payload is None:
@@ -74,9 +73,11 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido o expirado"
         )
-    
-    user_id = int(payload.get("sub"))
-    return payload
+
+    return {
+        "user_id": int(payload.get("sub")),
+        "email": payload.get("email")
+    }
 
 # =========================
 # UTILIDADES IA
@@ -477,6 +478,7 @@ def get_activities(
     action_id: Optional[int] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
     conn = get_connection()
     cursor = conn.cursor()
@@ -494,8 +496,8 @@ def get_activities(
         LEFT JOIN activity_types at ON a.activity_type_id = at.id
     """
 
-    conditions = []
-    params = []
+    conditions = ["a.salesperson_id = ?"]
+    params = [current_user["user_id"]]
 
     if client_id:
         conditions.append("a.client_id = ?")
@@ -539,7 +541,7 @@ def get_activities(
 
 
 @app.post("/activities")
-async def create_activity(data: dict):
+async def create_activity(data: dict, current_user: dict = Depends(get_current_user)):
 
     # -------------------------------
     # 1️⃣ Validación mínima
@@ -606,9 +608,10 @@ async def create_activity(data: dict):
             contacto_raw,
             accion_raw,
             resolution_status,
-            resolution_confidence
+            resolution_confidence,
+            salesperson_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         data.get("fecha_detectada"),
         client_id,
@@ -621,6 +624,7 @@ async def create_activity(data: dict):
         data.get("accion_detectada"),
         data.get("resolution_status"),
         data.get("overall_confidence"),
+        current_user["user_id"],
     ))
 
     activity_id = cursor.lastrowid

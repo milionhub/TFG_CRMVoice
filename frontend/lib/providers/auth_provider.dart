@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
@@ -8,6 +7,9 @@ class AuthProvider extends ChangeNotifier {
   String? _token;
   Map<String, dynamic>? _user;
   bool _isLoading = false;
+
+  bool _initialized = false;
+  bool get isInitialized => _initialized;
 
   String? get token => _token;
   Map<String, dynamic>? get user => _user;
@@ -25,6 +27,7 @@ class AuthProvider extends ChangeNotifier {
       _setToken(savedToken);
     }
 
+    _initialized = true;
     notifyListeners();
   }
 
