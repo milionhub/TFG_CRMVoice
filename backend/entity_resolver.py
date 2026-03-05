@@ -183,7 +183,7 @@ def resolve_products(text: str):
     conn.close()
 
     matches = []
-
+    
     # ============================
     # Buscar contra nombre oficial
     # ============================
@@ -191,10 +191,9 @@ def resolve_products(text: str):
     for p in products:
         nombre_norm = normalize_text(p["nombre"])
 
-        score_full = fuzz.token_set_ratio(text_norm, nombre_norm)
-        score_partial = fuzz.partial_ratio(text_norm, nombre_norm)
-
-        score = max(score_full, score_partial)
+        # Mejor comparar el nombre contra el texto,
+        # no el texto completo contra el nombre
+        score = fuzz.partial_ratio(nombre_norm, text_norm)
 
         if score >= PRODUCT_THRESHOLD:
             matches.append({

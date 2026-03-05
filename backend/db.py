@@ -105,8 +105,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS activities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT DEFAULT (datetime('now')),
-            fecha_iso TEXT,
-            hora TEXT,
+            datetime_iso TEXT,
 
             client_id INTEGER,
             contact_id INTEGER,
@@ -130,7 +129,7 @@ def init_db():
         );
     """)
 
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_fecha ON activities(fecha_iso);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_fecha ON activities(datetime_iso);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_client ON activities(client_id);")
 
     # =====================================================

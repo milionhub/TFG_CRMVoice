@@ -12,7 +12,7 @@ from whisper_service import transcribe_audio
 from entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
 from openai_service import generate_embedding, generate_meeting_summary, format_billing_response, generate_client_summary
 from context_service import build_context, get_client_billing_summary
-from date_resolver import resolve_relative_date
+from date_resolver import resolve_relative_date, resolve_time
 from semantic_search_service import semantic_search_activities
 from jwt_utils import create_access_token, verify_token
 from auth_utils import verify_password, hash_password
@@ -324,7 +324,7 @@ async def process_audio(file: UploadFile = File(...)):
     # -------------------------------
     cliente_raw = analysis["cliente"]
     accion_raw = analysis["accion"]
-    fecha_iso = analysis["fecha"]
+    fecha_detectada = analysis["fecha"]
     contacto_raw = analysis["contacto"]
 
     # -------------------------------
@@ -461,7 +461,9 @@ async def process_audio(file: UploadFile = File(...)):
 
         "accion_detectada": accion_raw,
         "activity_type_id": activity_type_id,
-        "fecha_detectada": fecha_iso,
+        "fecha_detectada": fecha_detectada,
+
+        "products_detected": products_detected,
 
         "cliente_confidence": client_confidence,
         "contacto_confidence": contact_confidence,
@@ -486,7 +488,7 @@ def get_activities(
     base_query = """
         SELECT 
             a.id,
-            a.fecha_iso,
+            a.datetime_iso,
             a.comentario,
             a.resolution_status,
             c.razon_social AS cliente,
@@ -508,17 +510,17 @@ def get_activities(
         params.append(action_id)
 
     if date_from:
-        conditions.append("a.fecha_iso >= ?")
-        params.append(date_from)
+        conditions.append("a.datetime_iso >= ?")
+        params.append(date_from + "T00:00:00")
 
     if date_to:
-        conditions.append("a.fecha_iso <= ?")
-        params.append(date_to)
+        conditions.append("a.datetime_iso <= ?")
+        params.append(date_to + "T23:59:59")
 
     if conditions:
         base_query += " WHERE " + " AND ".join(conditions)
 
-    base_query += " ORDER BY a.id DESC"
+    base_query += " ORDER BY a.datetime_iso DESC"
 
     cursor.execute(base_query, params)
     rows = cursor.fetchall()
@@ -529,7 +531,7 @@ def get_activities(
         "activities": [
             {
                 "id": r["id"],
-                "fecha": r["fecha_iso"],
+                "fecha": r["datetime_iso"],
                 "cliente": r["cliente"],
                 "accion": r["accion"],
                 "comentario": r["comentario"],
@@ -590,6 +592,18 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
                 "similarity": similarity_score
             }
 
+
+    fecha = data.get("fecha_detectada")
+    hora = resolve_time(data.get("texto", ""))
+
+    if fecha:
+        if hora:
+            datetime_iso = f"{fecha}T{hora}"
+        else:
+            datetime_iso = f"{fecha}T00:00:00"
+    else:
+        from datetime import datetime
+        datetime_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     # -------------------------------
     # 4️⃣ Insert activity
     # -------------------------------
@@ -598,7 +612,7 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
 
     cursor.execute("""
         INSERT INTO activities (
-            fecha_iso,
+            datetime_iso,
             client_id,
             contact_id,
             activity_type_id,
@@ -613,7 +627,7 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        data.get("fecha_detectada"),
+        datetime_iso,
         client_id,
         contact_id,
         activity_type_id,
@@ -628,6 +642,28 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
     ))
 
     activity_id = cursor.lastrowid
+
+    # -------------------------------
+    # 6️⃣ Guardar productos
+    # -------------------------------
+
+    products = data.get("products_detected", [])
+
+    for p in products:
+        cursor.execute("""
+            INSERT INTO activity_products (
+                activity_id,
+                product_id,
+                product_raw,
+                confidence_score
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            activity_id,
+            p["product_id"],
+            p["product_raw"],
+            p["confidence"]
+        ))
 
     # -------------------------------
     # 5️⃣ Guardar embedding
@@ -672,7 +708,7 @@ def semantic_search(request: SemanticSearchRequest):
 
     # 2️⃣ Obtener todos los embeddings almacenados
     cursor.execute("""
-        SELECT ae.activity_id, ae.embedding_vector, a.fecha_iso, a.cliente_raw, a.comentario
+        SELECT ae.activity_id, ae.embedding_vector, a.datetime_iso, a.cliente_raw, a.comentario
         FROM activity_embeddings ae
         JOIN activities a ON a.id = ae.activity_id
     """)
@@ -692,7 +728,7 @@ def semantic_search(request: SemanticSearchRequest):
 
         results.append({
             "id": activity_id,
-            "fecha": row["fecha_iso"],
+            "fecha": row["datetime_iso"],
             "cliente": row["cliente_raw"],
             "comentario": row["comentario"],
             "score_similitud": float(similarity)

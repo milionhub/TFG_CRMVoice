@@ -124,7 +124,7 @@ def is_duplicate_activity(new_vector, client_id, activity_type_id, fecha_iso):
         JOIN activities a ON a.id = ae.activity_id
         WHERE a.client_id = ?
         AND a.activity_type_id = ?
-        AND a.fecha_iso = ?
+        AND substr(a.datetime_iso, 1, 10) = ?
         ORDER BY a.created_at DESC
         LIMIT 10
     """, (client_id, activity_type_id, fecha_iso))
