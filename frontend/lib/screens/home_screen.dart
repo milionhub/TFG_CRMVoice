@@ -7,6 +7,7 @@ import '../services/api_service.dart';
 import 'package:http/http.dart' as http;
 import 'new_activity_screen.dart';
 import 'history_screen.dart';
+import 'calendar_screen.dart';
 import 'chat_screen.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
@@ -110,7 +111,18 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
-
+          IconButton(
+            tooltip: "Calendario",
+            icon: const Icon(Icons.calendar_month),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const CalendarScreen(),
+                ),
+              );
+            },
+          ),
           IconButton(
             tooltip: "Chat IA",
             icon: const Icon(Icons.chat_bubble_outline),
