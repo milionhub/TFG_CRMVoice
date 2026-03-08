@@ -148,6 +148,26 @@ Future<List<dynamic>> getClients() async {
   }
 }
 
+Future<List<dynamic>> getContacts({int? clientId}) async {
+  final queryParams = <String, String>{};
+
+  if (clientId != null) {
+    queryParams["client_id"] = clientId.toString();
+  }
+
+  final uri = Uri.parse("$baseUrl/contacts")
+      .replace(queryParameters: queryParams);
+
+  final response = await http.get(uri, headers: _headers());
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    return data["contacts"];
+  } else {
+    throw Exception("Error cargando contactos");
+  }
+}
+
 Future<List<dynamic>> getActivityTypes() async {
   final response = await http.get(
     Uri.parse("$baseUrl/activity-types"),
@@ -201,4 +221,19 @@ static Future<Map<String, dynamic>> register(
     throw Exception("Register error");
   }
 }
+
+Future<List<dynamic>> getProducts() async {
+  final response = await http.get(
+    Uri.parse("$baseUrl/products"),
+    headers: _headers(),
+  );
+
+  if (response.statusCode == 200) {
+    final data = jsonDecode(response.body);
+    return data["products"];
+  } else {
+    throw Exception("Error cargando productos");
+  }
+}
+
 }

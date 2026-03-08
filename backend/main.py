@@ -325,6 +325,14 @@ async def process_audio(file: UploadFile = File(...)):
     cliente_raw = analysis["cliente"]
     accion_raw = analysis["accion"]
     fecha_detectada = analysis["fecha"]
+    hora_detectada = resolve_time(text_transcribed)
+
+    if fecha_detectada:
+        if hora_detectada:
+            fecha_detectada = f"{fecha_detectada}T{hora_detectada}"
+        else:
+            fecha_detectada = f"{fecha_detectada}T00:00:00"
+            
     contacto_raw = analysis["contacto"]
 
     # -------------------------------
@@ -594,16 +602,13 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
 
 
     fecha = data.get("fecha_detectada")
-    hora = resolve_time(data.get("texto", ""))
 
     if fecha:
-        if hora:
-            datetime_iso = f"{fecha}T{hora}"
-        else:
-            datetime_iso = f"{fecha}T00:00:00"
+        datetime_iso = fecha
     else:
         from datetime import datetime
         datetime_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
     # -------------------------------
     # 4️⃣ Insert activity
     # -------------------------------
@@ -692,7 +697,30 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
         "activity_id": activity_id
     }
 
+@app.get("/products")
+def get_products():
+    conn = get_connection()
+    cursor = conn.cursor()
 
+    cursor.execute("""
+        SELECT id, nombre, precio
+        FROM products
+        ORDER BY nombre ASC
+    """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        "products": [
+            {
+                "id": r["id"],
+                "name": r["nombre"],
+                "price": r["precio"]
+            }
+            for r in rows
+        ]
+    }
 
 @app.post("/semantic-search")
 def semantic_search(request: SemanticSearchRequest):
@@ -805,6 +833,38 @@ def get_clients():
             {
                 "id": r["id"],
                 "name": r["razon_social"]
+            }
+            for r in rows
+        ]
+    }
+
+@app.get("/contacts")
+def get_contacts(client_id: Optional[int] = Query(None)):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if client_id:
+        cursor.execute("""
+            SELECT id, nombre
+            FROM contacts
+            WHERE client_id = ?
+            ORDER BY nombre ASC
+        """, (client_id,))
+    else:
+        cursor.execute("""
+            SELECT id, nombre
+            FROM contacts
+            ORDER BY nombre ASC
+        """)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return {
+        "contacts": [
+            {
+                "id": r["id"],
+                "name": r["nombre"]
             }
             for r in rows
         ]
