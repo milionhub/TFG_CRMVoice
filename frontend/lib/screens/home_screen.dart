@@ -1,189 +1,314 @@
 import 'package:flutter/material.dart';
-import 'package:record/record.dart';
-import 'package:path_provider/path_provider.dart';
-import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import '../services/api_service.dart';
-import 'package:http/http.dart' as http;
-import 'new_activity_screen.dart';
+import 'home_content.dart';
+import '../widgets/app_logo.dart';
+import '../providers/auth_provider.dart';
+import 'package:provider/provider.dart';
 import 'history_screen.dart';
 import 'calendar_screen.dart';
 import 'chat_screen.dart';
-import 'package:provider/provider.dart';
-import '../providers/auth_provider.dart';
-import '../widgets/app_logo.dart';
+import '../core/app_colors.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
+  Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 800;
 
-class _HomeScreenState extends State<HomeScreen> {
-  bool isConnected = false;
-  bool isChecking = true;
-
-  Map<String, dynamic>? analysisResult;
-  bool isAnalyzing = false;
-  String? errorMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkBackend();
-  }
-
-  Future<void> _checkBackend() async {
-    try {
-      final api = context.read<ApiService>();
-      final message = await api.ping();
-
-      setState(() {
-        isConnected = message == "ok" || message.isNotEmpty;
-        isChecking = false;
-      });
-    } catch (_) {
-      setState(() {
-        isConnected = false;
-        isChecking = false;
-      });
+    if (isMobile) {
+      return const _MobileLayout();
+    } else {
+      return const _DesktopLayout();
     }
   }
+}
+
+class _DesktopLayout extends StatelessWidget {
+  const _DesktopLayout();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Row(
+        children: [
+          const _Sidebar(),
+          const Expanded(
+            child: SafeArea(
+              child: _DesktopContentWrapper(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DesktopContentWrapper extends StatelessWidget {
+  const _DesktopContentWrapper();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+
+        /// HEADER
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
+          child: Row(
+            
+            children: [
+
+              const Spacer(),
+              
+              Consumer<AuthProvider>(
+                builder: (context, auth, _) {
+                  final email = auth.user?["email"] ?? "";
+                  final initial =
+                      email.isNotEmpty ? email[0].toUpperCase() : "";
+
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(30),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 12,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 18,
+                          backgroundColor: AppColors.primary,
+                          child: Text(
+                            initial,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          email,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: () async {
+                            await context.read<AuthProvider>().logout();
+                          },
+                          child: const Icon(
+                            Icons.logout_rounded,
+                            size: 18,
+                            color: AppColors.textSecondary,
+                          ),
+                        )
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+
+        /// CONTENIDO REAL
+        const Expanded(
+          child: HomeContent(),
+        ),
+      ],
+    );
+  }
+}
+
+class _MobileLayout extends StatelessWidget {
+  const _MobileLayout();
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F8),
-
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,
-        foregroundColor: Colors.black87,
-        titleSpacing: 20,
-        title: Row(
-          children: const [
-            AppLogo(size: 32),
-            SizedBox(width: 10),
-          ],
+        title: const AppLogo(size: 28),
+      ),
+      drawer: const _MobileDrawer(),
+      body: const SafeArea(
+        child: HomeContent(),
+      ),
+    );
+  }
+}
+
+class _Sidebar extends StatefulWidget {
+  const _Sidebar();
+
+  @override
+  State<_Sidebar> createState() => _SidebarState();
+}
+
+class _SidebarState extends State<_Sidebar> {
+  int selectedIndex = 0;
+
+  void _navigate(int index, BuildContext context) {
+    setState(() {
+      selectedIndex = index;
+    });
+
+    switch (index) {
+      case 1:
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const HistoryScreen()),
+        );
+        break;
+      case 2:
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const CalendarScreen()),
+        );
+        break;
+      case 3:
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ChatScreen()),
+        );
+        break;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 240,
+      padding: const EdgeInsets.symmetric(vertical: 32),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          right: BorderSide(
+            color: Color(0xFFE8EDF3),
+          ),
         ),
-        actions: [
-          Consumer<AuthProvider>(
-            builder: (context, auth, _) {
-              final email = auth.user?["email"] ?? "";
-              final initial = email.isNotEmpty ? email[0].toUpperCase() : "";
+      ),
+      child: Column(
+        children: [
+          const AppLogo(size: 44),
+          const SizedBox(height: 48),
 
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 16,
-                      backgroundColor: const Color(0xFF1565C0),
-                      child: Text(
-                        initial,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      email,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ],
-                ),
-              );
-            },
+          _PremiumSidebarItem(
+            icon: Icons.home_rounded,
+            label: "Inicio",
+            selected: selectedIndex == 0,
+            onTap: () => _navigate(0, context),
           ),
-
-          IconButton(
-            tooltip: "Histórico",
-            icon: const Icon(Icons.menu_book),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const HistoryScreen(),
-                ),
-              );
-            },
+          _PremiumSidebarItem(
+            icon: Icons.menu_book_rounded,
+            label: "Histórico",
+            selected: selectedIndex == 1,
+            onTap: () => _navigate(1, context),
           ),
-          IconButton(
-            tooltip: "Calendario",
-            icon: const Icon(Icons.calendar_month),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const CalendarScreen(),
-                ),
-              );
-            },
+          _PremiumSidebarItem(
+            icon: Icons.calendar_month_rounded,
+            label: "Calendario",
+            selected: selectedIndex == 2,
+            onTap: () => _navigate(2, context),
           ),
-          IconButton(
-            tooltip: "Chat IA",
-            icon: const Icon(Icons.chat_bubble_outline),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const ChatScreen(),
-                ),
-              );
-            },
+          _PremiumSidebarItem(
+            icon: Icons.chat_bubble_outline_rounded,
+            label: "Chat IA",
+            selected: selectedIndex == 3,
+            onTap: () => _navigate(3, context),
           ),
 
-          IconButton(
-            tooltip: "Cerrar sesión",
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await context.read<AuthProvider>().logout();
-            },
-          ),
+          const Spacer(),
+
+          Padding(
+            padding: const EdgeInsets.only(bottom: 24),
+            child: IconButton(
+              icon: const Icon(Icons.logout),
+              onPressed: () {
+                context.read<AuthProvider>().logout();
+              },
+            ),
+          )
         ],
       ),
+    );
+  }
+}
 
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+class _PremiumSidebarItem extends StatefulWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PremiumSidebarItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  State<_PremiumSidebarItem> createState() => _PremiumSidebarItemState();
+}
+
+class _PremiumSidebarItemState extends State<_PremiumSidebarItem> {
+  bool isHovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool active = widget.selected || isHovering;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => isHovering = true),
+      onExit: (_) => setState(() => isHovering = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: widget.selected
+                ? AppColors.primary.withOpacity(0.12)
+                : active
+                    ? AppColors.primary.withOpacity(0.06)
+                    : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
             children: [
-
-              const SizedBox(height: 8),
-
-              StatusCard(
-                isConnected: isConnected,
-                isChecking: isChecking,
+              Icon(
+                widget.icon,
+                size: 20,
+                color: widget.selected
+                    ? AppColors.primary
+                    : AppColors.textPrimary,
               ),
-
-              const SizedBox(height: 24),
-
-              Expanded(
-                child: Center(
-                  child: _RecorderCard(
-                    onLoading: () {
-                      setState(() {
-                        isAnalyzing = true;
-                        errorMessage = null;
-                      });
-                    },
-                    onSuccess: (result) {
-                      setState(() {
-                        isAnalyzing = false;
-                        analysisResult = result;
-                      });
-                    },
-                    onError: (msg) {
-                      setState(() {
-                        isAnalyzing = false;
-                        errorMessage = msg;
-                      });
-                    },
-                  ),
+              const SizedBox(width: 12),
+              Text(
+                widget.label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight:
+                      widget.selected ? FontWeight.w600 : FontWeight.w500,
+                  color: widget.selected
+                      ? const Color(0xFF1E88E5)
+                      : Colors.black87,
                 ),
               ),
             ],
@@ -194,267 +319,65 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-
-
-
-/// ===============================
-/// STATUS CARD
-/// ===============================
-
-class StatusCard extends StatelessWidget {
-  final bool isConnected;
-  final bool isChecking;
-
-  const StatusCard({
-    super.key,
-    required this.isConnected,
-    required this.isChecking,
-  });
+class _MobileDrawer extends StatelessWidget {
+  const _MobileDrawer();
 
   @override
   Widget build(BuildContext context) {
-    Color iconColor;
-    IconData icon;
-    String text;
-
-    if (isChecking) {
-      iconColor = Colors.orange;
-      icon = Icons.sync;
-      text = "Comprobando conexión...";
-    } else if (isConnected) {
-      iconColor = const Color(0xFF1E88E5);
-      icon = Icons.cloud_done;
-      text = "Backend conectado";
-    } else {
-      iconColor = Colors.red;
-      icon = Icons.cloud_off;
-      text = "Backend desconectado";
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          )
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: iconColor),
-          const SizedBox(width: 12),
-          Text(
-            text,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-          )
-        ],
-      ),
-    );
-  }
-}
-
-
-/// ===============================
-/// RECORDER CARD
-/// ===============================
-
-class _RecorderCard extends StatefulWidget {
-  final Function(Map<String, dynamic>) onSuccess;
-  final Function() onLoading;
-  final Function(String) onError;
-
-  const _RecorderCard({
-    required this.onSuccess,
-    required this.onLoading,
-    required this.onError,
-  });
-
-  @override
-  State<_RecorderCard> createState() => _RecorderCardState();
-}
-
-class _RecorderCardState extends State<_RecorderCard>
-    with SingleTickerProviderStateMixin {
-  final AudioRecorder _recorder = AudioRecorder();
-
-  bool isRecording = false;
-  bool isLoading = false;
-
-  String? _audioPath;
-
-  late AnimationController _pulseController;
-  late Animation<double> _scaleAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
-
-    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
-      CurvedAnimation(
-        parent: _pulseController,
-        curve: Curves.easeInOut,
-      ),
-    );
-  }
-
-  Future<void> _startRecording() async {
-    final hasPermission = await _recorder.hasPermission();
-    if (!hasPermission) return;
-
-    String path;
-
-    if (kIsWeb) {
-      path = 'audio_${DateTime.now().millisecondsSinceEpoch}.webm';
-    } else {
-      final dir = await getTemporaryDirectory();
-      path =
-          '${dir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    }
-
-    await _recorder.start(
-      const RecordConfig(
-        encoder: AudioEncoder.aacLc,
-        bitRate: 128000,
-        sampleRate: 44100,
-      ),
-      path: path,
-    );
-
-    setState(() {
-      isRecording = true;
-      _audioPath = path;
-    });
-
-    _pulseController.repeat(reverse: true);
-  }
-
-  Future<void> _stopRecording() async {
-    final path = await _recorder.stop();
-
-    _pulseController.stop();
-    _pulseController.value = 1.0;
-
-    setState(() {
-      isRecording = false;
-      isLoading = true;
-    });
-    widget.onLoading();
-    if (path == null) return;
-
-    try {
-      List<int> bytes;
-
-      if (kIsWeb) {
-        final response = await http.get(Uri.parse(path));
-        bytes = response.bodyBytes;
-      } else {
-        final file = File(path);
-        bytes = await file.readAsBytes();
-      }
-
-      final api = context.read<ApiService>();
-      final result = await api.uploadAudio(
-        bytes: bytes,
-        filename: path.split('/').last,
-      );
-
-     Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => NewActivityScreen(result: result),
-        ),
-      );
-    } catch (e) {
-        widget.onError("Error enviando audio");
-      }
-
-    setState(() {
-      isLoading = false;
-    });
-  }
-
-  @override
-  void dispose() {
-    _pulseController.dispose();
-    _recorder.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final Color buttonColor =
-        isRecording ? Colors.red : const Color(0xFF1E88E5);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 40),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          )
-        ],
-      ),
+    return Drawer(
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          GestureDetector(
-            onLongPressStart: (_) => _startRecording(),
-            onLongPressEnd: (_) => _stopRecording(),
-            child: ScaleTransition(
-              scale: _scaleAnimation,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                height: 90,
-                width: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: buttonColor,
-                ),
-                child: isLoading
-                    ? const CircularProgressIndicator(
-                        color: Colors.white,
-                      )
-                    : const Icon(
-                        Icons.mic,
-                        color: Colors.white,
-                        size: 42,
-                      ),
-              ),
-            ),
+          const SizedBox(height: 60),
+          const AppLogo(size: 40),
+          const SizedBox(height: 40),
+
+          ListTile(
+            leading: const Icon(Icons.home),
+            title: const Text("Inicio"),
+            onTap: () {
+              Navigator.pop(context);
+            },
           ),
-          const SizedBox(height: 20),
-          Text(
-            isRecording
-                ? "Grabando..."
-                : isLoading
-                    ? "Procesando audio..."
-                    : "Mantén pulsado para grabar",
-            style: const TextStyle(
-              fontSize: 15,
-              color: Colors.black54,
-            ),
+          ListTile(
+            leading: const Icon(Icons.menu_book),
+            title: const Text("Histórico"),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const HistoryScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.calendar_month),
+            title: const Text("Calendario"),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CalendarScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.chat_bubble_outline),
+            title: const Text("Chat IA"),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ChatScreen()),
+              );
+            },
+          ),
+          const Spacer(),
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text("Cerrar sesión"),
+            onTap: () {
+              context.read<AuthProvider>().logout();
+            },
           ),
         ],
       ),
     );
   }
 }
-
