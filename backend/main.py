@@ -23,6 +23,9 @@ import json
 import numpy as np
 from typing import Optional
 from fastapi import Query
+import requests
+from google.oauth2 import id_token
+
 
 security = HTTPBearer()
 
@@ -190,6 +193,7 @@ def read_root():
 def ping():
     return {"status": "ok"}
 
+
 @app.post("/login")
 def login(request: LoginRequest):
 
@@ -302,6 +306,79 @@ def get_me(current_user=Depends(get_current_user)):
         "nombre": user[1],
         "email": user[2],
         "created_at": user[3]
+    }
+
+
+
+@app.post("/auth/google")
+def google_login(data: dict):
+
+    access_token = data.get("accessToken")
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Missing token")
+
+    # pedir datos del usuario a Google
+    response = requests.get(
+        "https://www.googleapis.com/oauth2/v2/userinfo",
+        headers={
+            "Authorization": f"Bearer {access_token}"
+        }
+    )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    userinfo = response.json()
+
+    email = userinfo["email"]
+    name = userinfo.get("name", "")
+    google_id = userinfo["id"]
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT * FROM salespeople WHERE google_id = ?",
+        (google_id,)
+    )
+
+    user = cursor.fetchone()
+
+    # crear usuario si no existe
+    if not user:
+
+        cursor.execute(
+            """
+            INSERT INTO salespeople (nombre, email, google_id)
+            VALUES (?, ?, ?)
+            """,
+            (name, email, google_id)
+        )
+
+        conn.commit()
+
+        cursor.execute(
+            "SELECT * FROM salespeople WHERE google_id = ?",
+            (google_id,)
+        )
+
+        user = cursor.fetchone()
+
+    jwt_token = create_access_token({
+        "user_id": user["id"],
+        "email": user["email"]
+    })
+
+    conn.close()
+
+    return {
+        "access_token": jwt_token,
+        "user": {
+            "id": user["id"],
+            "nombre": user["nombre"],
+            "email": user["email"]
+        }
     }
 
 @app.post("/process-text")

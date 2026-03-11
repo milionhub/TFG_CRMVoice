@@ -91,8 +91,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
             email TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            google_id TEXT,
+            password_hash TEXT,
+            google_id TEXT UNIQUE,
             created_at TEXT DEFAULT (datetime('now'))
         );
     """)

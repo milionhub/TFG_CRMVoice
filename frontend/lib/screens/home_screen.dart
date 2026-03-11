@@ -63,13 +63,15 @@ class _DesktopContentWrapper extends StatelessWidget {
               
               Consumer<AuthProvider>(
                 builder: (context, auth, _) {
-                  final email = auth.user?["email"] ?? "";
+
+                  final name = auth.userName ?? "";
+                  final email = auth.userEmail ?? "";
+
                   final initial =
-                      email.isNotEmpty ? email[0].toUpperCase() : "";
+                      name.isNotEmpty ? name[0].toUpperCase() : "?";
 
                   return Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(30),
@@ -82,6 +84,31 @@ class _DesktopContentWrapper extends StatelessWidget {
                     ),
                     child: Row(
                       children: [
+
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+
+                            Text(
+                              name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+
+                            Text(
+                              email,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+
+                          ],
+                        ),
+
+                        const SizedBox(width: 12),
+
                         CircleAvatar(
                           radius: 18,
                           backgroundColor: AppColors.primary,
@@ -89,36 +116,16 @@ class _DesktopContentWrapper extends StatelessWidget {
                             initial,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 14,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          email,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          onTap: () async {
-                            await context.read<AuthProvider>().logout();
-                          },
-                          child: const Icon(
-                            Icons.logout_rounded,
-                            size: 18,
-                            color: AppColors.textSecondary,
-                          ),
-                        )
+
                       ],
                     ),
                   );
                 },
-              ),
+              )
             ],
           ),
         ),

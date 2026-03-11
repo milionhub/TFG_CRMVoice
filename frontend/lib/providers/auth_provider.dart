@@ -2,9 +2,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import 'package:http/http.dart' as http;
+import'../services/google_auth_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   String? _token;
+  String? _userName;
+  String? _userEmail;
   Map<String, dynamic>? _user;
   bool _isLoading = false;
 
@@ -12,9 +16,13 @@ class AuthProvider extends ChangeNotifier {
   bool get isInitialized => _initialized;
 
   String? get token => _token;
+  String? get userName => _userName;
+  String? get userEmail => _userEmail;
+
   Map<String, dynamic>? get user => _user;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _token != null;
+  final String baseUrl = "http://127.0.0.1:8000";
 
   /// ==========================
   /// INIT (cargar sesión guardada)
@@ -48,6 +56,9 @@ class AuthProvider extends ChangeNotifier {
       final newToken = response["access_token"];
 
       _setToken(newToken);
+
+      _userEmail = email;
+      _userName = email.split("@")[0];
 
       if (rememberMe) {
         final prefs = await SharedPreferences.getInstance();
@@ -129,5 +140,46 @@ class AuthProvider extends ChangeNotifier {
       );
       _user = payload;
     }
+  }
+
+ Future<bool> googleLogin(String accessToken) async {
+
+    final response = await http.post(
+      Uri.parse("$baseUrl/auth/google"),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: jsonEncode({
+        "accessToken": accessToken,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      print("Google login backend error: ${response.body}");
+      return false;
+    }
+
+    final data = jsonDecode(response.body);
+
+    _token = data["access_token"];
+    _userName = data["user"]["nombre"];
+    _userEmail = data["user"]["email"];
+
+    notifyListeners();
+
+    return true;
+  }
+
+  Future<bool> tryGoogleAutoLogin() async {
+
+    final googleAuth = GoogleAuthService();
+
+    final result = await googleAuth.signInSilently();
+
+    if (result == null) return false;
+
+    final accessToken = result["accessToken"];
+
+    return await googleLogin(accessToken);
   }
 }
