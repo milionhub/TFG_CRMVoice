@@ -497,13 +497,18 @@ def get_activities(
         SELECT 
             a.id,
             a.datetime_iso,
+            a.client_id,
+            a.contact_id,
+            a.activity_type_id,
             a.comentario,
             a.resolution_status,
             c.razon_social AS cliente,
-            at.accion AS accion
+            at.accion AS accion,
+            ct.nombre AS contacto
         FROM activities a
         LEFT JOIN clients c ON a.client_id = c.id
         LEFT JOIN activity_types at ON a.activity_type_id = at.id
+        LEFT JOIN contacts ct ON a.contact_id = ct.id
     """
 
     conditions = ["a.salesperson_id = ?"]
@@ -532,22 +537,53 @@ def get_activities(
 
     cursor.execute(base_query, params)
     rows = cursor.fetchall()
+    activities = []
+
+    for r in rows:
+
+        # 🔹 Obtener productos de la actividad
+        cursor.execute("""
+            SELECT product_raw
+            FROM activity_products
+            WHERE activity_id = ?
+        """, (r["id"],))
+
+        product_rows = cursor.fetchall()
+
+        products = [
+            {
+                "product_raw": p["product_raw"]
+            }
+            for p in product_rows
+        ]
+
+        activities.append({
+            "id": r["id"],
+            "fecha": r["datetime_iso"],
+
+            # 🔹 IDs reales
+            "client_id": r["client_id"],
+            "contact_id": r["contact_id"],
+            "activity_type_id": r["activity_type_id"],
+
+            # 🔹 Datos visibles
+            "cliente": r["cliente"],
+            "contacto": r["contacto"],
+            "accion": r["accion"],
+            "comentario": r["comentario"],
+            "resolution_status": r["resolution_status"],
+
+            "products": products
+        })
+
     conn.close()
 
     return {
-        "count": len(rows),
-        "activities": [
-            {
-                "id": r["id"],
-                "fecha": r["datetime_iso"],
-                "cliente": r["cliente"],
-                "accion": r["accion"],
-                "comentario": r["comentario"],
-                "resolution_status": r["resolution_status"]
-            }
-            for r in rows
-        ],
+        "count": len(activities),
+        "activities": activities
     }
+
+    
 
 
 @app.post("/activities")
@@ -1044,3 +1080,112 @@ def chat_endpoint(payload: ChatRequest):
         type="text",
         content=f"🤖 He recibido: {payload.message}"
     )
+
+
+@app.delete("/activities/{activity_id}")
+def delete_activity(activity_id: int, current_user: dict = Depends(get_current_user)):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM activity_products WHERE activity_id = ?", (activity_id,))
+    cursor.execute("DELETE FROM activity_embeddings WHERE activity_id = ?", (activity_id,))
+    cursor.execute("""
+        DELETE FROM activities
+        WHERE id = ?
+        AND salesperson_id = ?
+    """, (activity_id, current_user["user_id"]))
+
+    conn.commit()
+    conn.close()
+
+    return {"success": True}
+
+@app.put("/activities/{activity_id}")
+def update_activity(activity_id: int, data: dict, current_user: dict = Depends(get_current_user)):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+
+        # 🔹 Obtener comentario actual
+        cursor.execute(
+            "SELECT comentario FROM activities WHERE id = ?",
+            (activity_id,)
+        )
+
+        row = cursor.fetchone()
+        comentario_actual = row["comentario"] if row else None
+
+        comentario = data.get("comentario", comentario_actual)
+
+        # 🔹 Update actividad
+        cursor.execute("""
+            UPDATE activities
+            SET datetime_iso = ?,
+                client_id = ?,
+                contact_id = ?,
+                activity_type_id = ?,
+                comentario = ?
+            WHERE id = ? AND salesperson_id = ?
+        """, (
+            data.get("fecha"),
+            data.get("client_id"),
+            data.get("contact_id"),
+            data.get("activity_type_id"),
+            comentario,
+            activity_id,
+            current_user["user_id"]
+        ))
+
+        # 🔹 Borrar productos anteriores
+        cursor.execute("""
+            DELETE FROM activity_products
+            WHERE activity_id = ?
+        """, (activity_id,))
+
+        # 🔹 Insertar nuevos productos
+        products = data.get("products", [])
+
+        for p in products:
+
+            product_id = p.get("id")
+            product_name = p.get("name")
+
+            # 🔹 evitar crash si no hay id
+            if product_id is None:
+                continue
+
+            cursor.execute("""
+                INSERT INTO activity_products (
+                    activity_id,
+                    product_id,
+                    product_raw,
+                    confidence_score
+                )
+                VALUES (?, ?, ?, ?)
+            """, (
+                activity_id,
+                product_id,
+                product_name,
+                1.0
+            ))
+
+        conn.commit()
+
+        return {"success": True}
+
+    except Exception as e:
+
+        conn.rollback()
+        print("ERROR update_activity:", e)
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    finally:
+
+        conn.close()

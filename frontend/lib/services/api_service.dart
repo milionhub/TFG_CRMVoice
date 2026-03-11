@@ -123,6 +123,19 @@ class ApiService {
 
 }
 
+Future<Map<String, dynamic>> getActivity(int id) async {
+  final response = await http.get(
+    Uri.parse("$baseUrl/activities/$id"),
+    headers: _headers(),
+  );
+
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body);
+  } else {
+    throw Exception("Error cargando actividad");
+  }
+}
+
 Future<Map<String, dynamic>> createActivity(
     Map<String, dynamic> data) async {
 
@@ -233,6 +246,34 @@ Future<List<dynamic>> getProducts() async {
     return data["products"];
   } else {
     throw Exception("Error cargando productos");
+  }
+}
+
+Future<bool> updateActivity(int id, Map<String, dynamic> data) async {
+  final response = await http.put(
+    Uri.parse("$baseUrl/activities/$id"),
+    headers: _headers(),
+    body: jsonEncode(data),
+  );
+
+  
+  if (response.statusCode == 200) {
+    final json = jsonDecode(response.body);
+    return json["success"] == true;
+  } else {
+    print(response.body);
+    return false;
+  }
+}
+
+Future<void> deleteActivity(int id) async {
+  final response = await http.delete(
+    Uri.parse("$baseUrl/activities/$id"),
+    headers: _headers(),
+  );
+
+  if (response.statusCode != 200) {
+    throw Exception("Error borrando actividad");
   }
 }
 

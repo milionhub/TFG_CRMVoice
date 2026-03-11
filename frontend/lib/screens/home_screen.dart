@@ -32,7 +32,7 @@ class _DesktopLayout extends StatelessWidget {
       backgroundColor: AppColors.background,
       body: Row(
         children: [
-          const _Sidebar(),
+          const Sidebar(currentIndex: 0),
           const Expanded(
             child: SafeArea(
               child: _DesktopContentWrapper(),
@@ -144,7 +144,7 @@ class _MobileLayout extends StatelessWidget {
         elevation: 1,
         title: const AppLogo(size: 28),
       ),
-      drawer: const _MobileDrawer(),
+      drawer: const MobileDrawer(),
       body: const SafeArea(
         child: HomeContent(),
       ),
@@ -152,36 +152,55 @@ class _MobileLayout extends StatelessWidget {
   }
 }
 
-class _Sidebar extends StatefulWidget {
-  const _Sidebar();
+class Sidebar extends StatefulWidget {
+  final int currentIndex;
+
+  const Sidebar({super.key, required this.currentIndex});
 
   @override
-  State<_Sidebar> createState() => _SidebarState();
+  State<Sidebar> createState() => SidebarState();
 }
 
-class _SidebarState extends State<_Sidebar> {
-  int selectedIndex = 0;
+class SidebarState extends State<Sidebar> {
+  late int selectedIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    selectedIndex = widget.currentIndex;
+  }
 
   void _navigate(int index, BuildContext context) {
+    if (index == selectedIndex) return;
+
     setState(() {
       selectedIndex = index;
     });
 
     switch (index) {
+      case 0:
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const HomeScreen()),
+        );
+        break;
+
       case 1:
-        Navigator.push(
+        Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const HistoryScreen()),
         );
         break;
+
       case 2:
-        Navigator.push(
+        Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const CalendarScreen()),
         );
         break;
+
       case 3:
-        Navigator.push(
+        Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const ChatScreen()),
         );
@@ -319,8 +338,8 @@ class _PremiumSidebarItemState extends State<_PremiumSidebarItem> {
   }
 }
 
-class _MobileDrawer extends StatelessWidget {
-  const _MobileDrawer();
+class MobileDrawer extends StatelessWidget {
+  const MobileDrawer();
 
   @override
   Widget build(BuildContext context) {
