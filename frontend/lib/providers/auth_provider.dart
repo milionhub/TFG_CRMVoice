@@ -117,8 +117,18 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove("auth_token");
 
+    try{
+      final googleAuth = GoogleAuthService();
+      await googleAuth.signInSilently();
+    } catch (e) {
+      print("Google logout error: $e");
+    }
+
     _token = null;
     _user = null;
+    _userName = null;
+    _userEmail = null;
+
 
     notifyListeners();
   }
