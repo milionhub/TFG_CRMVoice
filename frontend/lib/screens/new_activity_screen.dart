@@ -74,7 +74,7 @@ class _NewActivityScreenState extends State<NewActivityScreen> {
         title: const Text(
           "Nueva actividad",
           style: TextStyle(
-            color: AppColors.primary,
+            color: AppColors.textSecondary,
             fontWeight: FontWeight.w700,
           ),
         ),

@@ -7,7 +7,7 @@ class ApiService {
   final AuthProvider auth;
 
  
-  static const String baseUrl = "http://127.0.0.1:8000";
+  static const String baseUrl = "http://192.168.1.14:8000";
 
    ApiService(this.auth);
    

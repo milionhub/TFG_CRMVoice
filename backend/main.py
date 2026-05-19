@@ -10,12 +10,21 @@ from datetime import datetime
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
 from entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
-from openai_service import generate_embedding, generate_meeting_summary, format_billing_response, generate_client_summary
+from openai_service import generate_embedding, generate_meeting_summary, format_billing_response, generate_client_summary, generate_account_analysis
 from context_service import build_context, get_client_billing_summary
 from date_resolver import resolve_relative_date, resolve_time
 from semantic_search_service import semantic_search_activities
 from jwt_utils import create_access_token, verify_token
 from auth_utils import verify_password, hash_password
+from chat_memory import set_last_client, get_last_client, set_pending_intent, get_pending_intent, clear_pending_intent
+from client_detection_service import detect_client_from_message
+from intent_service import detect_intent
+from crm_insights_service import get_crm_insights
+from opportunity_engine import detect_opportunities
+from ai_router import analyze_user_message
+
+
+
 
 import os
 import re
@@ -292,7 +301,8 @@ def register(request: RegisterRequest):
 @app.get("/me")
 def get_me(current_user=Depends(get_current_user)):
 
-    user_id = int(current_user.get("sub"))
+    user_id = int(current_user.get("user_id")) or current_user.get("sub")
+    user_id = int(user_id)  # Asegurar que es int
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1023,38 +1033,115 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     type: str
     content: str
+    metadata: dict | None = None
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat_endpoint(payload: ChatRequest):
+def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current_user)  ):
     user_message = payload.message.lower()
 
-    
-    # --- PREPARAR REUNIÓN ---
-    if ("prepar" in user_message) and ("reunion" in user_message or "reunión" in user_message):
+    pending = get_pending_intent(current_user["user_id"])
 
+    # 🔥 CASO 1 — hay intención pendiente → NO usar IA
+    if pending:
+        print("PENDING INTENT:", pending)
+
+        if pending["waiting_for"] == "client":
+
+            client_id, confidence = resolve_client(payload.message)
+
+            if client_id:
+                set_last_client(current_user["user_id"], client_id)
+
+                # 🔥 usar intent original
+                intent = pending["intent"]
+
+                # limpiar estado
+                clear_pending_intent(current_user["user_id"])
+
+                print("RESOLVED CLIENT FROM FOLLOW-UP:", client_id)
+
+                # 👇 IMPORTANTE: NO hay ai_client_name aquí
+                ai_client_name = None
+
+            else:
+                return ChatResponse(
+                    type="error",
+                    content="No he podido identificar el cliente. ¿Puedes especificarlo mejor?"
+                )
+
+    # 🔥 CASO 2 — NO hay pending → usar IA
+    else:
+
+        analysis = analyze_user_message(payload.message)
+
+        intent = analysis.get("intent")
+        ai_client_name = analysis.get("client_name")
+        confidence = analysis.get("confidence", 0)
+
+        print("AI ANALYSIS:", analysis)
+
+        # fallback
+        if not intent or confidence < 60:
+            intent = detect_intent(payload.message)
+
+        # normalización
+        intent_mapping = {
+            "client_analysis": "client_summary"
+        }
+
+        if intent in intent_mapping:
+            intent = intent_mapping[intent]
+
+        # cliente desde IA
+        if ai_client_name:
+            client_id_ai, conf_ai = resolve_client(ai_client_name)
+
+            print("AI CLIENT:", ai_client_name, "→", client_id_ai)
+
+            if client_id_ai:
+                set_last_client(current_user["user_id"], client_id_ai)
+
+        # fallback cliente antiguo
+        else:
+            auto_client_id = detect_client_from_message(payload.message)
+
+            if auto_client_id:
+                set_last_client(current_user["user_id"], auto_client_id)
+
+    if intent == "prepare_meeting":
+
+        # 🔥 EXTRAER SOLO EL CLIENTE
         match = re.search(r"con (.+)", payload.message, re.IGNORECASE)
 
-        if not match:
+        if match:
+            client_text = match.group(1).strip()
+        else:
+            client_text = payload.message
+
+        print("CLIENT_TEXT LIMPIO:", client_text)
+
+        client_id, confidence = resolve_client(client_text)
+
+        print("CLIENT_ID:", client_id, "CONF:", confidence)
+
+        if client_id:
+            set_last_client(current_user["user_id"], client_id)
+        else:
+            client_id = get_last_client(current_user["user_id"])
+
+        if not client_id:
+
+            set_pending_intent(
+                current_user["user_id"],
+                intent="prepare_meeting",
+                waiting_for="client"
+            )
+
             return ChatResponse(
                 type="prepare_meeting",
                 content="¿Para qué cliente quieres preparar la reunión?"
             )
-
-        client_text = match.group(1).strip()
-
-        id_match = re.search(r"\b(\d+)\b", client_text)
-
-        if id_match:
-            client_id = int(id_match.group(1))
-        else:
-            client_id, confidence = resolve_client(client_text)
-
-            if not client_id:
-                return ChatResponse(
-                    type="prepare_meeting",
-                    content=f"No he podido identificar claramente el cliente '{client_text}'."
-                )
 
         summary, error = prepare_meeting_by_client_id(client_id)
 
@@ -1066,11 +1153,19 @@ def chat_endpoint(payload: ChatRequest):
 
         return ChatResponse(
             type="prepare_meeting",
-            content=summary
+            content=summary,
+            metadata={
+                "client_id": client_id,
+                "suggested_actions": [
+                    "client_summary",
+                    "billing_query",
+                    "semantic_search"
+                ]
+             }
         )
 
     # --- FACTURACIÓN ---
-    if "facturación" in user_message or "facturado" in user_message:
+    if intent == "billing_query":
 
         # Intentamos extraer nombre después de "de" o "tiene"
         match = re.search(r"(de|tiene)\s+(.+)", payload.message, re.IGNORECASE)
@@ -1083,7 +1178,21 @@ def chat_endpoint(payload: ChatRequest):
 
         client_id, confidence = resolve_client(client_text)
 
+        if client_id:
+            set_last_client(current_user["user_id"], client_id)
+
         if not client_id:
+
+            client_id = get_last_client(current_user["user_id"])
+
+        if not client_id:
+
+            set_pending_intent(
+                current_user["user_id"],
+                intent="billing_query",
+                waiting_for="client"
+            )
+
             return ChatResponse(
                 type="billing_query",
                 content="¿De qué cliente quieres consultar la facturación?"
@@ -1092,19 +1201,36 @@ def chat_endpoint(payload: ChatRequest):
         billing = get_client_billing_summary(client_id)
 
         return ChatResponse(
-            type="billing_query",
-            content=format_billing_response(billing)
-        )  
-    
+            type="billing_summary",
+            content="Resumen de facturación",
+            metadata={
+                "client_id": client_id,
+                "billing": billing,
+                "suggested_actions": [
+                    "client_summary",
+                    "prepare_meeting",
+                    "semantic_search"
+                ]
+            }
+        )
+
 
     # --- RESUMEN CLIENTE ---
-    if "resumen cliente" in user_message:
+    if intent == "client_summary":
 
         match = re.search(r"cliente (.+)", payload.message, re.IGNORECASE)
 
         if match:
             client_text = match.group(1).strip()
-        else:
+
+        if not match:
+
+            set_pending_intent(
+                current_user["user_id"],
+                intent="client_summary",
+                waiting_for="client"
+            )
+
             return ChatResponse(
                 type="client_summary",
                 content="¿De qué cliente quieres el resumen?"
@@ -1112,19 +1238,62 @@ def chat_endpoint(payload: ChatRequest):
 
         client_id, confidence = resolve_client(client_text)
 
+        if client_id:
+            set_last_client(current_user["user_id"], client_id)
+
         if not client_id:
+
+            client_id = get_last_client(current_user["user_id"])
+
+        if not client_id:
+
+            set_pending_intent(
+                current_user["user_id"],
+                intent="client_summary",
+                waiting_for="client"
+            )
+
             return ChatResponse(
                 type="client_summary",
-                content=f"No he podido identificar el cliente '{client_text}'."
+                content=f"No he podido identificar el cliente '{client_text}'. ¿Puedes especificarlo mejor?"
             )
 
         context = build_context(client_id)
-        summary = generate_client_summary(context)
+
+
+        summary_text = generate_client_summary(context)
+
+        short_status = summary_text.split("\n")[0] 
+
+        # 🔹 separar oportunidades (ya lo tienes)
+        opportunities = detect_opportunities(context)
 
         return ChatResponse(
             type="client_summary",
-            content=summary
+            content="Resumen cliente",
+            metadata={
+                "client_id": client_id,
+                "client_name": context["client_name"],
+
+                # 🔥 AQUÍ ESTÁ LA CLAVE
+                "summary": {
+                    "status": (
+                        "Cliente activo"
+                        if context["total_activities"] > 3
+                        else "Cliente con baja actividad"
+                    ),
+                    "activity": f"{context['total_activities']} actividades registradas",
+                    "opportunities": opportunities or []
+                },
+
+                "suggested_actions": [
+                    "billing_query",
+                    "prepare_meeting",
+                    "semantic_search"
+                ]
+            }
         )
+
     
     # --- CONTEXTO CLIENTE ---
     if "contexto" in user_message:
@@ -1134,7 +1303,7 @@ def chat_endpoint(payload: ChatRequest):
         )
 
     # --- BÚSQUEDA SEMÁNTICA ---
-    if "hablado" in user_message or "sobre" in user_message or "buscar" in user_message:
+    if intent == "semantic_search":
 
         # Intentamos detectar cliente en el mensaje completo
         client_id, confidence = resolve_client(payload.message)
@@ -1144,26 +1313,162 @@ def chat_endpoint(payload: ChatRequest):
         else:
             results = semantic_search_activities(payload.message)
 
-        if not results:
-            return ChatResponse(
-                type="semantic_search",
-                content="No he encontrado actividades relacionadas."
-            )
-
-        formatted = "\n\n".join(
-            f"🔎 {r['comentario']}\nSimilitud: {round(r['score'], 3)}"
-            for r in results
-        )
+        
 
         return ChatResponse(
             type="semantic_search",
-            content=f"Resultados más relevantes:\n\n{formatted}"
+            content=f"Resultados encontrados",
+            metadata={
+                "results": results,
+                "suggested_actions": [
+                    "client_summary",
+                    "billing_query",
+                    "prepare_meeting"
+                ]
+            }
         )
+
+
+    # --- CRM INSIGHTS ---
+    if intent == "crm_insights":
+
+        insights = get_crm_insights()
+        activity_insights = insights.get("activity_insights", [])
+        activity_text = "\n".join(f"- {a}" for a in activity_insights)
+
+
+        top_clients = "\n".join(
+            f"- {c['razon_social']}"
+            for c in insights["top_clients"]
+        )
+
+        inactive_clients = "\n".join(
+            f"- {c['razon_social']}"
+            for c in insights["inactive_clients"]
+        )
+
+        content = f"""
+    📊 Insights del CRM
+
+    Clientes con mayor facturación:
+    {top_clients}
+
+    Clientes sin actividad reciente:
+    {inactive_clients}
+
+    Actividad comercial detectada:
+    {activity_text}
+    """
+
+        return ChatResponse(
+            type="crm_insights",
+            content=content,
+            metadata={
+                "suggested_actions": [
+                    "client_summary",
+                    "billing_query",
+                    "semantic_search"
+                ]
+            }
+        )
+
+
+    # --- ANÁLISIS COMPLETO DE CLIENTE ---
+    if intent == "client_analysis":
+
+        client_id, confidence = resolve_client(payload.message)
+
+        if client_id:
+            set_last_client(current_user["user_id"], client_id)
+
+        if not client_id:
+            client_id = get_last_client(current_user["user_id"])
+        if not client_id:
+
+            set_pending_intent(
+                current_user["user_id"],
+                intent="client_analysis",
+                waiting_for="client"
+            )
+
+            return ChatResponse(
+                type="client_analysis",
+                content="¿Qué cliente quieres analizar?"
+            )
+
+        context = build_context(client_id)
+
+        opportunities = detect_opportunities(context)
+
+        analysis = generate_account_analysis(context)
+
+        if opportunities:
+
+            analysis += "\n\n📈 Insights automáticos detectados:\n"
+
+            for o in opportunities:
+                analysis += f"- {o}\n"
+
+        return ChatResponse(
+            type="client_analysis",
+            content=analysis,
+            metadata={
+                "client_id": client_id,
+                "suggested_actions": [
+                    "billing_query",
+                    "prepare_meeting",
+                    "semantic_search"
+                ]
+        }
+        )
+
+    # --- OPORTUNIDADES CLIENTE ---
+    if intent == "client_opportunities":
+
+        client_id, confidence = resolve_client(payload.message)
+
+        if client_id:
+            set_last_client(current_user["user_id"], client_id)
+
+        if not client_id:
+            client_id = get_last_client(current_user["user_id"])
+
+        if not client_id:
+
+            set_pending_intent(
+                current_user["user_id"],
+                intent="client_opportunities",
+                waiting_for="client"
+            )
+
+            return ChatResponse(
+                type="client_opportunities",
+                content="¿De qué cliente quieres ver oportunidades?"
+            )
+        context = build_context(client_id)
+
+        opportunities = detect_opportunities(context)
+
+        if not opportunities:
+            content = "No se han detectado oportunidades claras en este cliente."
+        else:
+            content = "📈 Oportunidades detectadas:\n\n"
+            for o in opportunities:
+                content += f"- {o}\n"
+
+        return ChatResponse(
+            type="client_opportunities",
+            content=content,
+            metadata={
+                "client_id": client_id
+            }
+        )
+
 
     # --- DEFAULT ---
     return ChatResponse(
-        type="text",
-        content=f"🤖 He recibido: {payload.message}"
+        type="error",
+        content=f"No he entendido la petición. Prueba de nuevo."
     )
 
 

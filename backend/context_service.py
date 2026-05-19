@@ -1,4 +1,6 @@
 from db import get_connection
+from opportunity_engine import detect_opportunities
+
 
 
 def build_context(client_id: int):
@@ -17,7 +19,7 @@ def build_context(client_id: int):
 
     # Última fecha contacto
     cursor.execute("""
-        SELECT MAX(fecha_iso) as last_date
+        SELECT MAX(datetime_iso) as last_date
         FROM activities
         WHERE client_id = ?
     """, (client_id,))

@@ -10,4 +10,7 @@ class AppColors {
 
   static const textPrimary = Color(0xFF1E293B);
   static const textSecondary = Color(0xFF64748B);
+
+  static const assistantBubble = Color(0xFFF6F8FB);
+  static const border = Color(0xFFE5E7EB);
 }
