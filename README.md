@@ -1,154 +1,233 @@
-🧠 CRM Voice
+# CRMVoice
 
-Sistema inteligente para el registro automatizado de actividades comerciales mediante voz, con procesamiento de audio real, Inteligencia Artificial y almacenamiento estructurado en CRM.
+**CRMVoice** es una aplicación multiplataforma desarrollada como Trabajo Fin de Grado en Ingeniería Informática, orientada a automatizar el registro de actividades comerciales mediante **voz e inteligencia artificial**.
 
-Proyecto desarrollado como Trabajo de Fin de Grado (TFG).
+El sistema permite transformar información expresada de forma natural por un usuario en **datos estructurados dentro de un entorno CRM**, reduciendo la necesidad de introducir manualmente la información después de llamadas, reuniones o visitas comerciales.
 
-🎯 Objetivo del proyecto
+## 🎥 Demo
 
-El objetivo de CRM Voice es permitir que un comercial registre visitas, llamadas y tareas simplemente hablando, eliminando la necesidad de introducir datos manualmente.
+▶️ [Ver demostración de CRMVoice en YouTube](https://youtu.be/q53N6HA2MYY)
 
-El sistema es capaz de:
+---
 
-Grabar audio de voz desde una aplicación web.
+## 💡 Problema
 
-Transcribir audio real a texto mediante Speech To Text basado en IA (Whisper).
+En muchos entornos comerciales, la información generada durante llamadas, reuniones o visitas debe registrarse posteriormente de forma manual en un CRM.
 
-Analizar automáticamente el texto generado.
+Este proceso puede provocar:
 
-Extraer información relevante:
+- Pérdida de tiempo en tareas administrativas.
+- Retrasos en el registro de información.
+- Pérdida de contexto.
+- Datos incompletos o inconsistentes.
+- Fricción en situaciones de movilidad.
 
-Cliente
+CRMVoice plantea una alternativa: permitir que el usuario registre la información directamente mediante **lenguaje natural y voz**.
 
-Acción comercial
+---
 
-Fecha
+## 🚀 Solución
 
-Comentarios
+El flujo principal de CRMVoice transforma una grabación de voz en un registro estructurado dentro del sistema:
 
-Almacenar la información en un CRM interno.
+```text
+Usuario
+   │
+   ▼
+Grabación de voz
+   │
+   ▼
+Whisper (ASR)
+   │
+   ▼
+Transcripción
+   │
+   ▼
+OpenAI / NLP
+   │
+   ▼
+Extracción y estructuración de información
+   │
+   ▼
+Validación y resolución de entidades
+   │
+   ▼
+Revisión del usuario
+   │
+   ▼
+Registro estructurado en CRM
+```
 
-Mantener trazabilidad completa entre audio, transcripción y actividad.
+Por ejemplo, a partir de una frase comercial expresada en lenguaje natural, el sistema puede identificar información relevante como el cliente, contacto, tipo de actividad, productos, fechas o descripción y convertirla en datos estructurados.
 
-Preparar el sistema para futuras integraciones (calendarios, clientes, empresas).
+Antes de guardar definitivamente la información, el usuario puede **revisar, corregir o completar los datos detectados**.
 
-🧩 Flujo funcional del sistema
-Grabación de voz (Flutter)
-→ Envío de audio al backend
-→ Transcripción automática con IA (Whisper)
-→ Análisis semántico del texto
-→ Enriquecimiento de la actividad CRM
-→ Almacenamiento en base de datos
-→ Visualización en histórico
+---
 
-🛠️ Tecnologías utilizadas
-Frontend
+## ✨ Funcionalidades principales
 
-Flutter (Web)
+- 🎙️ Registro de actividades comerciales mediante voz.
+- 📝 Transcripción automática de audio con Whisper.
+- 🧠 Procesamiento de lenguaje natural mediante OpenAI.
+- 🔎 Extracción automática de información comercial.
+- 👤 Registro, inicio de sesión y autenticación de usuarios.
+- 📊 Gestión de actividades dentro del entorno CRM.
+- 🔍 Consulta y filtrado del histórico de actividades.
+- ✏️ Edición y eliminación de registros.
+- 📅 Visualización y gestión de actividades mediante calendario.
+- 🤖 Asistente inteligente para consultar información almacenada.
+- 📱 Interfaz multiplataforma desarrollada con Flutter.
 
-Grabación de audio desde navegador
+---
 
-Comunicación HTTP con backend
+## 🏗️ Arquitectura
 
-Backend
+CRMVoice utiliza una arquitectura modular dividida en cuatro bloques principales:
 
-FastAPI (Python)
+### Frontend
 
-Motor ASR: Whisper (Speech To Text)
+Aplicación desarrollada con **Flutter**, encargada de la interfaz de usuario y de la interacción con las distintas funcionalidades del sistema.
 
-Base de datos: SQLite
+### Backend
 
-Servidor ASGI: Uvicorn
+API REST desarrollada con **FastAPI y Python**, responsable de:
 
-Análisis semántico basado en reglas
+- Lógica de negocio.
+- Autenticación.
+- Gestión de actividades.
+- Comunicación con la base de datos.
+- Procesamiento de audio.
+- Integración con los servicios de inteligencia artificial.
 
-Herramientas adicionales
+### Inteligencia artificial
 
-Git & GitHub (control de versiones)
+El procesamiento se realiza desde el backend mediante:
 
-Swagger / OpenAPI (documentación API)
+- **Whisper** → reconocimiento automático del habla (ASR).
+- **OpenAI** → interpretación, procesamiento NLP y estructuración de la información.
 
-Entornos virtuales Python (venv)
+La IA no se ejecuta directamente desde el frontend.
 
-FFmpeg (procesamiento de audio)
+### Base de datos
 
-📁 Estructura del proyecto
-TFG_CRMVoice/
-├─ backend/                 → API FastAPI
-│  ├─ main.py               → Endpoints principales
-│  ├─ whisper_service.py    → Servicio de transcripción con IA
-│  ├─ db.py                 → Gestión de base de datos
-│  ├─ requirements.txt
-│  └─ venv/
+Se utiliza **SQLite** como sistema de persistencia mediante un modelo relacional centrado en las actividades comerciales y sus entidades relacionadas.
+
+---
+
+## 🛠️ Tecnologías utilizadas
+
+### Frontend
+- Flutter
+- Dart
+
+### Backend
+- Python
+- FastAPI
+- REST API
+
+### Inteligencia artificial
+- Whisper
+- OpenAI API
+- Automatic Speech Recognition (ASR)
+- Natural Language Processing (NLP)
+
+### Base de datos
+- SQLite
+
+### Seguridad
+- Autenticación mediante JWT
+
+### Herramientas
+- Git
+- GitHub
+- Visual Studio Code
+- Trello
+
+---
+
+## 📁 Estructura del proyecto
+
+```text
+CRMVoice/
 │
-├─ frontend/                → Aplicación Flutter Web
-│  ├─ lib/
-│  │  ├─ main.dart
-│  │  ├─ history_page.dart
-│  │  └─ services/
-│  │     └─ api_service.dart
-│  └─ web/
-│
-├─ docs/                    → Documentación del TFG
-├─ README.md
-└─ .gitignore
+├── frontend/        # Aplicación multiplataforma Flutter
+├── backend/         # API REST con FastAPI y Python
+└── docs/            # Documentación del proyecto
+```
 
-🚀 Instalación y ejecución
-1️⃣ Clonar el repositorio
-git clone https://github.com/milionhub/TFG_CRMVoice.git
-cd TFG_CRMVoice
+El frontend se comunica con el backend mediante una API REST. El backend centraliza la lógica de negocio, el acceso a datos y las integraciones con los servicios de inteligencia artificial.
 
-2️⃣ Backend (FastAPI)
-cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+---
 
-Endpoints disponibles
+## 🗃️ Modelo de datos
 
-Root: http://127.0.0.1:8000/
+El modelo relacional está centrado en la entidad **Activity**, que representa las actividades comerciales registradas en el CRM.
 
-Ping: http://127.0.0.1:8000/ping
+Las actividades se relacionan con diferentes entidades del dominio, entre ellas:
 
-Swagger UI: http://127.0.0.1:8000/docs
+- Usuarios.
+- Clientes.
+- Contactos.
+- Productos.
+- Tipos de actividad.
 
-3️⃣ Frontend (Flutter Web)
-cd frontend
-flutter run -d chrome
+El sistema permite almacenar, consultar y gestionar posteriormente la información estructurada obtenida a partir del procesamiento de voz.
 
+---
 
-Desde la interfaz se puede:
+## 🧪 Pruebas y validación
 
-Grabar audio
+El prototipo fue validado mediante pruebas funcionales y pruebas específicas sobre el flujo de procesamiento ASR/NLP.
 
-Enviar audio al backend
+### Pruebas funcionales
 
-Ver el histórico de actividades CRM
+Se realizaron **15 pruebas funcionales** sobre las principales características del sistema:
 
-📊 Estado actual del proyecto
+- Autenticación.
+- Grabación de audio.
+- Generación automática de actividades.
+- Operaciones CRUD.
+- Histórico y filtros.
+- Calendario.
+- Asistente inteligente.
 
-✅ Arquitectura completa frontend–backend
-✅ Grabación de audio real
-✅ Transcripción automática con IA (Whisper)
-✅ Análisis semántico del texto
-✅ Persistencia completa en base de datos
-✅ Histórico de actividades CRM
-✅ Flujo extremo a extremo validado
+**Resultado: 15/15 pruebas funcionales superadas.**
 
-🔮 Trabajo futuro
+### Validación ASR/NLP
 
-Gestión avanzada de clientes y empresas.
+También se realizaron **5 pruebas específicas** utilizando frases comerciales expresadas en lenguaje natural:
 
-Asociación automática con datos fiscales (CIF, teléfono, email).
+- **4** procesadas completamente de forma correcta.
+- **1** procesada parcialmente de forma correcta debido a una imprecisión en un nombre propio.
 
-Integración con Google Calendar.
+Esto supuso aproximadamente un **80 % de acierto completo** dentro de esta validación preliminar del prototipo.
 
-Mejora del análisis semántico con NLP avanzado.
+---
 
-Autenticación y control de usuarios.
+## ⚠️ Limitaciones y posibles mejoras
 
-👤 Autor
+CRMVoice se desarrolló como un prototipo funcional y existen diferentes líneas de evolución:
 
-Juan Marín Escolano
-Trabajo de Fin de Grado — CRM Voice
+- Mejorar el reconocimiento de nombres propios y expresiones específicas.
+- Ampliar las pruebas ASR con diferentes acentos, ruido y escenarios comerciales.
+- Reducir la dependencia de servicios externos mediante modelos locales o arquitecturas híbridas.
+- Continuar mejorando la adaptación responsive de determinadas vistas, especialmente el calendario.
+- Integrar el sistema con plataformas CRM reales como Salesforce, HubSpot o Zoho mediante APIs externas.
+- Preparar la arquitectura para entornos productivos de mayor escala.
+
+---
+
+## 🎓 Contexto académico
+
+CRMVoice fue desarrollado como **Trabajo Fin de Grado del Grado en Ingeniería Informática** en la Universidad Católica San Antonio de Murcia (UCAM).
+
+El objetivo del proyecto fue estudiar y validar la viabilidad técnica de integrar reconocimiento de voz e inteligencia artificial dentro de un entorno CRM para automatizar el registro estructurado de actividades comerciales.
+
+---
+
+## 👨‍💻 Autor
+
+**Juan Marín Escolano**
+
+Ingeniería Informática — UCAM  
+2026
