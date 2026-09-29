@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ from ai_router import analyze_user_message
 import os
 import re
 import json
+import logging
 import numpy as np
 from typing import Optional
 from fastapi import Query
@@ -37,6 +39,53 @@ from google.oauth2 import id_token
 
 
 security = HTTPBearer()
+
+logger = logging.getLogger("crmvoice")
+
+# -------------------------
+# AUDIO: límites y formatos aceptados
+# -------------------------
+MAX_AUDIO_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# La app envía el audio con MultipartFile.fromBytes sin contentType,
+# así que suele llegar como application/octet-stream: el formato real
+# se comprueba por la cabecera del fichero (magic bytes).
+ALLOWED_AUDIO_CONTENT_TYPES = {
+    "application/octet-stream",
+    "video/webm",
+    "video/mp4",
+    "video/ogg",
+}
+
+
+def detect_audio_suffix(header: bytes) -> str | None:
+    """
+    Devuelve la extensión del formato de audio según su cabecera,
+    o None si no parece un formato de audio conocido.
+    """
+    if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
+        return ".wav"
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
+        return ".webm"
+    if header.startswith(b"OggS"):
+        return ".ogg"
+    if header[4:8] == b"ftyp":
+        return ".m4a"
+    if header.startswith(b"fLaC"):
+        return ".flac"
+    if header.startswith(b"ID3"):
+        return ".mp3"
+    if header.startswith(b"#!AMR"):
+        return ".amr"
+    if header.startswith(b"caff"):
+        return ".caf"
+    if header.startswith(b"FORM") and header[8:12] in (b"AIFF", b"AIFC"):
+        return ".aiff"
+    if len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xF6) == 0xF0:
+        return ".aac"  # ADTS AAC
+    if len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
+        return ".mp3"  # frame MPEG sin cabecera ID3
+    return None
 
 class SemanticSearchRequest(BaseModel):
     query: str
@@ -234,7 +283,17 @@ def login(request: LoginRequest):
     user_email = user[2]
     stored_hash = user[3]
 
-    if not verify_password(request.password, stored_hash):
+    # Usuarios creados con Google no tienen password_hash
+    if not stored_hash:
+        raise HTTPException(status_code=401, detail="Password incorrecto")
+
+    try:
+        password_ok = verify_password(request.password, stored_hash)
+    except Exception:
+        logger.exception("Hash de contraseña no válido para el usuario %s", user_id)
+        password_ok = False
+
+    if not password_ok:
         raise HTTPException(status_code=401, detail="Password incorrecto")
 
     token = create_access_token({
@@ -337,44 +396,34 @@ def google_login(data: dict):
         raise HTTPException(status_code=400, detail="Missing token")
 
     # pedir datos del usuario a Google
-    response = requests.get(
-        "https://www.googleapis.com/oauth2/v2/userinfo",
-        headers={
-            "Authorization": f"Bearer {access_token}"
-        }
-    )
+    try:
+        response = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={
+                "Authorization": f"Bearer {access_token}"
+            },
+            timeout=10
+        )
+    except requests.RequestException:
+        logger.exception("Error contactando con Google userinfo")
+        raise HTTPException(status_code=502, detail="No se pudo validar con Google")
 
     if response.status_code != 200:
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
     userinfo = response.json()
 
-    email = userinfo["email"]
+    email = userinfo.get("email")
     name = userinfo.get("name", "")
-    google_id = userinfo["id"]
+    google_id = userinfo.get("id")
+
+    if not email or not google_id:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
 
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        "SELECT * FROM salespeople WHERE google_id = ?",
-        (google_id,)
-    )
-
-    user = cursor.fetchone()
-
-    # crear usuario si no existe
-    if not user:
-
-        cursor.execute(
-            """
-            INSERT INTO salespeople (nombre, email, google_id)
-            VALUES (?, ?, ?)
-            """,
-            (name, email, google_id)
-        )
-
-        conn.commit()
+    try:
 
         cursor.execute(
             "SELECT * FROM salespeople WHERE google_id = ?",
@@ -383,12 +432,60 @@ def google_login(data: dict):
 
         user = cursor.fetchone()
 
+        if not user:
+
+            # Para crear una cuenta exigimos email verificado por Google
+            if userinfo.get("verified_email") is not True:
+                raise HTTPException(status_code=401, detail="Email de Google no verificado")
+
+            # ¿Ya existe una cuenta con ese email? → NO se enlaza automáticamente
+            # (sin validar la audiencia del token, enlazar permitiría acceder
+            # a cuentas con contraseña mediante un token de Google ajeno)
+            cursor.execute(
+                "SELECT * FROM salespeople WHERE email = ?",
+                (email,)
+            )
+
+            existing = cursor.fetchone()
+
+            if existing:
+
+                if existing["google_id"]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="El email ya está asociado a otra cuenta de Google"
+                    )
+
+                raise HTTPException(
+                    status_code=409,
+                    detail="Este email ya tiene una cuenta en CRMVoice. Inicia sesión con tu contraseña."
+                )
+
+            # crear usuario si no existe
+            cursor.execute(
+                """
+                INSERT INTO salespeople (nombre, email, google_id)
+                VALUES (?, ?, ?)
+                """,
+                (name, email, google_id)
+            )
+
+            conn.commit()
+
+            cursor.execute(
+                "SELECT * FROM salespeople WHERE google_id = ?",
+                (google_id,)
+            )
+
+            user = cursor.fetchone()
+
+    finally:
+        conn.close()
+
     jwt_token = create_access_token({
         "sub": str(user["id"]),
         "email": user["email"]
     })
-
-    conn.close()
 
     return {
         "access_token": jwt_token,
@@ -405,12 +502,32 @@ def process_text(body: ProcessTextRequest, current_user: dict = Depends(get_curr
 
 @app.post("/process-audio")
 async def process_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    content = await file.read()
+
+    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
+
+    if not (content_type.startswith("audio/") or content_type in ALLOWED_AUDIO_CONTENT_TYPES):
+        raise HTTPException(status_code=415, detail="Formato de audio no soportado")
+
+    # Lectura acotada: nunca más de MAX_AUDIO_BYTES + 1 en memoria
+    content = await file.read(MAX_AUDIO_BYTES + 1)
+
+    if len(content) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="El audio supera el tamaño máximo (10 MB)")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Audio vacío")
+
+    suffix = detect_audio_suffix(content[:16])
+
+    if suffix is None:
+        raise HTTPException(status_code=415, detail="Formato de audio no soportado")
 
     try:
-        text_transcribed = transcribe_audio(content)
-    except Exception as e:
-        return {"error": str(e)}
+        # Whisper es CPU-bound: fuera del event loop
+        text_transcribed = await run_in_threadpool(transcribe_audio, content, suffix)
+    except Exception:
+        logger.exception("Error transcribiendo audio")
+        raise HTTPException(status_code=500, detail="No se pudo transcribir el audio")
 
     analysis = analyze_text(text_transcribed)
 
@@ -638,15 +755,17 @@ def get_activities(
 
         # 🔹 Obtener productos de la actividad
         cursor.execute("""
-            SELECT product_raw
+            SELECT product_id, product_raw
             FROM activity_products
             WHERE activity_id = ?
         """, (r["id"],))
 
         product_rows = cursor.fetchall()
 
+        # product_id es necesario para que la edición conserve los productos
         products = [
             {
+                "product_id": p["product_id"],
                 "product_raw": p["product_raw"]
             }
             for p in product_rows
@@ -682,7 +801,9 @@ def get_activities(
 
 
 @app.post("/activities")
-async def create_activity(data: dict, current_user: dict = Depends(get_current_user)):
+def create_activity(data: dict, current_user: dict = Depends(get_current_user)):
+    # def (no async): FastAPI lo ejecuta en threadpool y la llamada
+    # síncrona a OpenAI (embedding) no bloquea el event loop
 
     # -------------------------------
     # 1️⃣ Validación mínima
@@ -1493,6 +1614,11 @@ def delete_activity(activity_id: int, current_user: dict = Depends(get_current_u
             AND salesperson_id = ?
         """, (activity_id, current_user["user_id"]))
 
+        # Solo confirmamos si realmente se ha eliminado la actividad
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail="Actividad no encontrada")
+
         conn.commit()
 
     finally:
@@ -1519,11 +1645,36 @@ def update_activity(activity_id: int, data: dict, current_user: dict = Depends(g
         conn.close()
         raise HTTPException(status_code=404, detail="Actividad no encontrada")
 
+    comentario_actual = row["comentario"]
+
+    comentario = data.get("comentario", comentario_actual)
+
+    # 🔹 Si cambia el comentario, el embedding queda obsoleto.
+    # Se genera ANTES de escribir nada (llamada de red fuera de la transacción).
+    comentario_cambiado = comentario != comentario_actual
+    new_vector = None
+
+    if comentario_cambiado:
+
+        cursor.execute("SELECT razon_social FROM clients WHERE id = ?", (data.get("client_id"),))
+        client_row = cursor.fetchone()
+
+        cursor.execute("SELECT accion FROM activity_types WHERE id = ?", (data.get("activity_type_id"),))
+        type_row = cursor.fetchone()
+
+        embedding_text = f"""
+    Cliente: {client_row["razon_social"] if client_row else None}
+    Acción: {type_row["accion"] if type_row else None}
+    Comentario: {comentario}
+    """
+
+        try:
+            new_vector = generate_embedding(embedding_text)
+        except Exception:
+            logger.exception("Error regenerando embedding de la actividad %s", activity_id)
+            new_vector = None
+
     try:
-
-        comentario_actual = row["comentario"]
-
-        comentario = data.get("comentario", comentario_actual)
 
         # 🔹 Update actividad
         cursor.execute("""
@@ -1555,8 +1706,9 @@ def update_activity(activity_id: int, data: dict, current_user: dict = Depends(g
 
         for p in products:
 
-            product_id = p.get("id")
-            product_name = p.get("name")
+            # Se aceptan ambos formatos: {id, name} y {product_id, product_raw}
+            product_id = p.get("id") if p.get("id") is not None else p.get("product_id")
+            product_name = p.get("name") or p.get("product_raw")
 
             # 🔹 evitar crash si no hay id
             if product_id is None:
@@ -1577,18 +1729,52 @@ def update_activity(activity_id: int, data: dict, current_user: dict = Depends(g
                 1.0
             ))
 
+        # 🔹 Mantener el embedding coherente con el comentario
+        if comentario_cambiado:
+
+            if new_vector:
+
+                cursor.execute("""
+                    UPDATE activity_embeddings
+                    SET embedding_vector = ?, created_at = datetime('now')
+                    WHERE activity_id = ?
+                """, (json.dumps(new_vector), activity_id))
+
+                if cursor.rowcount == 0:
+                    cursor.execute("""
+                        INSERT INTO activity_embeddings (
+                            activity_id,
+                            embedding_vector,
+                            embedding_model,
+                            content_type
+                        )
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        activity_id,
+                        json.dumps(new_vector),
+                        "text-embedding-3-small",
+                        "activity_full"
+                    ))
+
+            else:
+                # Si OpenAI falla, mejor sin embedding que con uno obsoleto
+                cursor.execute(
+                    "DELETE FROM activity_embeddings WHERE activity_id = ?",
+                    (activity_id,)
+                )
+
         conn.commit()
 
         return {"success": True}
 
-    except Exception as e:
+    except Exception:
 
         conn.rollback()
-        print("ERROR update_activity:", e)
+        logger.exception("Error actualizando la actividad %s", activity_id)
 
         return {
             "success": False,
-            "error": str(e)
+            "error": "No se pudo actualizar la actividad"
         }
 
     finally:

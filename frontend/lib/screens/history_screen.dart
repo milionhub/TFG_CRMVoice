@@ -121,6 +121,7 @@ class _HistoryContentState extends State<HistoryContent> {
         final prods = a["products"] ?? [];
 
         return prods.any((p) =>
+            p["product_id"] == selectedProductId ||
             p["product_raw"] == productName);
 
       }).toList();

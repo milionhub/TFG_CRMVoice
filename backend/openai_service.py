@@ -1,4 +1,5 @@
 import os
+import json
 from openai import OpenAI
 import math
 from db import get_connection
@@ -128,7 +129,7 @@ def is_duplicate_activity(new_vector, client_id, activity_type_id, datetime_iso)
     conn.close()
 
     for row in rows:
-        stored_vector = eval(row["embedding_vector"])
+        stored_vector = json.loads(row["embedding_vector"])
         similarity = cosine_similarity(new_vector, stored_vector)
 
         if similarity >= SIMILARITY_THRESHOLD:

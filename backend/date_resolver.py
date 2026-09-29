@@ -11,18 +11,23 @@ def resolve_relative_date(text: str) -> str | None:
     today = datetime.today()
     lower = text.lower()
 
+    # "de la mañana" / "por la mañana" indican franja horaria, no el día de mañana
+    # ("mañana por la mañana" sigue detectándose por el primer "mañana")
+    lower = re.sub(r"\b(de|por) la mañana\b", " ", lower)
+
     # ----------------------
     # CASOS DIRECTOS
     # ----------------------
 
-    if "hoy" in lower:
+    if re.search(r"\bhoy\b", lower) or re.search(r"\besta mañana\b", lower):
         return today.strftime("%Y-%m-%d")
 
-    if "mañana" in lower:
-        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    if "pasado mañana" in lower:
+    # "pasado mañana" debe comprobarse antes que "mañana"
+    if re.search(r"\bpasado mañana\b", lower):
         return (today + timedelta(days=2)).strftime("%Y-%m-%d")
+
+    if re.search(r"\bmañana\b", lower):
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
 
     if "la semana que viene" in lower:
         return (today + timedelta(days=7)).strftime("%Y-%m-%d")
@@ -44,7 +49,7 @@ def resolve_relative_date(text: str) -> str | None:
     }
 
     for day, weekday in weekdays.items():
-        if re.search(rf"(este|el|proximo|próximo)?\s*{day}", lower):
+        if re.search(rf"\b{day}\b", lower):
             days_ahead = (weekday - today.weekday() + 7) % 7
             days_ahead = 7 if days_ahead == 0 else days_ahead
             return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
@@ -91,11 +96,12 @@ def resolve_time(text: str) -> str | None:
     if match:
         hour = int(match.group(1))
 
-        if "tarde" in lower or "noche" in lower:
+        if re.search(r"\b(tarde|noche)\b", lower):
             if hour < 12:
                 hour += 12
 
-        if "mañana" in lower and hour == 12:
+        # Solo la franja horaria ("de/por la mañana"), no el día "mañana"
+        if re.search(r"\b(de|por) la mañana\b", lower) and hour == 12:
             hour = 0  # 12 de la mañana = 00
 
         return f"{hour:02d}:00:00"

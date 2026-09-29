@@ -1492,7 +1492,8 @@ class _EditActivityDialogState extends State<EditActivityDialog> {
                     final ok = await api.updateActivity(
                       widget.activity["id"],
                       {
-                        "fecha": _date?.toIso8601String(),
+                        // Mismo formato que el resto: YYYY-MM-DDTHH:MM:SS
+                        "fecha": _date?.toIso8601String().split(".").first,
                         "client_id": _clientId,
                         "contact_id": _contactId,
                         "activity_type_id": _typeId,

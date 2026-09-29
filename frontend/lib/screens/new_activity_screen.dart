@@ -731,8 +731,17 @@ class _NewActivityScreenState extends State<NewActivityScreen> {
 
           setState(() {
 
+            // Conservar la hora ya detectada al cambiar solo el día
+            final newDateTime = DateTime(
+              picked.year,
+              picked.month,
+              picked.day,
+              currentDate?.hour ?? 0,
+              currentDate?.minute ?? 0,
+            );
+
             editedResult["fecha_detectada"] =
-                picked.toIso8601String().split("T")[0];
+                newDateTime.toIso8601String().split(".").first;
 
           });
 
@@ -814,7 +823,7 @@ class _NewActivityScreenState extends State<NewActivityScreen> {
               );
 
               editedResult["fecha_detectada"] =
-                  newDateTime.toIso8601String();
+                  newDateTime.toIso8601String().split(".").first;
 
             }
 

@@ -346,9 +346,12 @@ class _AuthScreenState extends State<AuthScreen>
               final accessToken = result["accessToken"];
 
               final success =
-                  await context.read<AuthProvider>().googleLogin(accessToken);
+                  await context.read<AuthProvider>().googleLogin(
+                    accessToken,
+                    rememberMe: rememberMe,
+                  );
 
-              if (!success) {
+              if (!success && mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text("Error con Google Login"),

@@ -49,6 +49,9 @@ class _CRMVoiceAppState extends State<CRMVoiceApp> {
     final auth = Provider.of<AuthProvider>(context);
 
     return MaterialApp(
+      // Al entrar/salir de sesión se recrea el Navigator: no quedan
+      // pantallas anteriores (Histórico, Calendario...) encima de AuthScreen
+      key: ValueKey(auth.isAuthenticated),
       debugShowCheckedModeBanner: false,
       title: "CRM Voice",
       theme: ThemeData.dark(),

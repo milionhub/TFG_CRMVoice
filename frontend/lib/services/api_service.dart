@@ -7,7 +7,12 @@ class ApiService {
   final AuthProvider auth;
 
  
-  static const String baseUrl = "http://192.168.1.14:8000";
+  /// Única configuración de la URL del backend.
+  /// Se puede cambiar al arrancar: --dart-define=API_BASE_URL=http://host:puerto
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:8000',
+  );
 
    ApiService(this.auth);
    
@@ -233,6 +238,26 @@ static Future<Map<String, dynamic>> register(
   } else {
     throw Exception("Register error");
   }
+}
+
+/// GET /me con un token concreto (restauración de sesión).
+/// Devuelve null si el token no es válido (401/403); lanza en otros errores.
+static Future<Map<String, dynamic>?> fetchMe(String token) async {
+
+  final response = await http.get(
+    Uri.parse("$baseUrl/me"),
+    headers: {"Authorization": "Bearer $token"},
+  ).timeout(const Duration(seconds: 5));
+
+  if (response.statusCode == 200) {
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  if (response.statusCode == 401 || response.statusCode == 403) {
+    return null;
+  }
+
+  throw Exception("Error obteniendo usuario (${response.statusCode})");
 }
 
 Future<List<dynamic>> getProducts() async {

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../services/api_service.dart';
 import '../core/app_colors.dart';
 import 'home_screen.dart';
 
@@ -100,7 +101,7 @@ class _ChatContentState extends State<ChatContent> {
   String? _activeClient;
   String? _pendingIntent;
 
-  final String baseUrl = "http://127.0.0.1:8000";
+  final String baseUrl = ApiService.baseUrl;
 
   @override
   void initState() {
