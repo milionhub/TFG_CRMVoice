@@ -9,7 +9,7 @@ def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 
-def semantic_search_activities(query: str, client_id: int = None, top_k: int = 5):
+def semantic_search_activities(query: str, salesperson_id: int, client_id: int = None, top_k: int = 5):
 
     response = client.embeddings.create(
         model="text-embedding-3-small",
@@ -29,8 +29,8 @@ def semantic_search_activities(query: str, client_id: int = None, top_k: int = 5
                 ae.embedding_vector as embedding
             FROM activities a
             JOIN activity_embeddings ae ON a.id = ae.activity_id
-            WHERE a.client_id = ?
-        """, (client_id,))
+            WHERE a.client_id = ? AND a.salesperson_id = ?
+        """, (client_id, salesperson_id))
     else:
         cursor.execute("""
             SELECT 
@@ -39,7 +39,8 @@ def semantic_search_activities(query: str, client_id: int = None, top_k: int = 5
                 ae.embedding_vector as embedding
             FROM activities a
             JOIN activity_embeddings ae ON a.id = ae.activity_id
-        """)
+            WHERE a.salesperson_id = ?
+        """, (salesperson_id,))
 
     # 👇 ESTO FALTABA
     rows = cursor.fetchall()

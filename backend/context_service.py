@@ -3,7 +3,11 @@ from opportunity_engine import detect_opportunities
 
 
 
-def build_context(client_id: int):
+def build_context(client_id: int, salesperson_id: int):
+    """
+    Las actividades se limitan a las del comercial autenticado.
+    La facturación es común a todo el CRM (invoices no tiene propietario asignado).
+    """
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -14,15 +18,19 @@ def build_context(client_id: int):
     client_name = client_row["razon_social"] if client_row else None
 
     # Total actividades
-    cursor.execute("SELECT COUNT(*) as total FROM activities WHERE client_id = ?", (client_id,))
+    cursor.execute("""
+        SELECT COUNT(*) as total
+        FROM activities
+        WHERE client_id = ? AND salesperson_id = ?
+    """, (client_id, salesperson_id))
     total_activities = cursor.fetchone()["total"]
 
     # Última fecha contacto
     cursor.execute("""
         SELECT MAX(datetime_iso) as last_date
         FROM activities
-        WHERE client_id = ?
-    """, (client_id,))
+        WHERE client_id = ? AND salesperson_id = ?
+    """, (client_id, salesperson_id))
     last_contact_date = cursor.fetchone()["last_date"]
 
     # Tipo actividad más frecuente
@@ -30,11 +38,11 @@ def build_context(client_id: int):
         SELECT at.accion, COUNT(*) as total
         FROM activities a
         JOIN activity_types at ON a.activity_type_id = at.id
-        WHERE a.client_id = ?
+        WHERE a.client_id = ? AND a.salesperson_id = ?
         GROUP BY at.accion
         ORDER BY total DESC
         LIMIT 1
-    """, (client_id,))
+    """, (client_id, salesperson_id))
     row = cursor.fetchone()
     frequent_activity_type = row["accion"] if row else None
 
@@ -42,10 +50,10 @@ def build_context(client_id: int):
     cursor.execute("""
         SELECT comentario
         FROM activities
-        WHERE client_id = ?
+        WHERE client_id = ? AND salesperson_id = ?
         ORDER BY id DESC
         LIMIT 5
-    """, (client_id,))
+    """, (client_id, salesperson_id))
     recent_activities = [r["comentario"] for r in cursor.fetchall()]
 
     conn.close()

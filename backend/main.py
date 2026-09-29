@@ -400,11 +400,11 @@ def google_login(data: dict):
     }
 
 @app.post("/process-text")
-def process_text(body: ProcessTextRequest):
+def process_text(body: ProcessTextRequest, current_user: dict = Depends(get_current_user)):
     return analyze_text(body.text)
 
 @app.post("/process-audio")
-async def process_audio(file: UploadFile = File(...)):
+async def process_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     content = await file.read()
 
     try:
@@ -829,7 +829,7 @@ async def create_activity(data: dict, current_user: dict = Depends(get_current_u
     }
 
 @app.get("/products")
-def get_products():
+def get_products(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -854,7 +854,7 @@ def get_products():
     }
 
 @app.post("/semantic-search")
-def semantic_search(request: SemanticSearchRequest):
+def semantic_search(request: SemanticSearchRequest, current_user: dict = Depends(get_current_user)):
 
     query_text = request.query
 
@@ -870,7 +870,8 @@ def semantic_search(request: SemanticSearchRequest):
         SELECT ae.activity_id, ae.embedding_vector, a.datetime_iso, a.cliente_raw, a.comentario
         FROM activity_embeddings ae
         JOIN activities a ON a.id = ae.activity_id
-    """)
+        WHERE a.salesperson_id = ?
+    """, (current_user["user_id"],))
 
     rows = cursor.fetchall()
 
@@ -902,15 +903,15 @@ def semantic_search(request: SemanticSearchRequest):
     return results[:3]
 
 @app.get("/client-context/{client_id}")
-def get_client_context(client_id: int):
-    return build_context(client_id)
+def get_client_context(client_id: int, current_user: dict = Depends(get_current_user)):
+    return build_context(client_id, current_user["user_id"])
 
 class PrepareMeetingRequest(BaseModel):
     client_id: int
 
-def prepare_meeting_by_client_id(client_id: int):
+def prepare_meeting_by_client_id(client_id: int, salesperson_id: int):
 
-    context_data = build_context(client_id)
+    context_data = build_context(client_id, salesperson_id)
 
     if not context_data:
         return None, "Cliente no encontrado"
@@ -923,9 +924,9 @@ def prepare_meeting_by_client_id(client_id: int):
     return summary, None
 
 @app.post("/prepare-meeting")
-def prepare_meeting(request: PrepareMeetingRequest):
+def prepare_meeting(request: PrepareMeetingRequest, current_user: dict = Depends(get_current_user)):
 
-    context_data = build_context(request.client_id)
+    context_data = build_context(request.client_id, current_user["user_id"])
 
     if not context_data:
         return {"error": "Cliente no encontrado"}
@@ -940,13 +941,8 @@ def prepare_meeting(request: PrepareMeetingRequest):
         "meeting_preparation": summary
     }
 
-@app.post("/test-products")
-def test_products(body: ProcessTextRequest):
-    from entity_resolver import resolve_products
-    return resolve_products(body.text)
-
 @app.get("/clients")
-def get_clients():
+def get_clients(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -970,7 +966,7 @@ def get_clients():
     }
 
 @app.get("/contacts")
-def get_contacts(client_id: Optional[int] = Query(None)):
+def get_contacts(client_id: Optional[int] = Query(None), current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1002,7 +998,7 @@ def get_contacts(client_id: Optional[int] = Query(None)):
     }
 
 @app.get("/activity-types")
-def get_activity_types():
+def get_activity_types(current_user: dict = Depends(get_current_user)):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1143,7 +1139,7 @@ def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current
                 content="¿Para qué cliente quieres preparar la reunión?"
             )
 
-        summary, error = prepare_meeting_by_client_id(client_id)
+        summary, error = prepare_meeting_by_client_id(client_id, current_user["user_id"])
 
         if error:
             return ChatResponse(
@@ -1258,7 +1254,7 @@ def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current
                 content=f"No he podido identificar el cliente '{client_text}'. ¿Puedes especificarlo mejor?"
             )
 
-        context = build_context(client_id)
+        context = build_context(client_id, current_user["user_id"])
 
 
         summary_text = generate_client_summary(context)
@@ -1309,9 +1305,9 @@ def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current
         client_id, confidence = resolve_client(payload.message)
 
         if client_id:
-            results = semantic_search_activities(payload.message, client_id=client_id)
+            results = semantic_search_activities(payload.message, current_user["user_id"], client_id=client_id)
         else:
-            results = semantic_search_activities(payload.message)
+            results = semantic_search_activities(payload.message, current_user["user_id"])
 
         
 
@@ -1396,7 +1392,7 @@ def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current
                 content="¿Qué cliente quieres analizar?"
             )
 
-        context = build_context(client_id)
+        context = build_context(client_id, current_user["user_id"])
 
         opportunities = detect_opportunities(context)
 
@@ -1445,7 +1441,7 @@ def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current
                 type="client_opportunities",
                 content="¿De qué cliente quieres ver oportunidades?"
             )
-        context = build_context(client_id)
+        context = build_context(client_id, current_user["user_id"])
 
         opportunities = detect_opportunities(context)
 
@@ -1478,16 +1474,29 @@ def delete_activity(activity_id: int, current_user: dict = Depends(get_current_u
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM activity_products WHERE activity_id = ?", (activity_id,))
-    cursor.execute("DELETE FROM activity_embeddings WHERE activity_id = ?", (activity_id,))
-    cursor.execute("""
-        DELETE FROM activities
-        WHERE id = ?
-        AND salesperson_id = ?
-    """, (activity_id, current_user["user_id"]))
+    try:
 
-    conn.commit()
-    conn.close()
+        # 🔹 Comprobar propiedad antes de tocar ningún dato relacionado
+        cursor.execute("""
+            SELECT id FROM activities
+            WHERE id = ? AND salesperson_id = ?
+        """, (activity_id, current_user["user_id"]))
+
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Actividad no encontrada")
+
+        cursor.execute("DELETE FROM activity_products WHERE activity_id = ?", (activity_id,))
+        cursor.execute("DELETE FROM activity_embeddings WHERE activity_id = ?", (activity_id,))
+        cursor.execute("""
+            DELETE FROM activities
+            WHERE id = ?
+            AND salesperson_id = ?
+        """, (activity_id, current_user["user_id"]))
+
+        conn.commit()
+
+    finally:
+        conn.close()
 
     return {"success": True}
 
@@ -1497,16 +1506,22 @@ def update_activity(activity_id: int, data: dict, current_user: dict = Depends(g
     conn = get_connection()
     cursor = conn.cursor()
 
+    # 🔹 Comprobar propiedad y obtener comentario actual
+    # (antes de borrar/insertar productos o actualizar nada)
+    cursor.execute("""
+        SELECT comentario FROM activities
+        WHERE id = ? AND salesperson_id = ?
+    """, (activity_id, current_user["user_id"]))
+
+    row = cursor.fetchone()
+
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Actividad no encontrada")
+
     try:
 
-        # 🔹 Obtener comentario actual
-        cursor.execute(
-            "SELECT comentario FROM activities WHERE id = ?",
-            (activity_id,)
-        )
-
-        row = cursor.fetchone()
-        comentario_actual = row["comentario"] if row else None
+        comentario_actual = row["comentario"]
 
         comentario = data.get("comentario", comentario_actual)
 
