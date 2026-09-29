@@ -34,8 +34,9 @@ import logging
 import numpy as np
 from typing import Optional
 from fastapi import Query
-import requests
 from google.oauth2 import id_token
+from google.auth import exceptions as google_auth_exceptions
+from google.auth.transport import requests as google_auth_requests
 
 
 security = HTTPBearer()
@@ -390,35 +391,47 @@ def get_me(current_user=Depends(get_current_user)):
 @app.post("/auth/google")
 def google_login(data: dict):
 
-    access_token = data.get("accessToken")
+    # Client ID de la app web (público, no secreto): define la audience esperada
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
 
-    if not access_token:
+    if not google_client_id:
+        logger.error("GOOGLE_CLIENT_ID no configurado: login con Google deshabilitado")
+        raise HTTPException(status_code=503, detail="Login con Google no configurado")
+
+    raw_id_token = data.get("idToken")
+
+    if not raw_id_token or not isinstance(raw_id_token, str):
         raise HTTPException(status_code=400, detail="Missing token")
 
-    # pedir datos del usuario a Google
+    # Verificación local del ID token: firma (claves públicas de Google),
+    # iss, exp/iat y aud == nuestro Client ID
     try:
-        response = requests.get(
-            "https://www.googleapis.com/oauth2/v2/userinfo",
-            headers={
-                "Authorization": f"Bearer {access_token}"
-            },
-            timeout=10
+        idinfo = id_token.verify_oauth2_token(
+            raw_id_token,
+            google_auth_requests.Request(),
+            audience=google_client_id,
+            clock_skew_in_seconds=10,
         )
-    except requests.RequestException:
-        logger.exception("Error contactando con Google userinfo")
+    except google_auth_exceptions.TransportError:
+        logger.exception("Error obteniendo las claves públicas de Google")
         raise HTTPException(status_code=502, detail="No se pudo validar con Google")
-
-    if response.status_code != 200:
+    except (ValueError, google_auth_exceptions.GoogleAuthError):
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
-    userinfo = response.json()
-
-    email = userinfo.get("email")
-    name = userinfo.get("name", "")
-    google_id = userinfo.get("id")
-
-    if not email or not google_id:
+    # azp (authorized party), si viene, también debe ser nuestra app
+    azp = idinfo.get("azp")
+    if azp is not None and azp != google_client_id:
         raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    google_id = idinfo.get("sub")
+    email = idinfo.get("email")
+    name = idinfo.get("name", "")
+
+    if not google_id or not email:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    if idinfo.get("email_verified") is not True:
+        raise HTTPException(status_code=401, detail="Email de Google no verificado")
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -434,13 +447,8 @@ def google_login(data: dict):
 
         if not user:
 
-            # Para crear una cuenta exigimos email verificado por Google
-            if userinfo.get("verified_email") is not True:
-                raise HTTPException(status_code=401, detail="Email de Google no verificado")
-
-            # ¿Ya existe una cuenta con ese email? → NO se enlaza automáticamente
-            # (sin validar la audiencia del token, enlazar permitiría acceder
-            # a cuentas con contraseña mediante un token de Google ajeno)
+            # ¿Ya existe una cuenta con ese email? → NO se enlaza automáticamente:
+            # la cuenta tradicional debe entrar con su contraseña
             cursor.execute(
                 "SELECT * FROM salespeople WHERE email = ?",
                 (email,)

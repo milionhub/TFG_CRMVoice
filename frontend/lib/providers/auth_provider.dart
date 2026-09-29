@@ -24,8 +24,13 @@ class AuthProvider extends ChangeNotifier {
   bool get isAuthenticated => _token != null;
   final String baseUrl = ApiService.baseUrl;
 
-  /// Tras un logout explícito no se vuelve a entrar automáticamente con Google
+  /// Tras un logout explícito no se vuelve a entrar automáticamente con Google.
+  /// Se persiste (SharedPreferences → localStorage en web) para que sobreviva
+  /// a F5: Google One Tap/FedCM puede reautenticar aunque se haya hecho signOut.
+  static const String _googleAutoLoginDisabledKey = "google_auto_login_disabled";
   bool _googleAutoLoginSuppressed = false;
+
+  bool get isGoogleAutoLoginSuppressed => _googleAutoLoginSuppressed;
 
   /// ==========================
   /// INIT (cargar sesión guardada)
@@ -33,6 +38,9 @@ class AuthProvider extends ChangeNotifier {
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final savedToken = prefs.getString("auth_token");
+
+    _googleAutoLoginSuppressed =
+        prefs.getBool(_googleAutoLoginDisabledKey) ?? false;
 
     if (savedToken != null) {
 
@@ -98,6 +106,13 @@ class AuthProvider extends ChangeNotifier {
     _userEmail = null;
   }
 
+  /// Un login iniciado por el usuario vuelve a permitir One Tap en el futuro
+  Future<void> _allowGoogleAutoLogin() async {
+    _googleAutoLoginSuppressed = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_googleAutoLoginDisabledKey);
+  }
+
   /// ==========================
   /// LOGIN
   /// ==========================
@@ -119,7 +134,7 @@ class AuthProvider extends ChangeNotifier {
       final user = response["user"];
       _userEmail = user?["email"] ?? email;
       _userName = user?["nombre"] ?? email.split("@")[0];
-      _googleAutoLoginSuppressed = false;
+      await _allowGoogleAutoLogin();
 
       if (rememberMe) {
         final prefs = await SharedPreferences.getInstance();
@@ -160,7 +175,7 @@ class AuthProvider extends ChangeNotifier {
       _userName = nombre;
       _userEmail = email;
       await _loadCurrentUser();
-      _googleAutoLoginSuppressed = false;
+      await _allowGoogleAutoLogin();
 
       if (rememberMe) {
         final prefs = await SharedPreferences.getInstance();
@@ -185,8 +200,9 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove("auth_token");
 
     // Cerrar también la sesión de Google (si la hay) y no reintentar
-    // el login automático en esta sesión de la app
+    // el login automático, tampoco tras recargar (F5)
     _googleAutoLoginSuppressed = true;
+    await prefs.setBool(_googleAutoLoginDisabledKey, true);
 
     try{
       final googleAuth = GoogleAuthService();
@@ -227,7 +243,8 @@ class AuthProvider extends ChangeNotifier {
     ) as Map<String, dynamic>;
   }
 
- Future<bool> googleLogin(String accessToken, {bool rememberMe = true}) async {
+ /// Envía el ID token de Google al backend, que lo verifica (firma, aud, exp...)
+ Future<bool> googleLogin(String idToken, {bool rememberMe = true}) async {
 
     final http.Response response;
 
@@ -238,7 +255,7 @@ class AuthProvider extends ChangeNotifier {
           "Content-Type": "application/json",
         },
         body: jsonEncode({
-          "accessToken": accessToken,
+          "idToken": idToken,
         }),
       );
     } catch (e) {
@@ -257,7 +274,7 @@ class AuthProvider extends ChangeNotifier {
     _setToken(newToken);
     _userName = data["user"]["nombre"];
     _userEmail = data["user"]["email"];
-    _googleAutoLoginSuppressed = false;
+    await _allowGoogleAutoLogin();
 
     if (rememberMe) {
       final prefs = await SharedPreferences.getInstance();
@@ -269,18 +286,12 @@ class AuthProvider extends ChangeNotifier {
     return true;
   }
 
-  Future<bool> tryGoogleAutoLogin() async {
+  /// Lanza One Tap / inicio silencioso. Si Google devuelve una cuenta,
+  /// AuthScreen la recibe por onCurrentUserChanged y llama a [googleLogin].
+  Future<void> tryGoogleAutoLogin() async {
 
-    if (_googleAutoLoginSuppressed || isAuthenticated) return false;
+    if (_googleAutoLoginSuppressed || isAuthenticated) return;
 
-    final googleAuth = GoogleAuthService();
-
-    final result = await googleAuth.signInSilently();
-
-    if (result == null) return false;
-
-    final accessToken = result["accessToken"];
-
-    return await googleLogin(accessToken);
+    await GoogleAuthService().signInSilently();
   }
 }

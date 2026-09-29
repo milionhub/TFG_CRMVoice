@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart' show GoogleSignInAccount;
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/google_web_button_stub.dart'
+    if (dart.library.js_interop) '../widgets/google_web_button.dart';
 import '../widgets/app_logo.dart';
 import '../core/app_colors.dart';
 import '../services/google_auth_service.dart';
@@ -32,9 +37,16 @@ class _AuthScreenState extends State<AuthScreen>
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
+  /// Cuenta Google autenticada (botón oficial, One Tap o signIn en móvil)
+  StreamSubscription<GoogleSignInAccount?>? _googleUserSubscription;
+  bool _googleLoginInProgress = false;
+
   @override
   void initState() {
     super.initState();
+
+    _googleUserSubscription =
+        GoogleAuthService().onCurrentUserChanged.listen(_onGoogleAccount);
 
     _animationController = AnimationController(
       vsync: this,
@@ -58,8 +70,38 @@ class _AuthScreenState extends State<AuthScreen>
     });
   }
 
+  /// Envía el ID token de Google al backend (única vía de login con Google)
+  Future<void> _onGoogleAccount(GoogleSignInAccount? account) async {
+    if (account == null || _googleLoginInProgress) return;
+
+    _googleLoginInProgress = true;
+
+    try {
+      final idToken = await GoogleAuthService().getIdToken(account);
+
+      if (!mounted) return;
+
+      final success = idToken != null &&
+          await context.read<AuthProvider>().googleLogin(
+            idToken,
+            rememberMe: rememberMe,
+          );
+
+      if (!success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Error con Google Login"),
+          ),
+        );
+      }
+    } finally {
+      _googleLoginInProgress = false;
+    }
+  }
+
   @override
   void dispose() {
+    _googleUserSubscription?.cancel();
     _nombreController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
@@ -333,33 +375,17 @@ class _AuthScreenState extends State<AuthScreen>
           const SizedBox(height: 20),
 
           /// GOOGLE LOGIN
-          /// GOOGLE LOGIN
+          /// Web: botón oficial de Google (ID token). Resto: signIn del plugin.
+          /// En ambos casos el resultado llega por _onGoogleAccount.
+          if (kIsWeb)
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: Center(child: buildGoogleWebButton()),
+            )
+          else
           GestureDetector(
-            onTap: () async {
-
-              final googleAuth = GoogleAuthService();
-
-              final result = await googleAuth.signIn();
-
-              if (result == null) return;
-
-              final accessToken = result["accessToken"];
-
-              final success =
-                  await context.read<AuthProvider>().googleLogin(
-                    accessToken,
-                    rememberMe: rememberMe,
-                  );
-
-              if (!success && mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Error con Google Login"),
-                  ),
-                );
-              }
-
-            },
+            onTap: () => GoogleAuthService().signIn(),
 
             child: Container(
               width: double.infinity,
