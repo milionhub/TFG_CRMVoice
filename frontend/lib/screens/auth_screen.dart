@@ -377,13 +377,14 @@ class _AuthScreenState extends State<AuthScreen>
           /// GOOGLE LOGIN
           /// Web: botón oficial de Google (ID token). Resto: signIn del plugin.
           /// En ambos casos el resultado llega por _onGoogleAccount.
-          if (kIsWeb)
+          /// En web sin GOOGLE_CLIENT_ID no se muestra el botón.
+          if (kIsWeb && GoogleAuthService.isConfigured)
             SizedBox(
               width: double.infinity,
               height: 50,
               child: Center(child: buildGoogleWebButton()),
             )
-          else
+          else if (!kIsWeb)
           GestureDetector(
             onTap: () => GoogleAuthService().signIn(),
 

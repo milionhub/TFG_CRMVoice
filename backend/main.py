@@ -1,6 +1,10 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+# Antes de importar nada más: error claro si falta configuración obligatoria
+from env_check import check_required_env
+check_required_env()
+
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials

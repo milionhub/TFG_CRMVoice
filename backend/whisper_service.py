@@ -1,7 +1,17 @@
 import whisper
 import tempfile
 import threading
+import logging
+import shutil
 import os
+
+# Whisper decodifica el audio llamando al ejecutable ffmpeg (dependencia del
+# sistema, no de pip). Sin él, cada transcripción falla con un error genérico.
+if shutil.which("ffmpeg") is None:
+    logging.getLogger("crmvoice").warning(
+        "FFmpeg no está en el PATH: /process-audio no podrá transcribir. "
+        "Instálalo y comprueba con 'ffmpeg -version'."
+    )
 
 # Cargamos el modelo una sola vez (mejor rendimiento)
 model = whisper.load_model("base")

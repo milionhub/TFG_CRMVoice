@@ -3,6 +3,17 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "crm.db"
 
+# Datos de referencia (no de demostración): son las acciones que devuelve
+# detect_action() en main.py y deben existir para poder resolver el tipo
+# de actividad. Si se cambia una, cambiar también detect_action().
+ACTIVITY_TYPES = (
+    "Concertar reunión",
+    "Enviar presupuesto",
+    "Enviar oferta",
+    "Registrar visita comercial",
+    "Realizar llamada de seguimiento",
+)
+
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -85,6 +96,15 @@ def init_db():
             accion TEXT NOT NULL UNIQUE
         );
     """)
+
+    # Idempotente: solo inserta los tipos que falten (si están todos, no escribe nada)
+    existing_types = {row[0] for row in cur.execute("SELECT accion FROM activity_types")}
+    missing_types = [(accion,) for accion in ACTIVITY_TYPES if accion not in existing_types]
+    if missing_types:
+        cur.executemany(
+            "INSERT OR IGNORE INTO activity_types (accion) VALUES (?)",
+            missing_types
+        )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS salespeople (

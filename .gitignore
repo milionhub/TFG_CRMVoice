@@ -7,6 +7,7 @@
 __pycache__/
 *.pyc
 venv/
+.venv/
 .env
 
 # Flutter
@@ -19,5 +20,6 @@ venv/
 Thumbs.db
 .DS_Store
 
-# SQLite DB
+# SQLite DB (y sus ficheros temporales -journal/-wal/-shm)
 backend/crm.db
+backend/crm.db-*

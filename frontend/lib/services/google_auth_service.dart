@@ -1,6 +1,15 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 
 class GoogleAuthService {
+
+  /// OAuth Client ID (tipo Web) de Google. Se configura al arrancar:
+  /// --dart-define=GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com
+  /// Debe coincidir con GOOGLE_CLIENT_ID del backend.
+  static const String clientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
+
+  /// En web, sin Client ID no se ofrece el login con Google.
+  static bool get isConfigured => !kIsWeb || clientId.isNotEmpty;
 
   // Instancia única: en web el plugin conecta sus eventos (botón oficial,
   // One Tap) con onCurrentUserChanged de UNA instancia de GoogleSignIn.
@@ -10,17 +19,22 @@ class GoogleAuthService {
 
   factory GoogleAuthService() => _instance;
 
-  final GoogleSignIn _googleSignIn = GoogleSignIn(
-    scopes: [
-      'email',
-      'profile'
-    ],
-    signInOption: SignInOption.standard,
-  );
+  // Solo se crea si hay configuración (en web, crearla inicializa el plugin)
+  late final GoogleSignIn? _googleSignIn = isConfigured
+      ? GoogleSignIn(
+          clientId: kIsWeb ? clientId : null,
+          scopes: [
+            'email',
+            'profile'
+          ],
+          signInOption: SignInOption.standard,
+        )
+      : null;
 
   /// Cuenta Google autenticada (botón oficial, One Tap o signIn en móvil).
   Stream<GoogleSignInAccount?> get onCurrentUserChanged =>
-      _googleSignIn.onCurrentUserChanged;
+      _googleSignIn?.onCurrentUserChanged ??
+      const Stream<GoogleSignInAccount?>.empty();
 
   /// ID token de Google de la cuenta: es lo que verifica el backend.
   Future<String?> getIdToken(GoogleSignInAccount account) async {
@@ -39,7 +53,7 @@ class GoogleAuthService {
 
     try {
 
-      await _googleSignIn.signIn();
+      await _googleSignIn?.signIn();
 
     } catch (e) {
 
@@ -54,7 +68,7 @@ class GoogleAuthService {
 
     try {
 
-      await _googleSignIn.signInSilently(
+      await _googleSignIn?.signInSilently(
         suppressErrors: true,
       );
 
@@ -68,7 +82,7 @@ class GoogleAuthService {
 
   Future<void> signOut() async {
     try {
-      await _googleSignIn.signOut();
+      await _googleSignIn?.signOut();
     } catch (_) {}
   }
 }
