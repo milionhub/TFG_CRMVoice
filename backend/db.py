@@ -1,7 +1,10 @@
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "crm.db"
+# Por defecto backend/crm.db. CRMVOICE_DB_PATH permite usar otra base de
+# datos (los tests la apuntan a una SQLite temporal).
+DB_PATH = Path(os.getenv("CRMVOICE_DB_PATH") or Path(__file__).parent / "crm.db")
 
 # Datos de referencia (no de demostración): son las acciones que devuelve
 # detect_action() en main.py y deben existir para poder resolver el tipo

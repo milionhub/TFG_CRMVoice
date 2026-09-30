@@ -1,4 +1,3 @@
-import whisper
 import tempfile
 import threading
 import logging
@@ -13,12 +12,23 @@ if shutil.which("ffmpeg") is None:
         "Instálalo y comprueba con 'ffmpeg -version'."
     )
 
-# Cargamos el modelo una sola vez (mejor rendimiento)
-model = whisper.load_model("base")
+# El modelo se carga una sola vez, en la primera transcripción (no al
+# importar): así importar el backend no carga torch ni descarga el modelo.
+_model = None
 
 # La transcripción se ejecuta fuera del event loop (threadpool);
-# serializamos el acceso al modelo compartido.
+# serializamos la carga y el acceso al modelo compartido.
 _model_lock = threading.Lock()
+
+
+def _get_model():
+    """Devuelve el modelo Whisper, cargándolo si hace falta. Llamar con _model_lock."""
+    global _model
+    if _model is None:
+        import whisper
+        _model = whisper.load_model("base")
+    return _model
+
 
 def transcribe_audio(audio_bytes: bytes, suffix: str = ".wav") -> str:
     """
@@ -31,7 +41,7 @@ def transcribe_audio(audio_bytes: bytes, suffix: str = ".wav") -> str:
 
     try:
         with _model_lock:
-            result = model.transcribe(temp_path, language="es")
+            result = _get_model().transcribe(temp_path, language="es")
         return result["text"]
     finally:
         os.remove(temp_path)

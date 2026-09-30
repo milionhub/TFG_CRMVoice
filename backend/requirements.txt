@@ -1,28 +1,12 @@
-# Dependencias directas del backend de CRMVoice.
+# Instalación completa del backend de CRMVoice (la que se usa para ejecutarlo).
 # Versiones fijadas a las del entorno probado (Python 3.11, Windows 11).
 # Las dependencias transitivas las resuelve pip.
 #
 # Requisito del sistema (no instalable con pip): FFmpeg en el PATH (lo usa Whisper).
 
-# --- API ---
-fastapi==0.124.0
-uvicorn[standard]==0.38.0
-python-multipart==0.0.20        # UploadFile / File en /process-audio
-pydantic==2.12.5
-python-dotenv==1.2.1
+# Todo el backend salvo la transcripción local
+-r requirements-core.txt
 
-# --- Autenticación ---
-python-jose==3.5.0              # JWT propios de CRMVoice
-passlib==1.7.4
-bcrypt==4.0.1                   # fijado: passlib 1.7.4 falla con bcrypt 4.1+ (aviso) y 5.x (error al hashear)
-google-auth==2.49.0             # verificación del ID token de Google
-requests==2.32.5                # transporte HTTP de google-auth (google.auth.transport.requests)
-
-# --- IA ---
-openai==2.24.0                  # embeddings, router de intención y resúmenes
+# --- Transcripción local ---
 openai-whisper==20250625        # transcripción local
 torch==2.10.0                   # la usa Whisper; ver README para la instalación solo-CPU
-numpy==2.3.5
-
-# --- Resolución de entidades ---
-rapidfuzz==3.14.3
