@@ -31,7 +31,12 @@ def get_activities(
 def create_activity(data: dict, current_user: dict = Depends(get_current_user)):
     # def (no async): FastAPI lo ejecuta en threadpool y la llamada
     # síncrona a OpenAI (embedding) no bloquea el event loop
-    return activities.create_activity(data, current_user["user_id"])
+    try:
+        return activities.create_activity(data, current_user["user_id"])
+    except activities.InvalidActivity as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except activities.DuplicateActivity as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 @router.post("/semantic-search")
@@ -55,3 +60,5 @@ def update_activity(activity_id: int, data: dict, current_user: dict = Depends(g
         return activities.update_activity(activity_id, data, current_user["user_id"])
     except activities.ActivityNotFound:
         raise HTTPException(status_code=404, detail="Actividad no encontrada")
+    except activities.InvalidActivity as error:
+        raise HTTPException(status_code=422, detail=str(error))

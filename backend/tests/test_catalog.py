@@ -187,3 +187,10 @@ def test_client_context_usuario_sin_actividades_en_el_cliente(client, make_user,
     assert ctx["total_activities"] == 0
     assert ctx["last_contact_date"] is None
     assert ctx["recent_activities"] == []
+
+
+def test_contacts_con_client_id_0_no_lista_todos(client, user_a, crm):
+    response = client.get("/contacts", headers=user_a["headers"], params={"client_id": 0})
+
+    assert response.status_code == 200
+    assert response.json() == {"contacts": []}

@@ -1,5 +1,5 @@
 """JWT propios de CRMVoice y hash de contraseñas (sin dependencias de FastAPI ni de la BD)."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -22,7 +22,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=config.access_token_expire_minutes())
+    expire = datetime.now(timezone.utc) + timedelta(minutes=config.access_token_expire_minutes())
     to_encode.update({"exp": expire})
 
     return jwt.encode(to_encode, config.secret_key(), algorithm=config.jwt_algorithm())

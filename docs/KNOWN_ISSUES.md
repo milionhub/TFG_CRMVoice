@@ -1,7 +1,7 @@
 # Deuda técnica conocida
 
-Backlog de problemas **abiertos** detectados durante la Fase D (tests + CI). Ninguno se ha
-corregido todavía; los ya resueltos (B1, B11, B14) no aparecen.
+Backlog de problemas **abiertos** detectados durante la Fase D (tests + CI). Los ya
+resueltos no aparecen: B1, B11 y B14 (Fase D) y B3, B6, B7, B10, B15 y B16 (Fase E).
 
 Donde existe, el test que describe el comportamiento deseado está marcado como `xfail`
 (backend, `strict=True`) o `skip` (frontend); al corregir el bug, ese test debe pasar a
@@ -11,14 +11,9 @@ Severidad: **IMPORTANT** (debe corregirse en su fase) · **MINOR** (mejora o rie
 
 ## E — Backend / refactor
 
-| ID | Resumen | Severidad |
-|---|---|---|
-| B3 / B10 | `POST /activities`: datos inválidos devuelven 200 + `{"error"}`, o un 500 (producto sin `product_id`, cliente inexistente); ante una excepción la conexión SQLite no se cierra. Contrato deseado: 4xx sin escribir nada (4 `xfail`) | IMPORTANT |
-| B6 | `/login` distingue "usuario no encontrado" de "password incorrecto" (enumeración); `/register` no valida email ni longitud de la contraseña | MINOR |
-| B7 | `PUT /activities/{id}` es una sustitución completa: los campos omitidos (`fecha`, `client_id`…) quedan en NULL | MINOR |
-| B15 | `/auth/google`: una carrera entre el `SELECT` y el `INSERT` produce un `IntegrityError` no controlado (500); la BD queda consistente (2 `xfail`) | MINOR |
-| B16 | El email se compara distinguiendo mayúsculas: Google crea una segunda cuenta en lugar de responder 409; `/register` tampoco normaliza (1 `xfail`) | MINOR |
-| — | `/chat` y el resto de endpoints aceptan JWT de usuarios ya borrados; `/auth/google` no devuelve `token_type`; `/contacts?client_id=0` lista todos | MINOR |
+Sin deuda abierta. Decisión de diseño (B7): `PUT /activities/{id}` es una sustitución
+completa; si falta `fecha`, `client_id`, `contact_id`, `activity_type_id` o `products`
+responde 422 (no hay `PATCH`). El `comentario` es opcional: si no se envía, se conserva.
 
 ## F — CRM / resolución de entidades
 
@@ -51,6 +46,7 @@ Severidad: **IMPORTANT** (debe corregirse en su fase) · **MINOR** (mejora o rie
 | FE-D7-03 | El botón de guardar no se deshabilita mientras guarda: posible doble envío (1 `skip`) | MINOR |
 | — | Horas: "10h" y "9h30" no se reconocen; cantidades en palabras se toman como hora ("a las dos clínicas" → 02:00); solo se entienden "y media", "y cuarto" y "menos cuarto"; "12 de la noche" → 12:00; el día de la semana tiene prioridad sobre una fecha explícita; una hora sin fecha se descarta | MINOR |
 | — | Whisper se carga en la primera transcripción: un fallo de carga aparece como 500 en esa petición, no al arrancar | MINOR |
+| — | `PUT /activities/{id}` no exige "contacto o tipo de actividad" como el alta: una edición puede dejar ambos en null | MINOR |
 
 ## I — Frontend / UI / UX
 
@@ -69,3 +65,5 @@ Severidad: **IMPORTANT** (debe corregirse en su fase) · **MINOR** (mejora o rie
 | Tests frontend: la guarda de `FakeBackend` solo cubre las peticiones hechas dentro de `backend.run`; sin tests de `rememberMe=false` en registro y Google, ni del timeout de `fetchMe`; la rama web de Google (`kIsWeb`) no se puede probar | MINOR |
 | Los widget tests dependen de textos e iconos concretos: habrá que actualizarlos con el rediseño de la Fase I | MINOR |
 | Tests backend: `test_infra.py` importa `conftest` directamente; dependencias transitivas sin fijar (aviso de deprecación de anyio) | MINOR |
+| Emails: la comparación sin mayúsculas usa `lower()` de SQLite, que solo pliega ASCII (una cuenta antigua con mayúsculas no ASCII no se reconocería); la unicidad sigue siendo la del texto guardado | MINOR |
+| Tres implementaciones de similitud coseno (`openai_service`, `semantic_search_service`, `/semantic-search`): unificarlas junto con la búsqueda del chat (Fase G) | MINOR |

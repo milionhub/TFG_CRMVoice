@@ -120,11 +120,11 @@ void main() {
     expect(jsonDecode(only('POST', '/activities').body), payload);
   });
 
-  test('createActivity: un {"error"} con 200 se devuelve tal cual (contrato actual del backend)', () async {
+  test('createActivity: un 4xx con {"detail"} se devuelve tal cual (sin excepción)', () async {
     final api = await authedApi();
-    backend.json('POST', '/activities', {"error": "Cliente obligatorio"});
+    backend.json('POST', '/activities', {"detail": "Cliente obligatorio"}, status: 422);
 
-    expect(await backend.run(() => api.createActivity({})), {"error": "Cliente obligatorio"});
+    expect(await backend.run(() => api.createActivity({})), {"detail": "Cliente obligatorio"});
   });
 
   test('createActivity: respuesta no JSON (500) lanza FormatException', () async {

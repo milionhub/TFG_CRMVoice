@@ -107,9 +107,9 @@ void main() {
             expect(find.byType(NewActivityScreen), findsNothing); // Navigator.pop
           }));
 
-  testWidgets('si el backend responde {"error"} se muestra el mensaje y no se cierra',
+  testWidgets('si el backend responde 422 {"detail"} se muestra el mensaje y no se cierra',
       (tester) => backend.run(() async {
-            backend.json('POST', '/activities', {"error": "Cliente obligatorio"});
+            backend.json('POST', '/activities', {"detail": "Cliente obligatorio"}, status: 422);
             await pumpNewActivity(tester, result: {...analysis, "cliente_id": null});
 
             await save(tester);
@@ -120,7 +120,7 @@ void main() {
           }));
 
   testWidgets('duplicado detectado por el backend se muestra como error', (tester) => backend.run(() async {
-        backend.json('POST', '/activities', {"error": "Actividad duplicada detectada", "similarity": 0.999});
+        backend.json('POST', '/activities', {"detail": "Actividad duplicada detectada"}, status: 409);
         await pumpNewActivity(tester);
 
         await save(tester);

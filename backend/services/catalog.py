@@ -53,11 +53,11 @@ def list_clients() -> list[dict]:
 
 
 def list_contacts(client_id: int | None = None) -> list[dict]:
-    """Contactos de un cliente o, sin client_id (o con 0), todos."""
+    """Contactos de un cliente o, sin client_id, todos (client_id=0 no es "todos")."""
     conn = get_connection()
     cursor = conn.cursor()
 
-    if client_id:
+    if client_id is not None:
         cursor.execute("""
             SELECT id, nombre
             FROM contacts

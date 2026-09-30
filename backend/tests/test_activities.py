@@ -162,49 +162,94 @@ def test_create_el_propietario_sale_del_token_no_del_body(client, user_a, user_b
 
 
 # ---------------------------------------------------------------------
-# CREATE: contratos dudosos (B3). NO se corrigen en este bloque.
-#
-# Contrato actual:
-#   - sin cliente, o sin contacto ni tipo  -> 200 {"error": "..."}
-#   - producto sin product_id              -> 500 (KeyError)
-#   - cliente_id inexistente               -> 500 (IntegrityError de la FK)
-# Contrato propuesto para una fase posterior: 422 (o 400) con un detail
-# claro, sin 500 y sin escribir nada. Los xfail(strict) fallarán en cuanto
-# se corrija B3, obligando a revisar el test.
-# Lo que SÍ se protege ya: una creación inválida no deja nada escrito.
+# CREATE inválido (B3): 422 con {"detail": "..."} y sin escribir nada.
+# Las validaciones de formato se hacen antes de llamar a OpenAI; una
+# referencia inexistente (FK) se detecta al insertar y se deshace todo.
 # ---------------------------------------------------------------------
 
 INVALID_CREATE_CASES = {
-    "sin_cliente": {"cliente_id": None},
-    "sin_contacto_ni_tipo": {"contacto_id": None, "activity_type_id": None},
-    "producto_sin_product_id": {"products_detected": [{"product_raw": "Monitor", "confidence": 90}]},
-    "cliente_inexistente": {"cliente_id": 99999},
+    "sin_cliente": ({"cliente_id": None}, "Cliente obligatorio"),
+    "sin_contacto_ni_tipo": ({"contacto_id": None, "activity_type_id": None},
+                             "Debe existir contacto o tipo de actividad"),
+    "producto_sin_product_id": ({"products_detected": [{"product_raw": "Monitor", "confidence": 90}]},
+                                "Cada producto debe indicar su product_id"),
+    "cliente_inexistente": ({"cliente_id": 99999},
+                            "Cliente, contacto, tipo de actividad o producto inexistente"),
 }
 
 
-@pytest.mark.parametrize("case", INVALID_CREATE_CASES)
-def test_create_invalido_no_escribe_nada(client_no_raise, user_a, catalog, fake_embedding, dbq, case):
-    payload = create_payload(catalog, **INVALID_CREATE_CASES[case])
-
-    response = client_no_raise.post("/activities", json=payload, headers=user_a["headers"])
-
-    # Hoy puede ser 200 + {"error"} o un 500 en texto plano (B3)
-    if response.status_code == 200:
-        assert response.json().get("success") is not True
+def assert_nothing_written(dbq):
     assert dbq.one("SELECT COUNT(*) AS n FROM activities")["n"] == 0
     assert dbq.one("SELECT COUNT(*) AS n FROM activity_products")["n"] == 0
     assert dbq.one("SELECT COUNT(*) AS n FROM activity_embeddings")["n"] == 0
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B3: hoy responde 200 + {'error': ...} o 500; contrato deseado 4xx")
 @pytest.mark.parametrize("case", INVALID_CREATE_CASES)
-def test_b3_create_invalido_deberia_responder_4xx(client_no_raise, user_a, catalog, fake_embedding, case):
-    payload = create_payload(catalog, **INVALID_CREATE_CASES[case])
+def test_b3_create_invalido_responde_422_con_detail_y_no_escribe_nada(client_no_raise, user_a, catalog,
+                                                                      fake_embedding, dbq, case):
+    overrides, detail = INVALID_CREATE_CASES[case]
+    payload = create_payload(catalog, **overrides)
 
     response = client_no_raise.post("/activities", json=payload, headers=user_a["headers"])
 
-    assert 400 <= response.status_code < 500
+    assert response.status_code == 422
+    assert response.json() == {"detail": detail}
+    assert_nothing_written(dbq)
+
+
+@pytest.mark.parametrize("case", ["sin_cliente", "sin_contacto_ni_tipo", "producto_sin_product_id"])
+def test_create_invalido_no_llama_a_openai(client, user_a, catalog, fake_embedding, case):
+    payload = create_payload(catalog, **INVALID_CREATE_CASES[case][0])
+
+    assert client.post("/activities", json=payload, headers=user_a["headers"]).status_code == 422
+    assert fake_embedding.calls == []
+
+
+@pytest.mark.parametrize("field", ["contacto_id", "activity_type_id"])
+def test_create_referencia_inexistente_422_y_rollback_completo(client, user_a, catalog, fake_embedding,
+                                                               dbq, field):
+    # El INSERT de la actividad falla por FK: no queda nada a medias
+    response = client.post("/activities", json=create_payload(catalog, **{field: 99999}),
+                           headers=user_a["headers"])
+
+    assert response.status_code == 422
+    assert_nothing_written(dbq)
+
+
+def test_create_producto_inexistente_422_y_deshace_la_actividad(client, user_a, catalog, fake_embedding, dbq):
+    # La actividad se inserta antes que el producto: la transacción debe deshacerla
+    payload = create_payload(catalog, products_detected=[
+        {"product_id": catalog["monitor"], "product_raw": "Monitor Test 24", "confidence": 95},
+        {"product_id": 99999, "product_raw": "No existe", "confidence": 90},
+    ])
+
+    response = client.post("/activities", json=payload, headers=user_a["headers"])
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Cliente, contacto, tipo de actividad o producto inexistente"}
+    assert_nothing_written(dbq)
+
+
+def test_create_duplicada_409_sin_escribir(client, user_a, catalog, fake_embedding, monkeypatch, dbq):
+    from services import openai_service
+    monkeypatch.setattr(openai_service, "is_duplicate_activity", lambda *args, **kwargs: (True, 0.998))
+
+    response = client.post("/activities", json=create_payload(catalog), headers=user_a["headers"])
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Actividad duplicada detectada"}
+    assert_nothing_written(dbq)
+
+
+def test_create_producto_sin_product_raw_ni_confidence_se_guarda(client, user_a, catalog, fake_embedding, dbq):
+    payload = create_payload(catalog, products_detected=[{"product_id": catalog["licencia"]}])
+
+    response = client.post("/activities", json=payload, headers=user_a["headers"])
+
+    assert response.status_code == 200
+    assert dbq.activity_products(response.json()["activity_id"]) == [
+        {"product_id": catalog["licencia"], "product_raw": None},
+    ]
 
 
 # =====================================================================
@@ -392,6 +437,147 @@ def test_update_actividad_inexistente_404(client, user_a, catalog, fake_embeddin
     response = client.put("/activities/99999", json=update_payload(catalog, []), headers=user_a["headers"])
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------
+# UPDATE incompleto (B7): PUT es una sustitución completa. Si falta un campo
+# no se pone a NULL: 422 y la actividad queda intacta. El comentario es
+# opcional (si no se envía se conserva).
+# ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("missing", ["fecha", "client_id", "contact_id", "activity_type_id", "products"])
+def test_b7_update_sin_un_campo_obligatorio_422_sin_cambios(client, user_a, catalog, a_activity,
+                                                            fake_embedding, dbq, missing):
+    before = activity_state(dbq, a_activity)
+    payload = update_payload(catalog, [])
+    del payload[missing]
+
+    response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": f"Faltan campos obligatorios: {missing}"}
+    assert activity_state(dbq, a_activity) == before
+    assert fake_embedding.calls == []
+
+
+@pytest.mark.parametrize("field,value,detail", [
+    ("fecha", None, "Fecha obligatoria"),
+    ("fecha", "", "Fecha obligatoria"),
+    ("client_id", None, "Cliente obligatorio"),
+    ("products", None, "products debe ser una lista de productos"),
+    ("products", ["no-es-un-objeto"], "products debe ser una lista de productos"),
+])
+def test_b7_update_con_valor_obligatorio_nulo_o_invalido_422(client, user_a, catalog, a_activity,
+                                                             fake_embedding, dbq, field, value, detail):
+    before = activity_state(dbq, a_activity)
+    payload = {**update_payload(catalog, []), field: value}
+
+    response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": detail}
+    assert activity_state(dbq, a_activity) == before
+
+
+def test_b7_update_contacto_y_tipo_null_explicito_se_aceptan(client, user_a, catalog, a_activity,
+                                                            fake_embedding, dbq):
+    payload = {**update_payload(catalog, []), "contact_id": None, "activity_type_id": None}
+
+    response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
+
+    assert response.json() == {"success": True}
+    stored = dbq.activity(a_activity)
+    assert stored["contact_id"] is None and stored["activity_type_id"] is None
+
+
+def test_b7_update_incompleto_de_otro_usuario_es_404_no_422(client, user_b, catalog, a_activity,
+                                                            fake_embedding, dbq):
+    """La propiedad se comprueba antes que el payload: B no averigua nada."""
+    before = activity_state(dbq, a_activity)
+
+    response = client.put(f"/activities/{a_activity}", json={"fecha": "2030-01-01"},
+                          headers=user_b["headers"])
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Actividad no encontrada"}
+    assert activity_state(dbq, a_activity) == before
+
+
+def test_update_referencia_inexistente_422_sin_cambios(client, user_a, catalog, a_activity,
+                                                       fake_embedding, dbq):
+    before = activity_state(dbq, a_activity)
+    payload = update_payload(catalog, [{"id": 99999, "name": "No existe"}])
+
+    response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Cliente, contacto, tipo de actividad o producto inexistente"}
+    assert activity_state(dbq, a_activity) == before
+
+
+# ---------------------------------------------------------------------
+# B10: ninguna conexión queda abierta, tampoco en los caminos de error
+# ---------------------------------------------------------------------
+
+class _TrackedConnection:
+    """Proxy de la conexión real que registra si se ha llamado a close()."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+@pytest.fixture
+def opened_connections(monkeypatch):
+    import db
+    opened = []
+    real_get_connection = db.get_connection
+
+    def tracking():
+        conn = _TrackedConnection(real_get_connection())
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(db, "get_connection", tracking)
+    return opened
+
+
+def assert_all_closed(connections):
+    assert connections
+    assert all(conn.closed for conn in connections)
+
+
+@pytest.mark.parametrize("scenario", ["create_ok", "create_fk", "update_ok", "update_fk", "update_incompleto",
+                                      "delete_ok", "delete_404", "list"])
+def test_b10_las_conexiones_se_cierran_siempre(client, user_a, catalog, a_activity, fake_embedding,
+                                               opened_connections, scenario):
+    headers = user_a["headers"]
+    requests = {
+        "create_ok": lambda: client.post("/activities", json=create_payload(catalog), headers=headers),
+        "create_fk": lambda: client.post("/activities", json=create_payload(catalog, cliente_id=99999),
+                                         headers=headers),
+        "update_ok": lambda: client.put(f"/activities/{a_activity}", json=update_payload(catalog, []),
+                                        headers=headers),
+        "update_fk": lambda: client.put(f"/activities/{a_activity}",
+                                        json={**update_payload(catalog, []), "client_id": 99999},
+                                        headers=headers),
+        "update_incompleto": lambda: client.put(f"/activities/{a_activity}", json={}, headers=headers),
+        "delete_ok": lambda: client.delete(f"/activities/{a_activity}", headers=headers),
+        "delete_404": lambda: client.delete("/activities/99999", headers=headers),
+        "list": lambda: client.get("/activities", headers=headers),
+    }
+
+    response = requests[scenario]()
+
+    assert response.status_code in (200, 404, 422)
+    assert_all_closed(opened_connections)
 
 
 # =====================================================================

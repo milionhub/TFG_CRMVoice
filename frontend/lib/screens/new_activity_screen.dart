@@ -425,9 +425,12 @@ class _NewActivityScreenState extends State<NewActivityScreen> {
 
                     if (!context.mounted) return;
 
+                    // 4xx del backend: {"detail": "motivo"}
+                    final detail = response["detail"];
+
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(response["error"] ?? "Error guardando actividad"),
+                        content: Text(detail is String ? detail : "Error guardando actividad"),
                         backgroundColor: Colors.red,
                       ),
                     );

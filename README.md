@@ -276,6 +276,7 @@ No usa secretos ni servicios externos.
 | No aparece el botón de Google | Falta `GOOGLE_CLIENT_ID` en el frontend (`dart_defines.json` o `--dart-define`) |
 | El botón de Google da error / "origin is not allowed" | El origen (host y puerto exactos) no está autorizado en Google Cloud. Usa `--web-port 5000` y autoriza `http://localhost:5000` |
 | "Error con Google Login" | Mira el log del backend: 503 si falta `GOOGLE_CLIENT_ID` en `backend/.env`; 401 si el Client ID del backend no coincide con el del frontend |
+| Tras borrar o recrear `crm.db`, todo falla con 401 "Token inválido" | La sesión guardada es de un usuario que ya no existe: cierra sesión y vuelve a registrarte o a entrar |
 | La app no conecta con el backend | Revisa `API_BASE_URL`. Desde otro dispositivo usa la IP del PC y arranca el backend con `--host 0.0.0.0` |
 
 ---

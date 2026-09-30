@@ -2,9 +2,10 @@
 AUTH (P0): registro, login, JWT, /me y protección de endpoints.
 
 Notas de contrato:
-- Los mensajes de error de /login NO se fijan (solo el 401): distinguen
-  "usuario no encontrado" de "password incorrecto" (enumeración, B6) y está
-  previsto unificarlos.
+- /login responde el mismo 401 y el mismo mensaje si el email no existe, si
+  la contraseña no coincide o si la cuenta es solo de Google (B6).
+- /register exige un email con formato válido y una contraseña de al menos 6
+  caracteres (422). El email se compara sin distinguir mayúsculas (B16).
 - Sin cabecera Authorization, HTTPBearer (FastAPI 0.124) responde 401
   "Not authenticated" con WWW-Authenticate: Bearer. Es el comportamiento real
   de la versión fijada en requirements; se protege tal cual.
@@ -224,3 +225,151 @@ def test_endpoint_protegido_con_token_invalido_401(client, method, path, jwt_fac
 def test_endpoints_publicos_no_exigen_token(client):
     assert client.get("/").status_code == 200
     assert client.get("/ping").status_code == 200
+
+
+# ---------------------------------------------------------------------
+# B6: login sin enumeración de usuarios y registro validado
+# ---------------------------------------------------------------------
+
+def test_b6_login_mismo_401_y_mensaje_para_email_inexistente_password_mala_y_cuenta_google(client, user_a,
+                                                                                         make_user):
+    google_only = make_user("solo.google@test.local", with_password=False, google_id="google-sub-b6")
+
+    responses = [
+        client.post("/login", json={"email": "nadie@test.local", "password": "loquesea"}),
+        client.post("/login", json={"email": user_a["email"], "password": "no-es-esta"}),
+        client.post("/login", json={"email": google_only["email"], "password": "cualquiera"}),
+    ]
+
+    assert [r.status_code for r in responses] == [401, 401, 401]
+    assert all(r.json() == {"detail": "Email o contraseña incorrectos"} for r in responses)
+
+
+def test_b6_login_de_email_inexistente_tambien_verifica_un_hash(client, monkeypatch):
+    """Sin cuenta se ejecuta igualmente bcrypt: el tiempo no delata si el email existe."""
+    from api.routers import auth as auth_router
+    calls = []
+    real_verify = auth_router.verify_password
+
+    def counting_verify(password, hashed):
+        calls.append(password)
+        return real_verify(password, hashed)
+
+    monkeypatch.setattr(auth_router, "verify_password", counting_verify)
+
+    response = client.post("/login", json={"email": "nadie@test.local", "password": "loquesea"})
+
+    assert response.status_code == 401
+    assert calls == ["loquesea"]
+
+
+@pytest.mark.parametrize("email", ["", "sin-arroba", "dos@@test.local", "a@b", "con espacio@test.local", "@test.local"])
+def test_b6_register_email_no_valido_422_sin_crear_usuario(client, dbq, email):
+    response = client.post("/register", json={"nombre": "X", "email": email, "password": "Secreta-123"})
+
+    assert response.status_code == 422
+    assert dbq.one("SELECT COUNT(*) AS n FROM salespeople")["n"] == 0
+
+
+@pytest.mark.parametrize("password", ["", "12345"])
+def test_b6_register_password_corta_422_sin_crear_usuario(client, dbq, password):
+    response = client.post("/register", json={"nombre": "X", "email": "corta@test.local", "password": password})
+
+    assert response.status_code == 422
+    assert "al menos 6 caracteres" in response.text
+    assert dbq.one("SELECT COUNT(*) AS n FROM salespeople")["n"] == 0
+
+
+def test_b6_register_password_de_6_caracteres_es_valida(client):
+    response = client.post("/register", json={"nombre": "X", "email": "seis@test.local", "password": "123456"})
+
+    assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------
+# B16: el email identifica la cuenta sin distinguir mayúsculas
+# ---------------------------------------------------------------------
+
+def test_b16_register_guarda_el_email_normalizado(client, dbq):
+    response = client.post("/register", json={
+        "nombre": "Ana", "email": "  Ana.Mayus@Test.Local ", "password": "Secreta-123",
+    })
+
+    assert response.status_code == 200
+    assert dbq.one("SELECT email FROM salespeople")["email"] == "ana.mayus@test.local"
+
+
+@pytest.mark.parametrize("variant", ["USER@TEST.LOCAL", "User@Test.Local", " user@test.local "])
+def test_b16_register_duplicado_con_otro_casing_400(client, make_user, dbq, variant):
+    make_user("user@test.local")
+
+    response = client.post("/register", json={"nombre": "Otro", "email": variant, "password": "Secreta-123"})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "El email ya está registrado"}
+    assert dbq.one("SELECT COUNT(*) AS n FROM salespeople")["n"] == 1
+
+
+def test_b16_register_duplicado_de_cuenta_antigua_con_mayusculas_400(client, make_user, dbq):
+    make_user("Antigua@Test.Local")  # guardada antes de normalizar
+
+    response = client.post("/register", json={"nombre": "Otro", "email": "antigua@test.local",
+                                               "password": "Secreta-123"})
+
+    assert response.status_code == 400
+    assert dbq.one("SELECT COUNT(*) AS n FROM salespeople")["n"] == 1
+
+
+@pytest.mark.parametrize("stored,typed", [
+    ("user@test.local", "USER@test.local"),
+    ("Antigua@Test.Local", "antigua@test.local"),  # cuenta histórica con mayúsculas
+    ("user@test.local", " user@test.local "),
+])
+def test_b16_login_sin_distinguir_mayusculas(client, make_user, stored, typed):
+    user = make_user(stored)
+
+    response = client.post("/login", json={"email": typed, "password": user["password"]})
+
+    assert response.status_code == 200
+    assert response.json()["user"]["id"] == user["id"]
+
+
+def test_register_carrera_con_el_mismo_email_400_sin_500(client, make_user, monkeypatch, dbq):
+    """Otra petición registra el email entre la comprobación y el INSERT."""
+    from services import accounts
+    make_user("carrera@test.local")
+    monkeypatch.setattr(accounts, "email_exists", lambda email: False)
+
+    response = client.post("/register", json={"nombre": "X", "email": "carrera@test.local",
+                                               "password": "Secreta-123"})
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "El email ya está registrado"}
+    assert dbq.one("SELECT COUNT(*) AS n FROM salespeople")["n"] == 1
+
+
+# ---------------------------------------------------------------------
+# JWT de un comercial que ya no existe
+# ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("method,path", [("GET", "/me"), ("GET", "/activities"), ("GET", "/clients")])
+def test_jwt_valido_de_usuario_borrado_401(client, user_a, dbq, method, path):
+    import db
+    conn = db.get_connection()
+    conn.execute("DELETE FROM salespeople WHERE id = ?", (user_a["id"],))
+    conn.commit()
+    conn.close()
+
+    response = client.request(method, path, headers=user_a["headers"])
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Token inválido"}
+
+
+@pytest.mark.parametrize("sub", ["no-es-un-numero", "0"])
+def test_jwt_con_sub_no_valido_401(client, jwt_factory, sub):
+    token = jwt_factory(sub, "x@test.local")
+
+    response = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401

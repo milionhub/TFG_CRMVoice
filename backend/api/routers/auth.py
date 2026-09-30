@@ -1,5 +1,6 @@
 """Autenticación: login/registro con contraseña, /me y login con Google."""
 import logging
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException
 from google.auth import exceptions as google_auth_exceptions
@@ -17,31 +18,44 @@ logger = logging.getLogger("crmvoice")
 router = APIRouter(tags=["auth"])
 
 
+# Mismo 401 y mismo mensaje si el email no existe, si la cuenta es solo de
+# Google o si la contraseña no coincide (B6: sin enumeración de usuarios)
+INVALID_CREDENTIALS = "Email o contraseña incorrectos"
+
+
+@lru_cache(maxsize=1)
+def _dummy_password_hash() -> str:
+    # Se verifica contra este hash cuando no hay uno real, para que el tiempo
+    # de respuesta no delate si el email existe
+    return hash_password("crmvoice-dummy-password-sin-cuenta")
+
+
+def _password_matches(password: str, stored_hash: str | None, user_id=None) -> bool:
+    if not stored_hash:
+        verify_password(password, _dummy_password_hash())
+        return False
+
+    try:
+        return verify_password(password, stored_hash)
+    except Exception:
+        logger.exception("Hash de contraseña no válido para el usuario %s", user_id)
+        return False
+
+
 @router.post("/login")
 def login(request: LoginRequest):
 
     user = accounts.find_by_email(request.email)
 
-    if not user:
-        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+    # Sin cuenta, o cuenta creada con Google (sin password_hash): nunca coincide
+    stored_hash = user[3] if user else None
+
+    if not _password_matches(request.password, stored_hash, user[0] if user else None):
+        raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
 
     user_id = user[0]
     nombre = user[1]
     user_email = user[2]
-    stored_hash = user[3]
-
-    # Usuarios creados con Google no tienen password_hash
-    if not stored_hash:
-        raise HTTPException(status_code=401, detail="Password incorrecto")
-
-    try:
-        password_ok = verify_password(request.password, stored_hash)
-    except Exception:
-        logger.exception("Hash de contraseña no válido para el usuario %s", user_id)
-        password_ok = False
-
-    if not password_ok:
-        raise HTTPException(status_code=401, detail="Password incorrecto")
 
     token = create_access_token({
         "sub": str(user_id),
@@ -62,20 +76,23 @@ def login(request: LoginRequest):
 @router.post("/register")
 def register(request: RegisterRequest):
 
-    if accounts.email_exists(request.email):
-        raise HTTPException(
-            status_code=400,
-            detail="El email ya está registrado"
-        )
+    email = accounts.normalize_email(request.email)
+    email_registered = HTTPException(status_code=400, detail="El email ya está registrado")
+
+    if accounts.email_exists(email):
+        raise email_registered
 
     password_hash = hash_password(request.password)
 
-    user_id = accounts.create_password_account(request.nombre, request.email, password_hash)
+    try:
+        user_id = accounts.create_password_account(request.nombre, email, password_hash)
+    except accounts.EmailAlreadyRegistered:
+        raise email_registered
 
     # Crear token automáticamente
     token = create_access_token({
         "sub": str(user_id),
-        "email": request.email
+        "email": email
     })
 
     return {
@@ -160,6 +177,7 @@ def google_login(data: dict):
 
     return {
         "access_token": jwt_token,
+        "token_type": "bearer",
         "user": {
             "id": user["id"],
             "nombre": user["nombre"],

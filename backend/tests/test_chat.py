@@ -179,16 +179,15 @@ def test_sin_token_no_se_llama_a_openai(client, openai_fake):
     assert openai_fake.calls == []
 
 
-def test_token_de_usuario_inexistente_entra_en_el_flujo(client, openai_fake, jwt_factory):
-    """
-    Caracterización: /chat no comprueba que el comercial exista (solo firma y
-    exp del JWT); la memoria se indexa igualmente por ese id.
-    """
+def test_token_de_usuario_inexistente_401_sin_llamar_a_openai(client, openai_fake, jwt_factory):
+    """Un JWT bien firmado de un comercial que ya no existe no entra en el chat."""
     token = jwt_factory(987654, "borrado@test.local")
 
     response = client.post("/chat", json={"message": "hola"}, headers={"Authorization": f"Bearer {token}"})
 
-    assert response.status_code == 200
+    assert response.status_code == 401
+    assert openai_fake.calls == []
+    assert chat_memory._last_client_by_user == {} and chat_memory._pending_intent_by_user == {}
 
 
 # =====================================================================

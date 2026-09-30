@@ -3,17 +3,19 @@ Actividades del comercial: listado con filtros, alta (embedding, duplicados,
 productos), edición, borrado y la búsqueda semántica de /semantic-search.
 
 Todas las consultas se limitan al comercial (salesperson_id) recibido.
-Sin FastAPI: los routers traducen ActivityNotFound a 404.
+Sin FastAPI: los routers traducen ActivityNotFound (404), InvalidActivity
+(422) y DuplicateActivity (409) a HTTP.
 
-Nota: el alta y la edición conservan de momento su gestión manual de la
-conexión (B3/B10, se revisará en la fase de deuda).
+Las conexiones usan db.connection(): commit si todo va bien, rollback ante
+cualquier excepción y cierre siempre.
 """
 import json
 import logging
+import sqlite3
 
 import numpy as np
 
-from db import get_connection
+from db import connection
 from services.openai_service import generate_embedding
 
 logger = logging.getLogger("crmvoice")
@@ -23,6 +25,30 @@ class ActivityNotFound(Exception):
     """La actividad no existe o no pertenece al comercial."""
 
 
+class InvalidActivity(ValueError):
+    """Datos de la actividad incompletos o que referencian entidades inexistentes."""
+
+
+class DuplicateActivity(Exception):
+    """Ya existe una actividad prácticamente idéntica."""
+
+    def __init__(self, similarity: float):
+        super().__init__("Actividad duplicada detectada")
+        self.similarity = similarity
+
+
+MISSING_REFERENCE_MESSAGE = "Cliente, contacto, tipo de actividad o producto inexistente"
+
+# PUT /activities/{id} es una sustitución completa (B7): estos campos deben
+# venir siempre (contact_id y activity_type_id pueden ser null explícito).
+# El comentario es opcional: si no se envía se conserva (el calendario no lo edita).
+UPDATE_REQUIRED_FIELDS = ("fecha", "client_id", "contact_id", "activity_type_id", "products")
+
+
+def _is_missing_reference(error: sqlite3.IntegrityError) -> bool:
+    return "FOREIGN KEY constraint failed" in str(error)
+
+
 def list_activities(
     salesperson_id: int,
     client_id: int | None = None,
@@ -30,9 +56,6 @@ def list_activities(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict:
-    conn = get_connection()
-    cursor = conn.cursor()
-
     base_query = """
         SELECT
             a.id,
@@ -75,50 +98,51 @@ def list_activities(
 
     base_query += " ORDER BY a.datetime_iso DESC"
 
-    cursor.execute(base_query, params)
-    rows = cursor.fetchall()
     activities = []
 
-    for r in rows:
+    with connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(base_query, params)
+        rows = cursor.fetchall()
 
-        # 🔹 Obtener productos de la actividad
-        cursor.execute("""
-            SELECT product_id, product_raw
-            FROM activity_products
-            WHERE activity_id = ?
-        """, (r["id"],))
+        for r in rows:
 
-        product_rows = cursor.fetchall()
+            # 🔹 Obtener productos de la actividad
+            cursor.execute("""
+                SELECT product_id, product_raw
+                FROM activity_products
+                WHERE activity_id = ?
+            """, (r["id"],))
 
-        # product_id es necesario para que la edición conserve los productos
-        products = [
-            {
-                "product_id": p["product_id"],
-                "product_raw": p["product_raw"]
-            }
-            for p in product_rows
-        ]
+            product_rows = cursor.fetchall()
 
-        activities.append({
-            "id": r["id"],
-            "fecha": r["datetime_iso"],
+            # product_id es necesario para que la edición conserve los productos
+            products = [
+                {
+                    "product_id": p["product_id"],
+                    "product_raw": p["product_raw"]
+                }
+                for p in product_rows
+            ]
 
-            # 🔹 IDs reales
-            "client_id": r["client_id"],
-            "contact_id": r["contact_id"],
-            "activity_type_id": r["activity_type_id"],
+            activities.append({
+                "id": r["id"],
+                "fecha": r["datetime_iso"],
 
-            # 🔹 Datos visibles
-            "cliente": r["cliente"],
-            "contacto": r["contacto"],
-            "accion": r["accion"],
-            "comentario": r["comentario"],
-            "resolution_status": r["resolution_status"],
+                # 🔹 IDs reales
+                "client_id": r["client_id"],
+                "contact_id": r["contact_id"],
+                "activity_type_id": r["activity_type_id"],
 
-            "products": products
-        })
+                # 🔹 Datos visibles
+                "cliente": r["cliente"],
+                "contacto": r["contacto"],
+                "accion": r["accion"],
+                "comentario": r["comentario"],
+                "resolution_status": r["resolution_status"],
 
-    conn.close()
+                "products": products
+            })
 
     return {
         "count": len(activities),
@@ -128,17 +152,24 @@ def list_activities(
 
 def create_activity(data: dict, salesperson_id: int) -> dict:
     # -------------------------------
-    # 1️⃣ Validación mínima
+    # 1️⃣ Validación (antes de llamar a OpenAI o escribir nada)
     # -------------------------------
     client_id = data.get("cliente_id")
     contact_id = data.get("contacto_id")
     activity_type_id = data.get("activity_type_id")
 
     if not client_id:
-        return {"error": "Cliente obligatorio"}
+        raise InvalidActivity("Cliente obligatorio")
 
     if not (contact_id or activity_type_id):
-        return {"error": "Debe existir contacto o tipo de actividad"}
+        raise InvalidActivity("Debe existir contacto o tipo de actividad")
+
+    products = data.get("products_detected") or []
+
+    if not isinstance(products, list) or any(
+        not isinstance(p, dict) or p.get("product_id") is None for p in products
+    ):
+        raise InvalidActivity("Cada producto debe indicar su product_id")
 
     # -------------------------------
     # 2️⃣ Generar embedding
@@ -151,8 +182,8 @@ def create_activity(data: dict, salesperson_id: int) -> dict:
 
     try:
         vector = generate_embedding(embedding_text)
-    except Exception as e:
-        print("Error generando embedding:", e)
+    except Exception:
+        logger.exception("Error generando el embedding de la actividad")
         vector = None
 
     # -------------------------------
@@ -169,10 +200,7 @@ def create_activity(data: dict, salesperson_id: int) -> dict:
         )
 
         if is_dup:
-            return {
-                "error": "Actividad duplicada detectada",
-                "similarity": similarity_score
-            }
+            raise DuplicateActivity(similarity_score)
 
 
     fecha = data.get("fecha_detectada")
@@ -183,88 +211,88 @@ def create_activity(data: dict, salesperson_id: int) -> dict:
         from datetime import datetime
         datetime_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
-    # -------------------------------
-    # 4️⃣ Insert activity
-    # -------------------------------
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        with connection() as conn:
+            cursor = conn.cursor()
 
-    cursor.execute("""
-        INSERT INTO activities (
-            datetime_iso,
-            client_id,
-            contact_id,
-            activity_type_id,
-            comentario,
-            transcripcion,
-            cliente_raw,
-            contacto_raw,
-            accion_raw,
-            resolution_status,
-            resolution_confidence,
-            salesperson_id
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        datetime_iso,
-        client_id,
-        contact_id,
-        activity_type_id,
-        data.get("texto"),
-        data.get("texto"),
-        data.get("cliente_detectado"),
-        data.get("contacto_detectado"),
-        data.get("accion_detectada"),
-        data.get("resolution_status"),
-        data.get("overall_confidence"),
-        salesperson_id,
-    ))
+            # -------------------------------
+            # 4️⃣ Insert activity
+            # -------------------------------
+            cursor.execute("""
+                INSERT INTO activities (
+                    datetime_iso,
+                    client_id,
+                    contact_id,
+                    activity_type_id,
+                    comentario,
+                    transcripcion,
+                    cliente_raw,
+                    contacto_raw,
+                    accion_raw,
+                    resolution_status,
+                    resolution_confidence,
+                    salesperson_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime_iso,
+                client_id,
+                contact_id,
+                activity_type_id,
+                data.get("texto"),
+                data.get("texto"),
+                data.get("cliente_detectado"),
+                data.get("contacto_detectado"),
+                data.get("accion_detectada"),
+                data.get("resolution_status"),
+                data.get("overall_confidence"),
+                salesperson_id,
+            ))
 
-    activity_id = cursor.lastrowid
+            activity_id = cursor.lastrowid
 
-    # -------------------------------
-    # 5️⃣ Guardar productos
-    # -------------------------------
+            # -------------------------------
+            # 5️⃣ Guardar productos
+            # -------------------------------
+            for p in products:
+                cursor.execute("""
+                    INSERT INTO activity_products (
+                        activity_id,
+                        product_id,
+                        product_raw,
+                        confidence_score
+                    )
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    activity_id,
+                    p["product_id"],
+                    p.get("product_raw"),
+                    p.get("confidence")
+                ))
 
-    products = data.get("products_detected", [])
+            # -------------------------------
+            # 6️⃣ Guardar embedding
+            # -------------------------------
+            if vector:
+                cursor.execute("""
+                    INSERT INTO activity_embeddings (
+                        activity_id,
+                        embedding_vector,
+                        embedding_model,
+                        content_type
+                    )
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    activity_id,
+                    json.dumps(vector),
+                    "text-embedding-3-small",
+                    "activity_full"
+                ))
 
-    for p in products:
-        cursor.execute("""
-            INSERT INTO activity_products (
-                activity_id,
-                product_id,
-                product_raw,
-                confidence_score
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            activity_id,
-            p["product_id"],
-            p["product_raw"],
-            p["confidence"]
-        ))
-
-    # -------------------------------
-    # 6️⃣ Guardar embedding
-    # -------------------------------
-    if vector:
-        cursor.execute("""
-            INSERT INTO activity_embeddings (
-                activity_id,
-                embedding_vector,
-                embedding_model,
-                content_type
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            activity_id,
-            json.dumps(vector),
-            "text-embedding-3-small",
-            "activity_full"
-        ))
-
-    conn.commit()
-    conn.close()
+    except sqlite3.IntegrityError as error:
+        if _is_missing_reference(error):
+            raise InvalidActivity(MISSING_REFERENCE_MESSAGE) from error
+        raise
 
     return {
         "success": True,
@@ -282,18 +310,14 @@ def semantic_search(query_text: str, salesperson_id: int) -> list[dict]:
     query_vector = generate_embedding(query_text)
     query_vector = np.array(query_vector)
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
     # 2️⃣ Obtener todos los embeddings almacenados
-    cursor.execute("""
-        SELECT ae.activity_id, ae.embedding_vector, a.datetime_iso, a.cliente_raw, a.comentario
-        FROM activity_embeddings ae
-        JOIN activities a ON a.id = ae.activity_id
-        WHERE a.salesperson_id = ?
-    """, (salesperson_id,))
-
-    rows = cursor.fetchall()
+    with connection() as conn:
+        rows = conn.execute("""
+            SELECT ae.activity_id, ae.embedding_vector, a.datetime_iso, a.cliente_raw, a.comentario
+            FROM activity_embeddings ae
+            JOIN activities a ON a.id = ae.activity_id
+            WHERE a.salesperson_id = ?
+        """, (salesperson_id,)).fetchall()
 
     results = []
 
@@ -314,8 +338,6 @@ def semantic_search(query_text: str, salesperson_id: int) -> list[dict]:
             "score_similitud": float(similarity)
         })
 
-    conn.close()
-
     # 4️⃣ Ordenar por similitud descendente
     results = sorted(results, key=lambda x: x["score_similitud"], reverse=True)
 
@@ -326,10 +348,9 @@ def semantic_search(query_text: str, salesperson_id: int) -> list[dict]:
 def delete_activity(activity_id: int, salesperson_id: int) -> None:
     """Borra la actividad del comercial con sus productos y embedding."""
 
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
+    # ActivityNotFound dentro del bloque -> rollback (no se confirma nada)
+    with connection() as conn:
+        cursor = conn.cursor()
 
         # 🔹 Comprobar propiedad antes de tocar ningún dato relacionado
         cursor.execute("""
@@ -350,57 +371,73 @@ def delete_activity(activity_id: int, salesperson_id: int) -> None:
 
         # Solo confirmamos si realmente se ha eliminado la actividad
         if cursor.rowcount != 1:
-            conn.rollback()
             raise ActivityNotFound()
 
-        conn.commit()
 
-    finally:
-        conn.close()
+def _validate_update(data: dict) -> None:
+    """PUT = sustitución completa (B7): un payload incompleto no pone campos a NULL."""
+    missing = [field for field in UPDATE_REQUIRED_FIELDS if field not in data]
+
+    if missing:
+        raise InvalidActivity("Faltan campos obligatorios: " + ", ".join(missing))
+
+    if not data.get("fecha"):
+        raise InvalidActivity("Fecha obligatoria")
+
+    if not data.get("client_id"):
+        raise InvalidActivity("Cliente obligatorio")
+
+    products = data.get("products")
+
+    if not isinstance(products, list) or any(not isinstance(p, dict) for p in products):
+        raise InvalidActivity("products debe ser una lista de productos")
 
 
 def update_activity(activity_id: int, data: dict, salesperson_id: int) -> dict:
     """Sustitución completa de la actividad del comercial (B7) y de sus productos."""
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    with connection() as conn:
+        cursor = conn.cursor()
 
-    # 🔹 Comprobar propiedad y obtener comentario actual
-    # (antes de borrar/insertar productos o actualizar nada)
-    cursor.execute("""
-        SELECT comentario FROM activities
-        WHERE id = ? AND salesperson_id = ?
-    """, (activity_id, salesperson_id))
+        # 🔹 Comprobar propiedad y obtener comentario actual
+        # (antes de validar, borrar/insertar productos o actualizar nada)
+        cursor.execute("""
+            SELECT comentario FROM activities
+            WHERE id = ? AND salesperson_id = ?
+        """, (activity_id, salesperson_id))
 
-    row = cursor.fetchone()
+        row = cursor.fetchone()
 
-    if row is None:
-        conn.close()
-        raise ActivityNotFound()
+        if row is None:
+            raise ActivityNotFound()
 
-    comentario_actual = row["comentario"]
+        _validate_update(data)
 
-    comentario = data.get("comentario", comentario_actual)
+        comentario_actual = row["comentario"]
 
-    # 🔹 Si cambia el comentario, el embedding queda obsoleto.
-    # Se genera ANTES de escribir nada (llamada de red fuera de la transacción).
-    comentario_cambiado = comentario != comentario_actual
-    new_vector = None
+        comentario = data.get("comentario", comentario_actual)
 
-    if comentario_cambiado:
+        # 🔹 Si cambia el comentario, el embedding queda obsoleto.
+        comentario_cambiado = comentario != comentario_actual
 
-        cursor.execute("SELECT razon_social FROM clients WHERE id = ?", (data.get("client_id"),))
-        client_row = cursor.fetchone()
+        if comentario_cambiado:
 
-        cursor.execute("SELECT accion FROM activity_types WHERE id = ?", (data.get("activity_type_id"),))
-        type_row = cursor.fetchone()
+            cursor.execute("SELECT razon_social FROM clients WHERE id = ?", (data.get("client_id"),))
+            client_row = cursor.fetchone()
 
-        embedding_text = f"""
+            cursor.execute("SELECT accion FROM activity_types WHERE id = ?", (data.get("activity_type_id"),))
+            type_row = cursor.fetchone()
+
+            embedding_text = f"""
     Cliente: {client_row["razon_social"] if client_row else None}
     Acción: {type_row["accion"] if type_row else None}
     Comentario: {comentario}
     """
 
+    # Se genera ANTES de escribir nada (llamada de red fuera de la transacción)
+    new_vector = None
+
+    if comentario_cambiado:
         try:
             new_vector = generate_embedding(embedding_text)
         except Exception:
@@ -408,108 +445,101 @@ def update_activity(activity_id: int, data: dict, salesperson_id: int) -> dict:
             new_vector = None
 
     try:
+        with connection() as conn:
+            cursor = conn.cursor()
 
-        # 🔹 Update actividad
-        cursor.execute("""
-            UPDATE activities
-            SET datetime_iso = ?,
-                client_id = ?,
-                contact_id = ?,
-                activity_type_id = ?,
-                comentario = ?
-            WHERE id = ? AND salesperson_id = ?
-        """, (
-            data.get("fecha"),
-            data.get("client_id"),
-            data.get("contact_id"),
-            data.get("activity_type_id"),
-            comentario,
-            activity_id,
-            salesperson_id
-        ))
-
-        # 🔹 Borrar productos anteriores
-        cursor.execute("""
-            DELETE FROM activity_products
-            WHERE activity_id = ?
-        """, (activity_id,))
-
-        # 🔹 Insertar nuevos productos
-        products = data.get("products", [])
-
-        for p in products:
-
-            # Se aceptan ambos formatos: {id, name} y {product_id, product_raw}
-            product_id = p.get("id") if p.get("id") is not None else p.get("product_id")
-            product_name = p.get("name") or p.get("product_raw")
-
-            # 🔹 evitar crash si no hay id
-            if product_id is None:
-                continue
-
+            # 🔹 Update actividad
             cursor.execute("""
-                INSERT INTO activity_products (
-                    activity_id,
-                    product_id,
-                    product_raw,
-                    confidence_score
-                )
-                VALUES (?, ?, ?, ?)
+                UPDATE activities
+                SET datetime_iso = ?,
+                    client_id = ?,
+                    contact_id = ?,
+                    activity_type_id = ?,
+                    comentario = ?
+                WHERE id = ? AND salesperson_id = ?
             """, (
+                data.get("fecha"),
+                data.get("client_id"),
+                data.get("contact_id"),
+                data.get("activity_type_id"),
+                comentario,
                 activity_id,
-                product_id,
-                product_name,
-                1.0
+                salesperson_id
             ))
 
-        # 🔹 Mantener el embedding coherente con el comentario
-        if comentario_cambiado:
+            # Borrada entre la comprobación y la escritura: no se toca nada
+            if cursor.rowcount != 1:
+                raise ActivityNotFound()
 
-            if new_vector:
+            # 🔹 Borrar productos anteriores
+            cursor.execute("""
+                DELETE FROM activity_products
+                WHERE activity_id = ?
+            """, (activity_id,))
+
+            # 🔹 Insertar nuevos productos
+            for p in data.get("products"):
+
+                # Se aceptan ambos formatos: {id, name} y {product_id, product_raw}
+                product_id = p.get("id") if p.get("id") is not None else p.get("product_id")
+                product_name = p.get("name") or p.get("product_raw")
+
+                # 🔹 evitar crash si no hay id
+                if product_id is None:
+                    continue
 
                 cursor.execute("""
-                    UPDATE activity_embeddings
-                    SET embedding_vector = ?, created_at = datetime('now')
-                    WHERE activity_id = ?
-                """, (json.dumps(new_vector), activity_id))
-
-                if cursor.rowcount == 0:
-                    cursor.execute("""
-                        INSERT INTO activity_embeddings (
-                            activity_id,
-                            embedding_vector,
-                            embedding_model,
-                            content_type
-                        )
-                        VALUES (?, ?, ?, ?)
-                    """, (
+                    INSERT INTO activity_products (
                         activity_id,
-                        json.dumps(new_vector),
-                        "text-embedding-3-small",
-                        "activity_full"
-                    ))
+                        product_id,
+                        product_raw,
+                        confidence_score
+                    )
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    activity_id,
+                    product_id,
+                    product_name,
+                    1.0
+                ))
 
-            else:
-                # Si OpenAI falla, mejor sin embedding que con uno obsoleto
-                cursor.execute(
-                    "DELETE FROM activity_embeddings WHERE activity_id = ?",
-                    (activity_id,)
-                )
+            # 🔹 Mantener el embedding coherente con el comentario
+            if comentario_cambiado:
 
-        conn.commit()
+                if new_vector:
 
-        return {"success": True}
+                    cursor.execute("""
+                        UPDATE activity_embeddings
+                        SET embedding_vector = ?, created_at = datetime('now')
+                        WHERE activity_id = ?
+                    """, (json.dumps(new_vector), activity_id))
 
-    except Exception:
+                    if cursor.rowcount == 0:
+                        cursor.execute("""
+                            INSERT INTO activity_embeddings (
+                                activity_id,
+                                embedding_vector,
+                                embedding_model,
+                                content_type
+                            )
+                            VALUES (?, ?, ?, ?)
+                        """, (
+                            activity_id,
+                            json.dumps(new_vector),
+                            "text-embedding-3-small",
+                            "activity_full"
+                        ))
 
-        conn.rollback()
-        logger.exception("Error actualizando la actividad %s", activity_id)
+                else:
+                    # Si OpenAI falla, mejor sin embedding que con uno obsoleto
+                    cursor.execute(
+                        "DELETE FROM activity_embeddings WHERE activity_id = ?",
+                        (activity_id,)
+                    )
 
-        return {
-            "success": False,
-            "error": "No se pudo actualizar la actividad"
-        }
+    except sqlite3.IntegrityError as error:
+        if _is_missing_reference(error):
+            raise InvalidActivity(MISSING_REFERENCE_MESSAGE) from error
+        raise
 
-    finally:
-
-        conn.close()
+    return {"success": True}

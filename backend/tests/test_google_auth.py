@@ -17,8 +17,10 @@ Contrato actual (api/routers/auth.py: google_login):
   - email_verified distinto de True          -> 401 "Email de Google no verificado"
   - google_id conocido                       -> login en ESA cuenta
   - email ya usado (password u otra Google)  -> 409, sin vincular ni tocar nada
-  - usuario nuevo                            -> se crea sin password_hash
-  - 200 -> {"access_token", "user": {"id", "nombre", "email"}}
+    (el email se compara sin distinguir mayúsculas, B16)
+  - usuario nuevo                            -> se crea sin password_hash (email normalizado)
+  - carrera SELECT -> INSERT (B15)           -> login en la cuenta del mismo google_id o 409
+  - 200 -> {"access_token", "token_type": "bearer", "user": {"id", "nombre", "email"}}
 """
 import os
 import time
@@ -112,7 +114,8 @@ def test_usuario_nuevo_se_crea_sin_password_y_recibe_jwt_valido(client, google, 
     assert user["password_hash"] is None
 
     body = response.json()
-    assert set(body) == {"access_token", "user"}
+    assert set(body) == {"access_token", "token_type", "user"}
+    assert body["token_type"] == "bearer"
     assert body["user"] == {"id": user["id"], "nombre": "Ana Google", "email": "ana.google@test.local"}
 
     payload = decode(body["access_token"])
@@ -379,24 +382,59 @@ def test_e_conflicto_simultaneo_no_duplica_ni_muta(client_no_raise, google, raci
     assert rows[0]["password_hash"] is None
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B15: la carrera SELECT->INSERT termina en IntegrityError no controlado (500)")
-def test_b15_conflicto_simultaneo_responde_de_forma_controlada(client_no_raise, google, racing_insert):
+def test_b15_conflicto_simultaneo_responde_de_forma_controlada(client_no_raise, google, racing_insert, dbq):
     response = client_no_raise.post("/auth/google", json={"idToken": ID_TOKEN})
 
-    # Deseado: login en la cuenta recién creada (mismo google_id) o 409 (email de otra cuenta)
-    assert response.status_code in (200, 409)
+    row = salespeople(dbq)[0]
+    if racing_insert == "mismo_google_id":
+        # La otra petición creó ESTA cuenta de Google: login en ella
+        assert response.status_code == 200
+        assert response.json()["user"]["id"] == row["id"]
+        assert decode(response.json()["access_token"])["sub"] == str(row["id"])
+    else:
+        # El email es de otra cuenta de Google: conflicto, sin vincular
+        assert response.status_code == 409
+        assert response.json() == {"detail": "El email ya está asociado a otra cuenta de Google"}
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B16: el email se compara distinguiendo mayúsculas: se crea una 2ª cuenta")
-def test_b16_email_con_distintas_mayusculas_es_la_misma_cuenta(client, google, make_user, dbq):
-    make_user("Ana.Google@Test.Local", "Ana Password")
+def test_b15_integrity_error_sin_cuenta_recuperable_no_se_convierte_en_exito(client_no_raise, google,
+                                                                            monkeypatch, dbq):
+    """Solo la carrera esperada se trata: cualquier otro IntegrityError sigue siendo un error."""
+    import sqlite3
+
+    def unrelated_integrity_error():
+        raise sqlite3.IntegrityError("CHECK constraint failed: ajeno a la carrera")
+
+    real_get_connection = accounts.get_connection
+    monkeypatch.setattr(accounts, "get_connection",
+                        lambda: _RacingConnection(real_get_connection(), unrelated_integrity_error))
+
+    response = client_no_raise.post("/auth/google", json={"idToken": ID_TOKEN})
+
+    assert response.status_code == 500
+    assert "access_token" not in response.text
+    assert salespeople(dbq) == []
+
+
+@pytest.mark.parametrize("stored_email", ["Ana.Google@Test.Local", "ANA.GOOGLE@TEST.LOCAL"])
+def test_b16_email_con_distintas_mayusculas_es_la_misma_cuenta(client, google, make_user, dbq, stored_email):
+    make_user(stored_email, "Ana Password")  # cuenta antigua guardada con mayúsculas
 
     response = google_login(client)  # email del token: ana.google@test.local
 
     assert response.status_code == 409
+    assert response.json() == {"detail": "Este email ya tiene una cuenta en CRMVoice. Inicia sesión con tu contraseña."}
     assert len(salespeople(dbq)) == 1
+
+
+def test_b16_cuenta_google_nueva_guarda_el_email_normalizado(client, google, dbq):
+    google.claims = google_claims(email="Ana.Google@Test.Local")
+
+    response = google_login(client)
+
+    assert response.status_code == 200
+    assert salespeople(dbq)[0]["email"] == "ana.google@test.local"
+    assert response.json()["user"]["email"] == "ana.google@test.local"
 
 
 # =====================================================================

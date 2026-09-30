@@ -1,3 +1,4 @@
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -6,6 +7,8 @@ from pathlib import Path
 # Por defecto backend/crm.db. CRMVOICE_DB_PATH permite usar otra base de
 # datos (los tests la apuntan a una SQLite temporal).
 DB_PATH = Path(os.getenv("CRMVOICE_DB_PATH") or Path(__file__).parent / "crm.db")
+
+logger = logging.getLogger("crmvoice")
 
 # Datos de referencia (no de demostración): son las acciones que devuelve
 # detect_action() en main.py y deben existir para poder resolver el tipo
@@ -40,7 +43,11 @@ def connection():
         yield conn
         conn.commit()
     except BaseException:
-        conn.rollback()
+        # Si el rollback también falla, se propaga la excepción original
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception("Error haciendo rollback de la transacción")
         raise
     finally:
         conn.close()

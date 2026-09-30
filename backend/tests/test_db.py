@@ -68,3 +68,42 @@ class _no_raise:
 
     def __exit__(self, *exc):
         return False
+
+
+class _RollbackFails:
+    """Conexión real cuyo rollback falla (p. ej. conexión rota)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.closed = False
+
+    def rollback(self):
+        raise sqlite3.OperationalError("rollback imposible")
+
+    def close(self):
+        self.closed = True
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_si_el_rollback_falla_se_propaga_la_excepcion_original_y_se_cierra(monkeypatch):
+    real_get_connection = db.get_connection
+    opened = []
+
+    def failing_rollback_connection():
+        conn = _RollbackFails(real_get_connection())
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(db, "get_connection", failing_rollback_connection)
+
+    with pytest.raises(RuntimeError, match="error original"):
+        with db.connection() as conn:
+            insert_salesperson(conn, "rollback-roto@test.local")
+            raise RuntimeError("error original")
+
+    assert opened[0].closed
+    monkeypatch.setattr(db, "get_connection", real_get_connection)
+    assert count_salespeople() == 0  # sin commit: el cierre descarta la transacción
