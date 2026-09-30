@@ -1,16 +1,13 @@
-from dotenv import load_dotenv
-load_dotenv()
+# config carga backend/.env (una sola vez)
+import config
 
 # Antes de importar nada más: error claro si falta configuración obligatoria
 from env_check import check_required_env
 check_required_env()
 
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from datetime import datetime
 
 from db import get_connection, init_db
 from whisper_service import transcribe_audio
@@ -19,8 +16,11 @@ from openai_service import generate_embedding, generate_meeting_summary, format_
 from context_service import build_context, get_client_billing_summary
 from date_resolver import resolve_relative_date, resolve_time
 from semantic_search_service import semantic_search_activities
-from jwt_utils import create_access_token, verify_token
-from auth_utils import verify_password, hash_password
+from api.deps import get_current_user
+from api.routers import auth as auth_router, crm as crm_router, system as system_router
+from schemas.activities import SemanticSearchRequest
+from schemas.chat import ChatRequest, ChatResponse, PrepareMeetingRequest
+from schemas.voice import ProcessTextRequest
 from chat_memory import set_last_client, get_last_client, set_pending_intent, get_pending_intent, clear_pending_intent
 from client_detection_service import detect_client_from_message
 from intent_service import detect_intent
@@ -31,19 +31,14 @@ from ai_router import analyze_user_message
 
 
 
-import os
 import re
 import json
 import logging
 import numpy as np
 from typing import Optional
 from fastapi import Query
-from google.oauth2 import id_token
-from google.auth import exceptions as google_auth_exceptions
-from google.auth.transport import requests as google_auth_requests
 
 
-security = HTTPBearer()
 
 logger = logging.getLogger("crmvoice")
 
@@ -92,18 +87,6 @@ def detect_audio_suffix(header: bytes) -> str | None:
         return ".mp3"  # frame MPEG sin cabecera ID3
     return None
 
-class SemanticSearchRequest(BaseModel):
-    query: str
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-class RegisterRequest(BaseModel):
-    nombre: str
-    email: str
-    password: str
-
 app = FastAPI(
     title="CRM Voice API",
     version="0.3.0",
@@ -117,41 +100,16 @@ init_db()
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------------------------
-# MODELOS
-# -------------------------
-class ProcessTextRequest(BaseModel):
-    text: str
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-
-    token = credentials.credentials
-    payload = verify_token(token)
-
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido o expirado"
-        )
-
-    user_id = payload.get("sub") or payload.get("user_id")
-
-    if not user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Token inválido"
-        )
-
-    return {
-        "user_id": int(user_id),
-        "email": payload.get("email")
-    }
+# Routers ya separados por dominio (el resto de endpoints sigue aquí de momento)
+app.include_router(system_router.router)
+app.include_router(auth_router.router)
+app.include_router(crm_router.router)
 
 # =========================
 # UTILIDADES IA
@@ -254,259 +212,6 @@ def analyze_text(text: str) -> dict:
 # =========================
 # ENDPOINTS
 # =========================
-
-@app.get("/")
-def read_root():
-    return {"message": "CRM Voice API funcionando 🚀"}
-
-
-@app.get("/ping")
-def ping():
-    return {"status": "ok"}
-
-
-@app.post("/login")
-def login(request: LoginRequest):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, nombre, email, password_hash
-        FROM salespeople
-        WHERE email = ?
-    """, (request.email,))
-
-    user = cursor.fetchone()
-    conn.close()
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Usuario no encontrado")
-
-    user_id = user[0]
-    nombre = user[1]
-    user_email = user[2]
-    stored_hash = user[3]
-
-    # Usuarios creados con Google no tienen password_hash
-    if not stored_hash:
-        raise HTTPException(status_code=401, detail="Password incorrecto")
-
-    try:
-        password_ok = verify_password(request.password, stored_hash)
-    except Exception:
-        logger.exception("Hash de contraseña no válido para el usuario %s", user_id)
-        password_ok = False
-
-    if not password_ok:
-        raise HTTPException(status_code=401, detail="Password incorrecto")
-
-    token = create_access_token({
-        "sub": str(user_id),
-        "email": user_email
-    })
-
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": {
-            "id": user_id,
-            "nombre": nombre,
-            "email": user_email
-        }
-    }
-
-@app.post("/register")
-def register(request: RegisterRequest):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Verificar si email ya existe
-    cursor.execute("""
-        SELECT id FROM salespeople WHERE email = ?
-    """, (request.email,))
-    
-    existing_user = cursor.fetchone()
-
-    if existing_user:
-        conn.close()
-        raise HTTPException(
-            status_code=400,
-            detail="El email ya está registrado"
-        )
-
-    # Crear hash
-    password_hash = hash_password(request.password)
-
-    # Insertar usuario
-    cursor.execute("""
-        INSERT INTO salespeople (nombre, email, password_hash, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (request.nombre, request.email, password_hash, datetime.utcnow()))
-
-    conn.commit()
-
-    user_id = cursor.lastrowid
-
-    conn.close()
-
-    # Crear token automáticamente
-    token = create_access_token({
-        "sub": str(user_id),
-        "email": request.email
-    })
-
-    return {
-        "access_token": token,
-        "token_type": "bearer"
-    }
-
-@app.get("/me")
-def get_me(current_user=Depends(get_current_user)):
-
-    user_id = int(current_user.get("user_id")) or current_user.get("sub")
-    user_id = int(user_id)  # Asegurar que es int
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, nombre, email, created_at
-        FROM salespeople
-        WHERE id = ?
-    """, (user_id,))
-
-    user = cursor.fetchone()
-    conn.close()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-
-    return {
-        "id": user[0],
-        "nombre": user[1],
-        "email": user[2],
-        "created_at": user[3]
-    }
-
-
-
-@app.post("/auth/google")
-def google_login(data: dict):
-
-    # Client ID de la app web (público, no secreto): define la audience esperada
-    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
-
-    if not google_client_id:
-        logger.error("GOOGLE_CLIENT_ID no configurado: login con Google deshabilitado")
-        raise HTTPException(status_code=503, detail="Login con Google no configurado")
-
-    raw_id_token = data.get("idToken")
-
-    if not raw_id_token or not isinstance(raw_id_token, str):
-        raise HTTPException(status_code=400, detail="Missing token")
-
-    # Verificación local del ID token: firma (claves públicas de Google),
-    # iss, exp/iat y aud == nuestro Client ID
-    try:
-        idinfo = id_token.verify_oauth2_token(
-            raw_id_token,
-            google_auth_requests.Request(),
-            audience=google_client_id,
-            clock_skew_in_seconds=10,
-        )
-    except google_auth_exceptions.TransportError:
-        logger.exception("Error obteniendo las claves públicas de Google")
-        raise HTTPException(status_code=502, detail="No se pudo validar con Google")
-    except (ValueError, google_auth_exceptions.GoogleAuthError):
-        raise HTTPException(status_code=401, detail="Invalid Google token")
-
-    # azp (authorized party), si viene, también debe ser nuestra app
-    azp = idinfo.get("azp")
-    if azp is not None and azp != google_client_id:
-        raise HTTPException(status_code=401, detail="Invalid Google token")
-
-    google_id = idinfo.get("sub")
-    email = idinfo.get("email")
-    name = idinfo.get("name", "")
-
-    if not google_id or not email:
-        raise HTTPException(status_code=401, detail="Invalid Google token")
-
-    if idinfo.get("email_verified") is not True:
-        raise HTTPException(status_code=401, detail="Email de Google no verificado")
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-
-        cursor.execute(
-            "SELECT * FROM salespeople WHERE google_id = ?",
-            (google_id,)
-        )
-
-        user = cursor.fetchone()
-
-        if not user:
-
-            # ¿Ya existe una cuenta con ese email? → NO se enlaza automáticamente:
-            # la cuenta tradicional debe entrar con su contraseña
-            cursor.execute(
-                "SELECT * FROM salespeople WHERE email = ?",
-                (email,)
-            )
-
-            existing = cursor.fetchone()
-
-            if existing:
-
-                if existing["google_id"]:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="El email ya está asociado a otra cuenta de Google"
-                    )
-
-                raise HTTPException(
-                    status_code=409,
-                    detail="Este email ya tiene una cuenta en CRMVoice. Inicia sesión con tu contraseña."
-                )
-
-            # crear usuario si no existe
-            cursor.execute(
-                """
-                INSERT INTO salespeople (nombre, email, google_id)
-                VALUES (?, ?, ?)
-                """,
-                (name, email, google_id)
-            )
-
-            conn.commit()
-
-            cursor.execute(
-                "SELECT * FROM salespeople WHERE google_id = ?",
-                (google_id,)
-            )
-
-            user = cursor.fetchone()
-
-    finally:
-        conn.close()
-
-    jwt_token = create_access_token({
-        "sub": str(user["id"]),
-        "email": user["email"]
-    })
-
-    return {
-        "access_token": jwt_token,
-        "user": {
-            "id": user["id"],
-            "nombre": user["nombre"],
-            "email": user["email"]
-        }
-    }
 
 @app.post("/process-text")
 def process_text(body: ProcessTextRequest, current_user: dict = Depends(get_current_user)):
@@ -961,31 +666,6 @@ def create_activity(data: dict, current_user: dict = Depends(get_current_user)):
         "activity_id": activity_id
     }
 
-@app.get("/products")
-def get_products(current_user: dict = Depends(get_current_user)):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, nombre, precio
-        FROM products
-        ORDER BY nombre ASC
-    """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return {
-        "products": [
-            {
-                "id": r["id"],
-                "name": r["nombre"],
-                "price": r["precio"]
-            }
-            for r in rows
-        ]
-    }
-
 @app.post("/semantic-search")
 def semantic_search(request: SemanticSearchRequest, current_user: dict = Depends(get_current_user)):
 
@@ -1035,13 +715,6 @@ def semantic_search(request: SemanticSearchRequest, current_user: dict = Depends
     # 5️⃣ Devolver top 3
     return results[:3]
 
-@app.get("/client-context/{client_id}")
-def get_client_context(client_id: int, current_user: dict = Depends(get_current_user)):
-    return build_context(client_id, current_user["user_id"])
-
-class PrepareMeetingRequest(BaseModel):
-    client_id: int
-
 def prepare_meeting_by_client_id(client_id: int, salesperson_id: int):
 
     context_data = build_context(client_id, salesperson_id)
@@ -1073,97 +746,6 @@ def prepare_meeting(request: PrepareMeetingRequest, current_user: dict = Depends
         "client_id": request.client_id,
         "meeting_preparation": summary
     }
-
-@app.get("/clients")
-def get_clients(current_user: dict = Depends(get_current_user)):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, razon_social
-        FROM clients
-        ORDER BY razon_social ASC
-    """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return {
-        "clients": [
-            {
-                "id": r["id"],
-                "name": r["razon_social"]
-            }
-            for r in rows
-        ]
-    }
-
-@app.get("/contacts")
-def get_contacts(client_id: Optional[int] = Query(None), current_user: dict = Depends(get_current_user)):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    if client_id:
-        cursor.execute("""
-            SELECT id, nombre
-            FROM contacts
-            WHERE client_id = ?
-            ORDER BY nombre ASC
-        """, (client_id,))
-    else:
-        cursor.execute("""
-            SELECT id, nombre
-            FROM contacts
-            ORDER BY nombre ASC
-        """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return {
-        "contacts": [
-            {
-                "id": r["id"],
-                "name": r["nombre"]
-            }
-            for r in rows
-        ]
-    }
-
-@app.get("/activity-types")
-def get_activity_types(current_user: dict = Depends(get_current_user)):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, accion
-        FROM activity_types
-        ORDER BY accion ASC
-    """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return {
-        "activity_types": [
-            {
-                "id": r["id"],
-                "name": r["accion"]
-            }
-            for r in rows
-        ]
-    }
-
-
-
-class ChatRequest(BaseModel):
-    message: str
-
-class ChatResponse(BaseModel):
-    type: str
-    content: str
-    metadata: dict | None = None
-
 
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current_user)  ):

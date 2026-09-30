@@ -4,9 +4,10 @@ D.5 — Login con Google (POST /auth/google).
 Solo se sustituye la frontera oficial google.oauth2.id_token.verify_oauth2_token
 (la que verifica firma, iss, exp y aud contra las claves públicas de Google).
 Todo lo demás —configuración, validación de claims, búsqueda/creación del
-comercial, conflictos y emisión del JWT— es el código real de main.py.
+comercial, conflictos y emisión del JWT— es el código real
+(api/routers/auth.py y services/accounts.py).
 
-Contrato actual (main.google_login):
+Contrato actual (api/routers/auth.py: google_login):
   - GOOGLE_CLIENT_ID vacío/ausente          -> 503 "Login con Google no configurado"
   - idToken ausente/vacío/no string          -> 400 "Missing token"
   - verify lanza TransportError              -> 502 "No se pudo validar con Google"
@@ -24,10 +25,11 @@ import time
 
 import pytest
 from google.auth import exceptions as google_exceptions
+from google.oauth2 import id_token as google_id_token
 from jose import jwt
 
 import db
-import main
+from services import accounts
 
 CLIENT_ID = "test-client-id.apps.googleusercontent.com"
 ID_TOKEN = "google-id-token-de-prueba.cabecera.firma"
@@ -74,8 +76,8 @@ def google(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", CLIENT_ID)
     verifier = FakeVerifier()
     verifier.claims = google_claims()
-    # main hace `from google.oauth2 import id_token`: main.id_token ES el módulo oficial
-    monkeypatch.setattr(main.id_token, "verify_oauth2_token", verifier)
+    # Frontera oficial: el router llama a google.oauth2.id_token.verify_oauth2_token
+    monkeypatch.setattr(google_id_token, "verify_oauth2_token", verifier)
     return verifier
 
 
@@ -360,8 +362,9 @@ def racing_insert(request, monkeypatch):
         other.commit()
         other.close()
 
-    real_get_connection = main.get_connection
-    monkeypatch.setattr(main, "get_connection",
+    real_get_connection = accounts.get_connection
+    # El servicio de cuentas usa su referencia a get_connection: se parchea ahí
+    monkeypatch.setattr(accounts, "get_connection",
                         lambda: _RacingConnection(real_get_connection(), concurrent_insert))
     return request.param
 

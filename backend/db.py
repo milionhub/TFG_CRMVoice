@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 # Por defecto backend/crm.db. CRMVOICE_DB_PATH permite usar otra base de
@@ -23,6 +24,26 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
+
+
+@contextmanager
+def connection():
+    """
+    Conexión transaccional: commit si el bloque termina bien, rollback si
+    lanza una excepción, y cierre siempre.
+
+        with connection() as conn:
+            conn.execute(...)
+    """
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db():

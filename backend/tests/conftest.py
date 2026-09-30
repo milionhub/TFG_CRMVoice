@@ -69,7 +69,7 @@ os.environ.update({
     "GOOGLE_CLIENT_ID": "",
 })
 
-# main.py y jwt_utils.py llaman a load_dotenv() al importarse: se neutraliza
+# config.py llama a load_dotenv() al importarse: se neutraliza
 # para que el backend/.env real no aporte ninguna variable a los tests.
 import dotenv  # noqa: E402
 
@@ -170,14 +170,13 @@ import db  # noqa: E402
 assert Path(db.DB_PATH).resolve() != REAL_DB.resolve(), "CRMVOICE_DB_PATH apunta a backend/crm.db"
 
 import ai_router  # noqa: E402
-import auth_utils  # noqa: E402
 import chat_memory  # noqa: E402
 import main  # noqa: E402
 import openai_service  # noqa: E402
 import semantic_search_service  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from jose import jwt  # noqa: E402
-from jwt_utils import create_access_token  # noqa: E402
+from core.security import create_access_token, hash_password  # noqa: E402
 
 
 # =====================================================================
@@ -198,7 +197,7 @@ TEST_PASSWORD = "Contraseña-de-prueba-123"
 @pytest.fixture(scope="session")
 def password_hash():
     """Hash bcrypt de TEST_PASSWORD, calculado una sola vez (bcrypt es lento)."""
-    return auth_utils.hash_password(TEST_PASSWORD)
+    return hash_password(TEST_PASSWORD)
 
 
 # =====================================================================
