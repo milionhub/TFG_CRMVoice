@@ -14,8 +14,20 @@ from services.context import build_context, get_client_billing_summary
 from services.entity_resolver import resolve_client
 from services.insights import detect_opportunities, get_crm_insights
 from services.intent_service import detect_intent
+from services.openai_client import AIServiceError
 from services.openai_service import generate_meeting_summary, generate_client_summary, generate_account_analysis
 from services.semantic_search_service import semantic_search_activities
+
+# Mensajes al usuario cuando falla la IA: nunca el texto de la excepción
+MEETING_SUMMARY_ERROR = (
+    "Error generando resumen: el asistente de IA no está disponible. Inténtalo de nuevo en unos minutos."
+)
+AI_UNAVAILABLE_MESSAGE = "El asistente de IA no está disponible en este momento. Inténtalo de nuevo en unos minutos."
+EMPTY_MESSAGE = "Escribe un mensaje para que pueda ayudarte."
+
+
+def _ai_unavailable_response() -> ChatResponse:
+    return ChatResponse(type="error", content=AI_UNAVAILABLE_MESSAGE)
 
 
 def detect_client_from_message(message: str):
@@ -37,8 +49,8 @@ def prepare_meeting_by_client_id(client_id: int, salesperson_id: int):
 
     try:
         summary = generate_meeting_summary(context_data)
-    except Exception as e:
-        return None, f"Error generando resumen: {str(e)}"
+    except AIServiceError:
+        return None, MEETING_SUMMARY_ERROR
 
     return summary, None
 
@@ -52,8 +64,8 @@ def prepare_meeting(client_id: int, salesperson_id: int) -> dict:
 
     try:
         summary = generate_meeting_summary(context_data)
-    except Exception as e:
-        return {"error": f"Error generando resumen: {str(e)}"}
+    except AIServiceError:
+        return {"error": MEETING_SUMMARY_ERROR}
 
     return {
         "client_id": client_id,
@@ -62,14 +74,15 @@ def prepare_meeting(client_id: int, salesperson_id: int) -> dict:
 
 
 def handle_chat_message(message: str, user_id: int) -> ChatResponse:
+    if not message.strip():
+        return ChatResponse(type="error", content=EMPTY_MESSAGE)
+
     user_message = message.lower()
 
     pending = get_pending_intent(user_id)
 
     # 🔥 CASO 1 — hay intención pendiente → NO usar IA
     if pending:
-        print("PENDING INTENT:", pending)
-
         if pending["waiting_for"] == "client":
 
             client_id, confidence = resolve_client(message)
@@ -82,8 +95,6 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
 
                 # limpiar estado
                 clear_pending_intent(user_id)
-
-                print("RESOLVED CLIENT FROM FOLLOW-UP:", client_id)
 
                 # 👇 IMPORTANTE: NO hay ai_client_name aquí
                 ai_client_name = None
@@ -103,8 +114,6 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
         ai_client_name = analysis.get("client_name")
         confidence = analysis.get("confidence", 0)
 
-        print("AI ANALYSIS:", analysis)
-
         # fallback
         if not intent or confidence < 60:
             intent = detect_intent(message)
@@ -120,8 +129,6 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
         # cliente desde IA
         if ai_client_name:
             client_id_ai, conf_ai = resolve_client(ai_client_name)
-
-            print("AI CLIENT:", ai_client_name, "→", client_id_ai)
 
             if client_id_ai:
                 set_last_client(user_id, client_id_ai)
@@ -143,11 +150,7 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
         else:
             client_text = message
 
-        print("CLIENT_TEXT LIMPIO:", client_text)
-
         client_id, confidence = resolve_client(client_text)
-
-        print("CLIENT_ID:", client_id, "CONF:", confidence)
 
         if client_id:
             set_last_client(user_id, client_id)
@@ -285,7 +288,10 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
         context = build_context(client_id, user_id)
 
 
-        summary_text = generate_client_summary(context)
+        try:
+            summary_text = generate_client_summary(context)
+        except AIServiceError:
+            return _ai_unavailable_response()
 
         short_status = summary_text.split("\n")[0]
 
@@ -332,10 +338,13 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
         # Intentamos detectar cliente en el mensaje completo
         client_id, confidence = resolve_client(message)
 
-        if client_id:
-            results = semantic_search_activities(message, user_id, client_id=client_id)
-        else:
-            results = semantic_search_activities(message, user_id)
+        try:
+            if client_id:
+                results = semantic_search_activities(message, user_id, client_id=client_id)
+            else:
+                results = semantic_search_activities(message, user_id)
+        except AIServiceError:
+            return _ai_unavailable_response()
 
 
 
@@ -424,7 +433,10 @@ def handle_chat_message(message: str, user_id: int) -> ChatResponse:
 
         opportunities = detect_opportunities(context)
 
-        analysis = generate_account_analysis(context)
+        try:
+            analysis = generate_account_analysis(context)
+        except AIServiceError:
+            return _ai_unavailable_response()
 
         if opportunities:
 

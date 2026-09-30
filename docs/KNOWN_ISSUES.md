@@ -2,7 +2,7 @@
 
 Backlog de problemas **abiertos** detectados durante la Fase D (tests + CI). Los ya
 resueltos no aparecen: B1, B11 y B14 (Fase D), B3, B6, B7, B10, B15 y B16 (Fase E) y B12, B13,
-F-I2, F-I5 y F-I6 (Fase F).
+F-I2, F-I5 y F-I6 (Fase F) y B18, B19 y B20 (Fase G.1).
 
 Donde existe, el test que describe el comportamiento deseado está marcado como `xfail`
 (backend, `strict=True`) o `skip` (frontend); al corregir el bug, ese test debe pasar a
@@ -28,14 +28,11 @@ en silencio. La confianza solo pondera lo mencionado. Los MINOR pendientes está
 
 | ID | Resumen | Severidad |
 |---|---|---|
-| B18 | El texto de las excepciones de OpenAI llega al usuario ("Error generando resumen: …"), incluida la clave enmascarada (2 `xfail`) | IMPORTANT |
-| B19 | Los fallos de OpenAI en `client_summary` y en la búsqueda semántica devuelven 500 (2 `xfail`) | IMPORTANT |
 | B17 | La intención pendiente de `client_summary` nunca se resuelve y repite la pregunta (1 `xfail`) | IMPORTANT |
-| B20 | La salida del router no se valida: `confidence` no numérica o JSON que no es objeto → 500 (3 `xfail`) | MINOR |
 | B4 | `build_context` siempre devuelve un dict: un cliente inexistente llega a OpenAI con `client_name=None` (rama "no encontrado" muerta) | MINOR |
 | B5 | `client_summary` llama a OpenAI y descarta el resultado (coste sin uso) | MINOR |
 | FE-D7-05 | El chat del frontend monta la cabecera a mano: sin token enviaría `Bearer null` | MINOR |
-| — | La rama `client_analysis` es inalcanzable; un mensaje vacío llega al LLM; la memoria no tiene TTL ni reset, es local al proceso y una intención pendiente no caduca | MINOR |
+| — | La rama `client_analysis` es inalcanzable; la memoria no tiene TTL ni reset, es local al proceso y una intención pendiente no caduca | MINOR |
 
 ## H — Voz / actividades V2
 

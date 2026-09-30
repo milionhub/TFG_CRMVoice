@@ -23,7 +23,9 @@ from types import SimpleNamespace
 import pytest
 
 import main
+from schemas.chat import CHAT_MESSAGE_MAX_LENGTH
 from services import ai_router, chat_memory, openai_service, semantic_search_service
+from services import chat as chat_service
 
 SECRET_A = "SECRET_A_ONLY_7F3C"
 MESSAGE_B = "MESSAGE_B_ONLY_91D2"
@@ -411,7 +413,23 @@ def test_mensaje_no_entendido(client, user_a, openai_fake):
 def test_mensaje_vacio_o_espacios_respuesta_controlada(client, user_a, openai_fake, message):
     body = chat(client, user_a, message)
 
-    assert body["type"] == "error"
+    assert body == {"type": "error", "content": chat_service.EMPTY_MESSAGE, "metadata": None}
+    assert openai_fake.calls == []
+
+
+def test_mensaje_con_la_longitud_maxima_se_acepta(client, user_a, openai_fake):
+    body = chat(client, user_a, "a" * CHAT_MESSAGE_MAX_LENGTH)
+
+    assert body["type"] == "error"  # no se entiende, pero entra en el flujo
+    assert len(openai_fake.of_kind("router")) == 1
+
+
+def test_mensaje_por_encima_del_maximo_422_sin_llamar_a_openai(client, user_a, openai_fake):
+    response = client.post("/chat", json={"message": "a" * (CHAT_MESSAGE_MAX_LENGTH + 1)},
+                           headers=user_a["headers"])
+
+    assert response.status_code == 422
+    assert openai_fake.calls == []
 
 
 @pytest.mark.parametrize("body", [None, {}, {"message": None}, {"message": 123}, {"mensaje": "hola"}])
@@ -492,15 +510,35 @@ B20_ROUTER_OUTPUTS = {
 }
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B20: la salida del router no se valida (confidence no numérica o JSON no objeto -> 500)")
 @pytest.mark.parametrize("output", B20_ROUTER_OUTPUTS)
 def test_b20_salida_inesperada_del_router_no_rompe_el_chat(client_no_raise, user_a, crm, openai_fake, output):
+    """Regresión B20: salida fuera de contrato -> router no fiable -> detector por palabras."""
     openai_fake.router_raw = B20_ROUTER_OUTPUTS[output]
 
     response = client_no_raise.post("/chat", json={"message": "facturación de Nebula"}, headers=user_a["headers"])
 
     assert response.status_code == 200
+    assert response.json()["type"] == "billing_summary"
+
+
+@pytest.mark.parametrize("output", [
+    {"intent": "billing_query", "client_name": None, "confidence": 150},
+    {"intent": "billing_query", "client_name": None, "confidence": True},
+    {"intent": ["billing_query"], "client_name": None, "confidence": 95},
+    {"intent": "billing_query", "client_name": {"nombre": "Nebula"}, "confidence": 95},
+])
+def test_router_fuera_de_contrato_se_descarta(openai_fake, output):
+    openai_fake.router_raw = json.dumps(output)
+
+    assert ai_router.analyze_user_message("hola") == ai_router.UNRELIABLE_ANALYSIS
+
+
+def test_router_dentro_de_contrato_se_acepta(openai_fake):
+    openai_fake.router_raw = json.dumps({"intent": "billing_query", "client_name": "Nebula",
+                                         "confidence": 87.5, "extra": "ignorado"})
+
+    assert ai_router.analyze_user_message("hola") == {"intent": "billing_query", "client_name": "Nebula",
+                                                      "confidence": 87.5}
 
 
 @pytest.mark.parametrize("path", ["chat", "endpoint"])
@@ -519,10 +557,9 @@ def test_fallo_del_resumen_de_reunion_respuesta_controlada(client, user_a, crm, 
     assert "Traceback" not in text and CRM_A not in text  # sin trazas ni el prompt interno
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B18: el texto de la excepción de OpenAI se devuelve al cliente (puede incluir la API key)")
 @pytest.mark.parametrize("path", ["chat", "endpoint"])
-def test_b18_error_de_openai_no_se_devuelve_al_cliente(client, user_a, crm, openai_fake, path):
+def test_b18_error_de_openai_no_se_devuelve_al_cliente(client, user_a, crm, openai_fake, path, caplog):
+    """Regresión B18: ni el body ni los logs llevan el texto de la excepción."""
     openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
     openai_fake.errors["summary"] = _openai_errors()["generica"]
 
@@ -531,8 +568,11 @@ def test_b18_error_de_openai_no_se_devuelve_al_cliente(client, user_a, crm, open
     else:
         response = client.post("/prepare-meeting", json={"client_id": crm.nebula}, headers=user_a["headers"])
 
-    assert "sk-test-not-a-real-key" not in response.text
-    assert "Incorrect API key" not in response.text
+    assert response.status_code == 200
+    assert chat_service.MEETING_SUMMARY_ERROR in response.text
+    for text in (response.text, caplog.text):
+        assert "sk-test-not-a-real-key" not in text
+        assert "Incorrect API key" not in text
 
 
 FAILING_LLM_INTENTS = {
@@ -544,9 +584,8 @@ FAILING_LLM_INTENTS = {
 @pytest.mark.parametrize("intent", FAILING_LLM_INTENTS)
 def test_fallo_de_openai_no_filtra_detalles_internos(client_no_raise, user_a, crm, openai_fake, intent):
     """
-    Propiedad de seguridad que debe cumplirse hoy (500) y cuando B19 se
-    corrija: sin clave, texto de la excepción, prompt ni trazas. El status
-    NO se fija aquí: lo protege el xfail de B19.
+    Sin clave, texto de la excepción, prompt ni trazas. El status lo fija
+    el test de B19.
     """
     reply, message, kind = FAILING_LLM_INTENTS[intent]
     openai_fake.router = lambda m: reply
@@ -563,17 +602,32 @@ def test_fallo_de_openai_no_filtra_detalles_internos(client_no_raise, user_a, cr
     assert "Traceback" not in text and 'File "' not in text
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B19: fallos de OpenAI en client_summary/semantic_search no se capturan -> 500")
 @pytest.mark.parametrize("intent", FAILING_LLM_INTENTS)
 def test_b19_fallo_de_openai_respuesta_controlada(client_no_raise, user_a, crm, openai_fake, intent):
+    """Regresión B19: el fallo de la IA es un ChatResponse de error estable (200), no un 500."""
     reply, message, kind = FAILING_LLM_INTENTS[intent]
     openai_fake.router = lambda m: reply
     openai_fake.errors[kind] = _openai_errors()["timeout"]
 
     response = client_no_raise.post("/chat", json={"message": message}, headers=user_a["headers"])
 
-    assert response.status_code != 500
+    assert response.status_code == 200
+    assert response.json() == {"type": "error", "content": chat_service.AI_UNAVAILABLE_MESSAGE, "metadata": None}
+
+
+@pytest.mark.parametrize("bad_response", [
+    SimpleNamespace(choices=[]),
+    SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None))]),
+], ids=["sin_choices", "content_none"])
+def test_respuesta_de_openai_sin_texto_es_error_controlado(client, user_a, crm, openai_fake, bad_response,
+                                                           monkeypatch):
+    openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
+    completions = openai_service.client.chat.completions
+    monkeypatch.setattr(completions, "create", lambda **kwargs: bad_response)
+
+    body = chat(client, user_a, "reunión con Nebula")
+
+    assert body == {"type": "prepare_meeting", "content": chat_service.MEETING_SUMMARY_ERROR, "metadata": None}
 
 
 # =====================================================================

@@ -1,9 +1,9 @@
 import json
 import numpy as np
 from db import get_connection
-from openai import OpenAI
+from services.openai_client import create_embedding, get_openai_client
 
-client = OpenAI()
+client = get_openai_client()
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
@@ -11,12 +11,13 @@ def cosine_similarity(a, b):
 
 def semantic_search_activities(query: str, salesperson_id: int, client_id: int = None, top_k: int = 5):
 
-    response = client.embeddings.create(
+    # Lanza AIServiceError si OpenAI falla
+    query_embedding = np.array(create_embedding(
+        client,
+        "semantic_search_activities",
         model="text-embedding-3-small",
         input=query
-    )
-
-    query_embedding = np.array(response.data[0].embedding)
+    ))
 
     conn = get_connection()
     cursor = conn.cursor()

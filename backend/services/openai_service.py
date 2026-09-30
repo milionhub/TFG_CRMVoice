@@ -1,23 +1,19 @@
-import os
 import json
-from openai import OpenAI
 import math
 from db import get_connection
+from services.openai_client import chat_completion_text, create_embedding, get_openai_client
 
-api_key = os.getenv("OPENAI_API_KEY")
-
-if not api_key:
-    raise ValueError("OPENAI_API_KEY no encontrada en entorno")
-
-client = OpenAI(api_key=api_key)
+# Las funciones generate_* lanzan AIServiceError si OpenAI falla.
+client = get_openai_client()
 
 
 def generate_embedding(text: str):
-    response = client.embeddings.create(
+    return create_embedding(
+        client,
+        "generate_embedding",
         model="text-embedding-3-small",
         input=text
     )
-    return response.data[0].embedding
 
 def generate_meeting_summary(context_data: dict):
 
@@ -77,7 +73,9 @@ def generate_meeting_summary(context_data: dict):
     """
 
 
-    response = client.chat.completions.create(
+    return chat_completion_text(
+        client,
+        "generate_meeting_summary",
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "Eres un consultor CRM experto en estrategia comercial B2B."},
@@ -85,8 +83,6 @@ def generate_meeting_summary(context_data: dict):
         ],
         temperature=0.3
     )
-
-    return response.choices[0].message.content
 
 
 def cosine_similarity(vec1, vec2):
@@ -208,7 +204,9 @@ def generate_client_summary(context_data: dict):
     """
 
 
-    response = client.chat.completions.create(
+    return chat_completion_text(
+        client,
+        "generate_client_summary",
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "Eres un consultor CRM experto en estrategia comercial B2B."},
@@ -216,8 +214,6 @@ def generate_client_summary(context_data: dict):
         ],
         temperature=0.3
     )
-
-    return response.choices[0].message.content
 
 def generate_account_analysis(context_data):
 
@@ -261,7 +257,9 @@ def generate_account_analysis(context_data):
     Evita párrafos largos.
     """
 
-    response = client.chat.completions.create(
+    return chat_completion_text(
+        client,
+        "generate_account_analysis",
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "Eres un analista CRM experto en cuentas B2B."},
@@ -269,5 +267,3 @@ def generate_account_analysis(context_data):
         ],
         temperature=0.3
     )
-
-    return response.choices[0].message.content

@@ -13,6 +13,7 @@ import db
 import main
 from fastapi.testclient import TestClient
 from services import openai_service, whisper_service
+from services.openai_client import AIServiceError
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REAL_DB = BACKEND_DIR / "crm.db"
@@ -102,8 +103,9 @@ def test_la_red_externa_esta_bloqueada():
 
 
 def test_openai_sin_mockear_falla_y_queda_registrado():
-    # No sale ninguna petición: el cliente OpenAI está sustituido por un doble
-    with pytest.raises(conftest.ExternalCallBlocked):
+    # No sale ninguna petición: el cliente OpenAI está sustituido por un doble.
+    # La capa IA convierte el bloqueo en AIServiceError, pero queda registrado.
+    with pytest.raises(AIServiceError):
         openai_service.generate_embedding("hola")
 
     assert conftest.BLOCKED_OPENAI == ["services.openai_service.client.embeddings.create"]

@@ -1,9 +1,17 @@
 import json
+import logging
+import math
 import re
-from openai import OpenAI
-import os
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+from services.openai_client import AIServiceError, chat_completion_text, get_openai_client
+
+logger = logging.getLogger("crmvoice")
+
+client = get_openai_client()
+
+# Respuesta cuando el router no es fiable: el chat usa el detector por palabras
+UNRELIABLE_ANALYSIS = {"intent": None, "client_name": None, "confidence": 0}
+
 
 def extract_json(text: str):
     """
@@ -24,6 +32,31 @@ def extract_json(text: str):
     return None
 
 
+def _validate_analysis(parsed) -> dict | None:
+    """
+    Contrato mínimo de la salida del router: {intent: str|None,
+    client_name: str|None, confidence: número en [0, 100]}. Devuelve None si
+    no lo cumple (confidence ausente cuenta como 0).
+    """
+    if not isinstance(parsed, dict):
+        return None
+
+    intent = parsed.get("intent")
+    client_name = parsed.get("client_name")
+    confidence = parsed.get("confidence", 0)
+
+    if intent is not None and not isinstance(intent, str):
+        return None
+    if client_name is not None and not isinstance(client_name, str):
+        return None
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return None
+    if not math.isfinite(confidence) or not 0 <= confidence <= 100:
+        return None
+
+    return {"intent": intent, "client_name": client_name, "confidence": confidence}
+
+
 def analyze_user_message(message: str):
 
     prompt = f"""
@@ -42,7 +75,9 @@ def analyze_user_message(message: str):
     """
 
     try:
-        response = client.chat.completions.create(
+        content = chat_completion_text(
+            client,
+            "analyze_user_message",
             model="gpt-4o-mini",
             temperature=0,
             messages=[
@@ -50,26 +85,13 @@ def analyze_user_message(message: str):
                 {"role": "user", "content": prompt}
             ]
         )
+    except AIServiceError:
+        return dict(UNRELIABLE_ANALYSIS)
 
-        content = response.choices[0].message.content.strip()
+    analysis = _validate_analysis(extract_json(content.strip()))
 
-        print("RAW AI RESPONSE:", content)
+    if analysis is None:
+        logger.warning("Salida del router IA fuera de contrato: se usa el detector por palabras")
+        return dict(UNRELIABLE_ANALYSIS)
 
-        parsed = extract_json(content)
-
-        if parsed:
-            return parsed
-
-        return {
-            "intent": None,
-            "client_name": None,
-            "confidence": 0
-        }
-
-    except Exception as e:
-        print("AI Router error:", e)
-        return {
-            "intent": None,
-            "client_name": None,
-            "confidence": 0
-        }
+    return analysis

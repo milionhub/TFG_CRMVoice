@@ -6,7 +6,7 @@ leen en cada llamada (no se cachean): así un cambio de entorno, como los que
 hacen los tests con monkeypatch.setenv, se aplica sin reiniciar.
 
 La validación de las variables obligatorias está en env_check.py.
-CRMVOICE_DB_PATH se lee en db.py y OPENAI_API_KEY en los clientes de OpenAI.
+CRMVOICE_DB_PATH se lee en db.py y OPENAI_API_KEY en services/openai_client.py.
 """
 import os
 
