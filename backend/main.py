@@ -1461,7 +1461,7 @@ def chat_endpoint(payload: ChatRequest, current_user: dict = Depends(get_current
     # --- CRM INSIGHTS ---
     if intent == "crm_insights":
 
-        insights = get_crm_insights()
+        insights = get_crm_insights(current_user["user_id"])
         activity_insights = insights.get("activity_insights", [])
         activity_text = "\n".join(f"- {a}" for a in activity_insights)
 
