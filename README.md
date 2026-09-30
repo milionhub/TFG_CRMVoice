@@ -74,6 +74,14 @@ pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
+Ficheros de dependencias:
+
+| Fichero | Contenido | Para qué |
+|---|---|---|
+| `requirements.txt` | `requirements-core.txt` + Whisper + PyTorch | Ejecutar el backend completo (con voz) |
+| `requirements-core.txt` | Backend sin la transcripción local | Lo incluyen los otros dos |
+| `requirements-dev.txt` | `requirements-core.txt` + pytest + httpx | Ejecutar los tests (sin Whisper ni PyTorch) |
+
 ### Configuración
 
 ```bash
@@ -128,8 +136,9 @@ ya tiene datos de catálogo, no modifica nada.
 uvicorn main:app --reload --port 8000
 ```
 
-El primer arranque descarga el modelo `base` de Whisper (~140 MB, en `~/.cache/whisper`),
-así que tarda más y necesita conexión a Internet.
+El modelo `base` de Whisper se carga en la **primera transcripción**, no al arrancar. La
+primera vez lo descarga (~140 MB, en `~/.cache/whisper`), así que esa primera grabación
+tarda más y necesita conexión a Internet.
 
 Comprobación rápida:
 - http://127.0.0.1:8000/ping → `{"status":"ok"}`
@@ -212,15 +221,46 @@ firma, emisor, caducidad y que `aud` sea tu Client ID.
 
 ## Tests
 
-Desde la raíz del repositorio:
+### Backend (pytest)
+
+Desde `backend/`. Basta con `requirements-dev.txt`: **no hacen falta Whisper, PyTorch ni
+FFmpeg** (también funciona con el venv completo de `requirements.txt`).
 
 ```bash
-cd frontend
-flutter test test/auth_provider_logout_test.dart
+pip install -r requirements-dev.txt
+pytest
 ```
 
-`test/widget_test.dart` es la plantilla original de Flutter y todavía no está adaptada.
-El backend aún no tiene tests automatizados.
+La suite usa una SQLite temporal (nunca `crm.db`) y configuración ficticia (no lee
+`backend/.env`), y bloquea la red, OpenAI, Google y los imports de Whisper/PyTorch.
+
+### Frontend (Flutter)
+
+Desde `frontend/`:
+
+```bash
+flutter test
+flutter analyze --no-fatal-infos
+```
+
+Los tests no usan el backend real, Google ni el micrófono: HTTP y los canales de
+plataforma se sustituyen por dobles de prueba.
+
+Los bugs conocidos aparecen como `xfail` (backend) o como tests `skip` (frontend), con el
+comportamiento deseado. El listado está en [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
+
+### CI (GitHub Actions)
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) se ejecuta en cada push a `develop` y
+`refactor/portfolio-v2` y en los pull requests hacia `develop`:
+
+- **Backend:** Python 3.11, `pip install -r requirements-dev.txt` (comprueba que Whisper y
+  PyTorch no están instalados) y `pytest`.
+- **Frontend:** Flutter 3.41.0, `flutter pub get --enforce-lockfile`,
+  `flutter analyze --no-fatal-infos` (falla con warnings o errores, no con avisos
+  informativos) y `flutter test`.
+
+No usa secretos ni servicios externos.
 
 ---
 
@@ -252,10 +292,15 @@ backend/
   openai_service.py    embeddings y resúmenes
   seed_demo_data.py    catálogo de demostración (datos ficticios)
   .env.example         plantilla de configuración
+  requirements*.txt    dependencias (completo / core / dev)
+  tests/               tests (pytest)
 frontend/
   lib/                 app Flutter
+  test/                tests (flutter test)
   web/index.html
   dart_defines.example.json
+.github/workflows/ci.yml   CI (GitHub Actions)
+docs/KNOWN_ISSUES.md       deuda técnica conocida
 ```
 
 Autor: Juan Marín Escolano
