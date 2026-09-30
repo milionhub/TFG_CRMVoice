@@ -6,11 +6,16 @@ Pipeline de /process-audio (sin FastAPI):
 - análisis del texto, resolución de entidades del CRM, fecha/hora,
   herencia cliente↔contacto y confianza global.
 
+Resolución contextual (F.2):
+- un cliente dicho pero no resuelto no se sustituye por el del contacto;
+- solo se hereda el cliente de un contacto inequívoco si no se dijo ninguno;
+- la ambigüedad y los conflictos se exponen (status, candidates, origen).
+
 El router se encarga de la subida (UploadFile) y de traducir errores a HTTP.
 """
 from services.date_resolver import resolve_time
 from db import get_connection
-from services.entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
+from services.entity_resolver import match_client, match_contact, resolve_activity_type, resolve_products
 from services.text_analysis import analyze_text
 from services.whisper_service import transcribe_audio  # noqa: F401 (lo usa el router: voice_pipeline.transcribe_audio)
 
@@ -60,6 +65,83 @@ def detect_audio_suffix(header: bytes) -> str | None:
     return None
 
 
+# -------------------------
+# Confianza global
+# -------------------------
+# Pesos empresariales. Solo cuentan las entidades relevantes para la frase:
+# el cliente y la acción siempre; el contacto si se nombra; los productos si
+# se detecta alguno (no se puede distinguir "no mencionado" de "mencionado
+# pero no reconocido": resolve_products solo devuelve los reconocidos).
+WEIGHT_CLIENT = 0.4
+WEIGHT_CONTACT = 0.3
+WEIGHT_PRODUCT = 0.2
+WEIGHT_ACTION = 0.1
+
+# Un cliente heredado del contacto no se ha dicho: vale el score del
+# contacto con este descuento
+INHERITED_CLIENT_FACTOR = 0.9
+
+RESOLVED = ("exact", "fuzzy")
+
+
+def _candidates(match: dict) -> list[dict]:
+    return [{"id": c["id"], "nombre": c["name"], "score": round(c["score"], 1)} for c in match["candidates"]]
+
+
+def _contact_client(contact_id: int):
+    """(client_id, razón social) del contacto."""
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT c.id, c.razon_social
+            FROM contacts ct
+            JOIN clients c ON c.id = ct.client_id
+            WHERE ct.id = ?
+        """, (contact_id,)).fetchone()
+    finally:
+        conn.close()
+    return (row["id"], row["razon_social"]) if row else (None, None)
+
+
+def _overall_confidence(client_score, contact_score, product_scores, action_score, contact_mentioned):
+    parts = [(WEIGHT_CLIENT, client_score), (WEIGHT_ACTION, action_score)]
+    if contact_mentioned:
+        parts.append((WEIGHT_CONTACT, contact_score))
+    if product_scores:
+        parts.append((WEIGHT_PRODUCT, min(product_scores)))
+
+    return round(sum(w * s for w, s in parts) / sum(w for w, _ in parts))
+
+
+def _resolution_status(overall: int, statuses: list[str]) -> str:
+    """
+    Por umbrales de la confianza global, pero nunca mejor de lo que permiten
+    las entidades nombradas: "exact" exige que todas sean exactas; con alguna
+    fuzzy o heredada, como mucho "high"; con alguna ambigua, en conflicto o
+    sin resolver, como mucho "medium".
+    """
+    if overall >= 95:
+        status = "exact"
+    elif overall >= 85:
+        status = "high"
+    elif overall >= 70:
+        status = "medium"
+    elif overall >= 50:
+        status = "low"
+    else:
+        status = "unresolved"
+
+    order = ["unresolved", "low", "medium", "high", "exact"]
+    if any(s not in RESOLVED + ("inherited",) for s in statuses):
+        cap = "medium"
+    elif any(s != "exact" for s in statuses):
+        cap = "high"
+    else:
+        cap = "exact"
+
+    return min(status, cap, key=order.index)
+
+
 def analyze_transcription(text_transcribed: str) -> dict:
     """Del texto transcrito a la propuesta de actividad que revisa el usuario."""
 
@@ -84,88 +166,63 @@ def analyze_transcription(text_transcribed: str) -> dict:
     # -------------------------------
     # 2️⃣ Resolver entidades
     # -------------------------------
-    client_id, client_confidence = resolve_client(cliente_raw)
+    client_match = match_client(cliente_raw)
+    client_id = client_match["id"]
+    client_status = client_match["status"]
+    client_confidence = client_match["score"]
+    client_origin = "detected" if cliente_raw else None
+
+    # Con cliente resuelto, el contacto se busca solo dentro de ese cliente
+    contact_match = match_contact(contacto_raw, client_id)
+    contact_status = contact_match["status"]
+    contact_candidates = _candidates(contact_match)
+
+    if client_id and contacto_raw and contact_status == "unresolved":
+        # ¿Existe, pero en otro cliente? Conflicto: no se asocia
+        elsewhere = match_contact(contacto_raw)
+        if elsewhere["status"] != "unresolved":
+            contact_status = "conflict"
+            contact_candidates = _candidates(elsewhere)
+
+    contact_id = contact_match["id"]
+    contact_confidence = contact_match["score"]
+
     activity_type_id = resolve_activity_type(accion_raw)
-    contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
     products_detected = resolve_products(text_transcribed)
+
     # -------------------------------
-    # 3️⃣ Herencias inteligentes
+    # 3️⃣ Contacto ↔ cliente
     # -------------------------------
-
-    # Contacto detectado pero no cliente → heredar cliente
-    if contact_id and not client_id:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT client_id FROM contacts WHERE id = ?", (contact_id,))
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            client_id = row["client_id"]
-            client_confidence = contact_confidence
-
-    # Cliente detectado pero no contacto → reintentar dentro cliente
-    if client_id and contacto_raw and not contact_id:
-        contact_id, contact_confidence = resolve_contact(contacto_raw, client_id)
-
-    # Si tenemos contacto pero no cliente_raw → rellenarlo
     if contact_id and not cliente_raw:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT c.razon_social
-            FROM clients c
-            JOIN contacts ct ON ct.client_id = c.id
-            WHERE ct.id = ?
-        """, (contact_id,))
-        row = cursor.fetchone()
-        conn.close()
+        # No se dijo cliente y el contacto es inequívoco: se hereda el suyo
+        client_id, cliente_raw = _contact_client(contact_id)
+        if client_id:
+            client_status = "inherited"
+            client_origin = "inherited"
+            client_confidence = contact_confidence * INHERITED_CLIENT_FACTOR
 
-        if row:
-            cliente_raw = row["razon_social"]
+    elif contact_id and client_status == "unresolved":
+        # Se dijo un cliente que no existe y el contacto es de otro: conflicto
+        client_status = "conflict"
+
+    client_candidates = _candidates(client_match) if client_origin == "detected" else []
 
     # -------------------------------
     # 4️⃣ Confidence global
     # -------------------------------
-    # Pesos empresariales
-    WEIGHT_CLIENT = 0.4
-    WEIGHT_CONTACT = 0.3
-    WEIGHT_PRODUCT = 0.2
-    WEIGHT_ACTION = 0.1
-
-    # Cliente
     client_score = client_confidence if client_id else 0
-
-    # Contacto
     contact_score = contact_confidence if contact_id else 0
-
-    # Producto (mínimo si hay varios)
-    product_confidences = [p["confidence"] for p in products_detected]
-    product_score = min(product_confidences) if product_confidences else 0
-
-    # Acción (si existe activity_type_id la consideramos exacta)
+    product_scores = [p["confidence"] for p in products_detected]
     action_score = 100 if activity_type_id else 0
 
-    # Score compuesto
-    overall_confidence = (
-        client_score * WEIGHT_CLIENT +
-        contact_score * WEIGHT_CONTACT +
-        product_score * WEIGHT_PRODUCT +
-        action_score * WEIGHT_ACTION
+    overall_confidence = _overall_confidence(
+        client_score, contact_score, product_scores, action_score, contact_mentioned=bool(contacto_raw)
     )
 
-    overall_confidence = round(overall_confidence)
-
-    if overall_confidence >= 95:
-        resolution_status = "exact"
-    elif overall_confidence >= 85:
-        resolution_status = "high"
-    elif overall_confidence >= 70:
-        resolution_status = "medium"
-    elif overall_confidence >= 50:
-        resolution_status = "low"
-    else:
-        resolution_status = "unresolved"
+    named = [client_status] + ([contact_status] if contacto_raw else []) + [
+        "exact" if score >= 100 else "fuzzy" for score in product_scores
+    ]
+    resolution_status = _resolution_status(overall_confidence, named)
 
     # -------------------------------
     # 5️⃣ Obtener nombres oficiales
@@ -222,4 +279,11 @@ def analyze_transcription(text_transcribed: str) -> dict:
         "contacto_confidence": contact_confidence,
         "overall_confidence": overall_confidence,
         "resolution_status": resolution_status,
+
+        # Metadatos de resolución (aditivos)
+        "cliente_status": client_status,
+        "cliente_origen": client_origin,
+        "cliente_candidates": client_candidates,
+        "contacto_status": contact_status,
+        "contacto_candidates": contact_candidates,
     }

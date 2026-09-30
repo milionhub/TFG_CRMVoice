@@ -198,6 +198,8 @@ EXPECTED_KEYS = {
     "cliente_nombre", "contacto_nombre", "accion_detectada", "activity_type_id",
     "fecha_detectada", "products_detected", "cliente_confidence", "contacto_confidence",
     "overall_confidence", "resolution_status",
+    # Metadatos de resolución (F.2, aditivos)
+    "cliente_status", "cliente_origen", "cliente_candidates", "contacto_status", "contacto_candidates",
 }
 
 
@@ -239,11 +241,9 @@ HORIZONTE_VARIANTS = {
 @pytest.mark.parametrize("variant", HORIZONTE_VARIANTS)
 def test_pipeline_ejemplo_horizonte(client, user_a, monkeypatch, crm, variant):
     """
-    El regex solo captura "Clínica" como cliente (no resoluble, B13), pero el
-    cliente se hereda del contacto resuelto. La hora conserva la media (B11
-    corregido). Nova 15 NO existe y en este catálogo no hay ningún producto
-    parecido: no se detecta producto (el falso positivo con "Nova 14" es B12,
-    documentado en test_entity_resolution).
+    El cliente "Clínica Horizonte" se detecta completo (B13 corregido en F.1).
+    La hora conserva la media (B11 corregido). Nova 15 NO existe: no se detecta
+    producto (B12 corregido en F.1).
     """
     body = process(client, user_a, monkeypatch, HORIZONTE_VARIANTS[variant])
 
@@ -255,9 +255,10 @@ def test_pipeline_ejemplo_horizonte(client, user_a, monkeypatch, crm, variant):
     assert body["activity_type_id"] == crm.llamada
     assert body["fecha_detectada"] == "2026-10-03T04:30:00"
     assert body["products_detected"] == []
-    # 100·0.4 (cliente heredado) + 100·0.3 (contacto) + 0·0.2 (sin producto) + 100·0.1 (acción)
-    assert body["overall_confidence"] == 80
-    assert body["resolution_status"] == "medium"
+    # F.2 (F-I6): sin productos mencionados, los productos no cuentan:
+    # (100·0.4 cliente + 100·0.3 contacto + 100·0.1 acción) / 0.8 = 100
+    assert body["overall_confidence"] == 100
+    assert body["resolution_status"] == "exact"
 
 
 @pytest.mark.parametrize("variant", HORIZONTE_VARIANTS)

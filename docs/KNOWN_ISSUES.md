@@ -1,8 +1,8 @@
 # Deuda técnica conocida
 
 Backlog de problemas **abiertos** detectados durante la Fase D (tests + CI). Los ya
-resueltos no aparecen: B1, B11 y B14 (Fase D), B3, B6, B7, B10, B15 y B16 (Fase E) y B12 y B13
-(Fase F.1).
+resueltos no aparecen: B1, B11 y B14 (Fase D), B3, B6, B7, B10, B15 y B16 (Fase E) y B12, B13,
+F-I2, F-I5 y F-I6 (Fase F).
 
 Donde existe, el test que describe el comportamiento deseado está marcado como `xfail`
 (backend, `strict=True`) o `skip` (frontend); al corregir el bug, ese test debe pasar a
@@ -18,14 +18,11 @@ responde 422 (no hay `PATCH`). El `comentario` es opcional: si no se envía, se 
 
 ## F — CRM / resolución de entidades
 
-| ID | Resumen | Severidad |
-|---|---|---|
-| F-I2 | `/process-audio`: si el cliente dicho no se resuelve ("Nora Quintana de Acme"), se hereda en silencio el cliente del contacto con confianza 100 (pendiente de F.2) | IMPORTANT |
-| F-I5 | La ambigüedad ya se detecta en los resolvers (no se elige en silencio), pero `/process-audio` no expone el estado ni los candidatos (pendiente de F.2) | IMPORTANT |
-| F-I6 | La confianza de `/process-audio` no refleja la certeza: el cliente heredado copia el score del contacto y la ausencia de productos penaliza (pendiente de F.2) | IMPORTANT |
-| — | Código muerto en `voice_pipeline`: el reintento de `resolve_contact` repite la misma llamada (pendiente de F.2) | MINOR |
-| — | Fuzzy permisivo con nombres cortos ("Alba" → Alma, "Villa" → Villademo); umbrales sin cambios | MINOR |
-| — | `detect_action` no reconoce "seguimiento", "email", "presentar", "llamé"… y el orden de las reglas prioriza "oferta" sobre "visita"/"reunión" | MINOR |
+Completada. `/process-audio` expone de forma aditiva `cliente_status`, `cliente_origen`,
+`cliente_candidates`, `contacto_status` y `contacto_candidates`: un cliente dicho pero no
+resuelto no se sustituye por el del contacto (`conflict`), solo se hereda el cliente de un
+contacto inequívoco cuando no se dijo ninguno (`inherited`) y la ambigüedad no se resuelve
+en silencio. La confianza solo pondera lo mencionado. Los MINOR pendientes están en H y J.
 
 ## G — Chat IA V2
 
@@ -44,6 +41,8 @@ responde 422 (no hay `PATCH`). El `comentario` es opcional: si no se envía, se 
 
 | ID | Resumen | Severidad |
 |---|---|---|
+| — | `detect_action` no reconoce "seguimiento", "email", "presentar", "llamé"… y el orden de las reglas prioriza "oferta" sobre "visita"/"reunión" | MINOR |
+| — | `/process-audio` no distingue un producto mencionado pero no reconocido de uno no mencionado (`resolve_products` solo devuelve los reconocidos): la confianza no lo penaliza | MINOR |
 | B2 | La detección de duplicados nunca se activa (compara `substr(fecha,1,10)` con la fecha completa) y no filtra por comercial; hay que arreglar las dos cosas a la vez | IMPORTANT |
 | FE-D7-02 | NewActivity: un error de red o un 500 al guardar no muestra ningún aviso (excepción no controlada) (1 `skip`) | IMPORTANT |
 | B9 | `/process-text` solo aplica regex (sin ids, productos ni hora) y diverge de `/process-audio`; el frontend no lo usa | MINOR |
@@ -66,6 +65,8 @@ responde 422 (no hay `PATCH`). El `comentario` es opcional: si no se envía, se 
 
 | Resumen | Severidad |
 |---|---|
+| Resolución de entidades: fuzzy permisivo con nombres cortos ("Alba" → Alma, "Villa" → Villademo); un modelo sin palabra de categoría ni alias ("el Nova 14") no se detecta; modelos alfanuméricos ("X27"/"X28") sin comprobación de número; la forma jurídica solo se ignora en el catálogo ("SL" frente a "S.L." queda fuzzy); un alias que es palabra común ("aurora") se detecta como cliente | MINOR |
+| Extracción de cliente: con dos empresas en la frase, una que no está en el catálogo se sustituye por la que sí está; un nombre con "de" fuera del catálogo se reduce a su parte final ("Ayuntamiento de X" → "X") | MINOR |
 | Tests frontend: la guarda de `FakeBackend` solo cubre las peticiones hechas dentro de `backend.run`; sin tests de `rememberMe=false` en registro y Google, ni del timeout de `fetchMe`; la rama web de Google (`kIsWeb`) no se puede probar | MINOR |
 | Los widget tests dependen de textos e iconos concretos: habrá que actualizarlos con el rediseño de la Fase I | MINOR |
 | Tests backend: `test_infra.py` importa `conftest` directamente; dependencias transitivas sin fijar (aviso de deprecación de anyio) | MINOR |
