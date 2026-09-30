@@ -14,7 +14,7 @@ import logging
 import numpy as np
 
 from db import get_connection
-from openai_service import generate_embedding
+from services.openai_service import generate_embedding
 
 logger = logging.getLogger("crmvoice")
 
@@ -159,7 +159,7 @@ def create_activity(data: dict, salesperson_id: int) -> dict:
     # 3️⃣ Control duplicados
     # -------------------------------
     if vector:
-        from openai_service import is_duplicate_activity
+        from services.openai_service import is_duplicate_activity
 
         is_dup, similarity_score = is_duplicate_activity(
             vector,
@@ -275,7 +275,7 @@ def create_activity(data: dict, salesperson_id: int) -> dict:
 def semantic_search(query_text: str, salesperson_id: int) -> list[dict]:
     """
     Búsqueda de /semantic-search: las 3 actividades del comercial más
-    parecidas a la consulta. (La del chat es semantic_search_service.)
+    parecidas a la consulta. (La del chat es services.semantic_search_service.)
     """
 
     # 1️⃣ Generar embedding del query

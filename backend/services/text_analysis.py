@@ -5,7 +5,7 @@ Es lo que devuelve /process-text y el primer paso de /process-audio.
 """
 import re
 
-from date_resolver import resolve_relative_date
+from services.date_resolver import resolve_relative_date
 
 
 def normalize_name(name: str) -> str:

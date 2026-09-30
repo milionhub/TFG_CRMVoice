@@ -6,8 +6,9 @@ Garantías (en este orden, ANTES de importar ningún módulo del backend):
   2. Entorno ficticio: SECRET_KEY/OPENAI_API_KEY falsas, OPENAI_BASE_URL a un
      puerto muerto de loopback y GOOGLE_CLIENT_ID vacío. load_dotenv() se
      neutraliza: el backend/.env real nunca se lee.
-  3. CRMVOICE_DB_PATH apunta a una SQLite temporal (la que usa init_db() al
-     importar main). Cada test usa además su propia SQLite nueva.
+  3. CRMVOICE_DB_PATH apunta a una SQLite temporal de sesión (red de
+     seguridad: nada fuera de un test llega a crm.db). Cada test usa además
+     su propia SQLite nueva.
   4. Red bloqueada salvo loopback, e imports de whisper/torch prohibidos.
 
 Durante cada test:
@@ -76,11 +77,12 @@ import dotenv  # noqa: E402
 dotenv.load_dotenv = lambda *args, **kwargs: False
 
 # =====================================================================
-# 3. SQLite temporal para el init_db() que main ejecuta al importarse
+# 3. SQLite temporal de sesión (importar main ya no inicializa la BD:
+#    lo hace el lifespan de la app; cada test usa además su propia SQLite)
 # =====================================================================
 
 SESSION_DB_DIR = Path(tempfile.mkdtemp(prefix="crmvoice-tests-"))
-os.environ["CRMVOICE_DB_PATH"] = str(SESSION_DB_DIR / "import_time.db")
+os.environ["CRMVOICE_DB_PATH"] = str(SESSION_DB_DIR / "session.db")
 
 
 # =====================================================================
@@ -169,12 +171,9 @@ import db  # noqa: E402
 
 assert Path(db.DB_PATH).resolve() != REAL_DB.resolve(), "CRMVOICE_DB_PATH apunta a backend/crm.db"
 
-import ai_router  # noqa: E402
-import chat_memory  # noqa: E402
 import main  # noqa: E402
 from services import activities as activities_service  # noqa: E402
-import openai_service  # noqa: E402
-import semantic_search_service  # noqa: E402
+from services import ai_router, chat_memory, openai_service, semantic_search_service  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from jose import jwt  # noqa: E402
 from core.security import create_access_token, hash_password  # noqa: E402

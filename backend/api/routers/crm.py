@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from api.deps import get_current_user
-from context_service import build_context
+from services.context import build_context
 from services import catalog
 
 router = APIRouter(tags=["crm"])
@@ -32,5 +32,5 @@ def get_activity_types(current_user: dict = Depends(get_current_user)):
 
 @router.get("/client-context/{client_id}")
 def get_client_context(client_id: int, current_user: dict = Depends(get_current_user)):
-    # Actividades solo del comercial autenticado; facturación global (context_service)
+    # Actividades solo del comercial autenticado; facturación global (services.context)
     return build_context(client_id, current_user["user_id"])

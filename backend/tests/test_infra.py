@@ -10,8 +10,9 @@ import requests
 
 import conftest
 import db
-import openai_service
-import whisper_service
+import main
+from fastapi.testclient import TestClient
+from services import openai_service, whisper_service
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REAL_DB = BACKEND_DIR / "crm.db"
@@ -64,7 +65,7 @@ def test_importar_main_no_carga_whisper_ni_torch(tmp_path):
     """
     env = {**os.environ, "CRMVOICE_DB_PATH": str(tmp_path / "subprocess.db")}
     code = (
-        "import sys, main, whisper_service;"
+        "import sys, main; from services import whisper_service;"
         "print('whisper' in sys.modules, 'torch' in sys.modules, whisper_service._model is None)"
     )
     result = subprocess.run(
@@ -73,8 +74,6 @@ def test_importar_main_no_carga_whisper_ni_torch(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split()[-3:] == ["False", "False", "True"]
-    # y el proceso hijo usó su propia SQLite, no crm.db
-    assert (tmp_path / "subprocess.db").exists()
 
 
 def test_en_esta_sesion_whisper_y_torch_no_estan_cargados():
@@ -107,5 +106,54 @@ def test_openai_sin_mockear_falla_y_queda_registrado():
     with pytest.raises(conftest.ExternalCallBlocked):
         openai_service.generate_embedding("hola")
 
-    assert conftest.BLOCKED_OPENAI == ["openai_service.client.embeddings.create"]
+    assert conftest.BLOCKED_OPENAI == ["services.openai_service.client.embeddings.create"]
     conftest.BLOCKED_OPENAI.clear()  # llamada provocada a propósito
+
+
+# =====================================================================
+# Arranque: la BD se inicializa en el lifespan, no al importar main
+# =====================================================================
+
+def test_importar_main_no_inicializa_la_bd_y_arrancar_la_app_si(tmp_path):
+    """
+    Proceso limpio: importar main no crea la SQLite; arrancar la aplicación
+    (lifespan, como hace uvicorn) la crea con su esquema antes de atender.
+    """
+    db_file = tmp_path / "startup.db"
+    env = {**os.environ, "CRMVOICE_DB_PATH": str(db_file)}
+    code = (
+        "import sqlite3; from pathlib import Path; import main;"
+        "from fastapi.testclient import TestClient;"
+        f"p = Path({str(db_file)!r}); print(p.exists());"
+        "c = TestClient(main.app);"
+        "c.__enter__(); print(p.exists());"
+        "print(c.get('/ping').status_code);"
+        "names = {r[0] for r in sqlite3.connect(p).execute(\"SELECT name FROM sqlite_master WHERE type='table'\")};"
+        "print('salespeople' in names and 'activities' in names);"
+        "c.__exit__(None, None, None)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=BACKEND_DIR, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split()[-4:] == ["False", "True", "200", "True"]
+
+
+def test_el_lifespan_inicializa_la_bd_configurada(tmp_path, monkeypatch):
+    fresh = tmp_path / "lifespan.db"
+    monkeypatch.setattr(db, "DB_PATH", fresh)
+
+    TestClient(main.app)  # sin arrancar la app: no se toca la BD
+    assert not fresh.exists()
+
+    with TestClient(main.app) as client:
+        assert fresh.exists()
+        assert client.get("/ping").status_code == 200
+
+    conn = db.get_connection()
+    try:
+        types = {r["accion"] for r in conn.execute("SELECT accion FROM activity_types")}
+    finally:
+        conn.close()
+    assert types == set(db.ACTIVITY_TYPES)

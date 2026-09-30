@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import whisper_service
+from services import whisper_service
 
 SUFFIXES = [".wav", ".webm", ".ogg", ".m4a", ".flac", ".mp3", ".amr", ".caf", ".aiff", ".aac"]
 

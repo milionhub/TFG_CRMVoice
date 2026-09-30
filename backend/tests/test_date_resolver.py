@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from date_resolver import resolve_relative_date, resolve_time
+from services.date_resolver import resolve_relative_date, resolve_time
 
 # Jueves 1 de octubre de 2026 (weekday() == 3)
 THURSDAY = datetime(2026, 10, 1, 12, 0)

@@ -100,6 +100,7 @@ Edita `backend/.env` y rellena los valores vacíos:
 | `ALGORITHM` | Sí | Algoritmo del JWT: `HS256` (también se admiten `HS384` y `HS512`) |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Sí | Duración de la sesión en minutos, por ejemplo `60` |
 | `GOOGLE_CLIENT_ID` | No | OAuth Client ID de Google (ver [Login con Google](#login-con-google-opcional)). Sin él, `/auth/google` responde 503 |
+| `CORS_ORIGINS` | No | Orígenes permitidos, separados por comas (p. ej. `http://localhost:5000`). Sin definir, se permite cualquier origen (`*`) |
 
 Generar la `SECRET_KEY` y pegarla en `.env`:
 
@@ -283,13 +284,17 @@ No usa secretos ni servicios externos.
 
 ```
 backend/
-  main.py              API (FastAPI)
-  db.py                SQLite: conexión, tablas y tipos de actividad
+  main.py              composición de la app: CORS, routers y arranque (init_db)
+  config.py            lectura de la configuración (.env)
   env_check.py         validación de la configuración al arrancar
-  whisper_service.py   transcripción local
-  entity_resolver.py   resolución de cliente, contacto y productos
-  date_resolver.py     fechas y horas relativas
-  openai_service.py    embeddings y resúmenes
+  db.py                SQLite: conexión, tablas y tipos de actividad
+  api/                 capa HTTP: routers por dominio (auth, crm, activities,
+                       voice, chat, system) y dependencias (usuario del JWT)
+  schemas/             modelos Pydantic de peticiones y respuestas
+  core/security.py     contraseñas (bcrypt) y JWT
+  services/            lógica sin FastAPI: cuentas, catálogo, actividades,
+                       voz (Whisper, análisis de texto, fechas, entidades),
+                       chat (OpenAI, memoria, intención, contexto, insights)
   seed_demo_data.py    catálogo de demostración (datos ficticios)
   .env.example         plantilla de configuración
   requirements*.txt    dependencias (completo / core / dev)

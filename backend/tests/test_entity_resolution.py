@@ -14,8 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 import db
-import entity_resolver
-from services import text_analysis
+from services import entity_resolver, text_analysis
 
 
 @pytest.fixture

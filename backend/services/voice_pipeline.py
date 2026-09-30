@@ -8,11 +8,11 @@ Pipeline de /process-audio (sin FastAPI):
 
 El router se encarga de la subida (UploadFile) y de traducir errores a HTTP.
 """
-from date_resolver import resolve_time
+from services.date_resolver import resolve_time
 from db import get_connection
-from entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
+from services.entity_resolver import resolve_client, resolve_activity_type, resolve_contact, resolve_products
 from services.text_analysis import analyze_text
-from whisper_service import transcribe_audio  # noqa: F401 (lo usa el router: voice_pipeline.transcribe_audio)
+from services.whisper_service import transcribe_audio  # noqa: F401 (lo usa el router: voice_pipeline.transcribe_audio)
 
 # -------------------------
 # AUDIO: límites y formatos aceptados

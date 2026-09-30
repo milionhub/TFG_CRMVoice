@@ -1,5 +1,4 @@
 from db import get_connection
-from opportunity_engine import detect_opportunities
 
 
 

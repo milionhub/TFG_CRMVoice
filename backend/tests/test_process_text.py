@@ -12,8 +12,7 @@ from functools import partial
 
 import pytest
 
-import date_resolver
-from services import text_analysis
+from services import date_resolver, text_analysis
 
 THURSDAY = datetime(2026, 10, 1, 12, 0)
 RESPONSE_KEYS = {"cliente", "contacto", "accion", "fecha", "comentario"}

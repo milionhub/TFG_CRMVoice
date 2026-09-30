@@ -19,13 +19,6 @@ def generate_embedding(text: str):
     )
     return response.data[0].embedding
 
-def test_embedding():
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input="Prueba CRM Voice"
-    )
-    return response.data[0].embedding
-
 def generate_meeting_summary(context_data: dict):
 
     recent_activities_formatted = "\n".join(
@@ -136,19 +129,6 @@ def is_duplicate_activity(new_vector, client_id, activity_type_id, datetime_iso)
             return True, similarity
 
     return False, 0
-
-
-def format_billing_response(billing_data):
-
-    return f"""
-    Resumen de Facturación
-
-    Facturación total histórica: {billing_data["total_facturado"]} €
-    Número de facturas: {billing_data["total_facturas"]}
-    Ticket medio: {billing_data["ticket_medio"]} €
-    Última factura registrada: {billing_data["ultima_factura"]}
-    Producto más facturado: {billing_data["producto_top"]}
-    """
 
 
 def generate_client_summary(context_data: dict):

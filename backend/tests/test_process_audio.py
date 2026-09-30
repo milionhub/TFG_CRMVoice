@@ -9,9 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import date_resolver
-from services import text_analysis, voice_pipeline
-import whisper_service
+from services import date_resolver, text_analysis, voice_pipeline, whisper_service
 
 THURSDAY = datetime(2026, 10, 1, 12, 0)
 

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from services import activities as activities_service
-import semantic_search_service
+from services import semantic_search_service
 
 
 # ---------------------------------------------------------------------

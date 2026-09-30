@@ -5,7 +5,7 @@ entre comerciales, contexto CRM, contrato y errores de OpenAI.
 Frontera sustituida: el atributo `client` (cliente OpenAI) de ai_router,
 openai_service y semantic_search_service. Los prompts los construye el
 código real (ai_router.analyze_user_message, openai_service.generate_*,
-context_service.build_context, ...); el doble solo registra lo que se
+services.context.build_context, ...); el doble solo registra lo que se
 enviaría a OpenAI y devuelve una respuesta controlada.
 
 Memoria real (chat_memory): dos diccionarios globales de proceso, indexados
@@ -22,11 +22,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import ai_router
-import chat_memory
 import main
-import openai_service
-import semantic_search_service
+from services import ai_router, chat_memory, openai_service, semantic_search_service
 
 SECRET_A = "SECRET_A_ONLY_7F3C"
 MESSAGE_B = "MESSAGE_B_ONLY_91D2"
