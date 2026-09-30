@@ -790,7 +790,7 @@ class _HistoryContentState extends State<HistoryContent> {
       }
           );
 
-    if (confirm == true) {
+    if (confirm == true && mounted) {
 
       final api = context.read<ApiService>();
 

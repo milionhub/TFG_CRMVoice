@@ -96,9 +96,6 @@ class _CalendarContentState extends State<CalendarContent> {
       dateTo: sunday.toIso8601String().split("T")[0],
     );
 
-    print("ACTIVIDADES SEMANA:");
-    print(data);
-
     setState(() {
       _activities = data;
       _isLoading = false;
@@ -495,10 +492,12 @@ class _CalendarContentState extends State<CalendarContent> {
 
     final color = getActivityColor(activityType);
 
+    // Fuera del builder: si se declara dentro, vuelve a false en cada
+    // rebuild y el efecto hover nunca se aplica
+    bool isHovering = false;
+
     return StatefulBuilder(
       builder: (context, setState) {
-        bool isHovering = false;
-
         return MouseRegion(
           cursor: SystemMouseCursors.click,
           onEnter: (_) => setState(() => isHovering = true),
@@ -767,10 +766,10 @@ class _CalendarContentState extends State<CalendarContent> {
                             }
                                                       );
 
-                          if (confirm == true) {
+                          if (confirm == true && mounted) {
                             final api = context.read<ApiService>();
                             await api.deleteActivity(activity["id"]);
-                            Navigator.pop(context);
+                            if (mounted) Navigator.pop(context);
                             _loadActivities();
                           }
                         },
@@ -1501,7 +1500,7 @@ class _EditActivityDialogState extends State<EditActivityDialog> {
                       },
                     );
 
-                    if (ok) {
+                    if (ok && context.mounted) {
 
                       Navigator.pop(context, true);
 

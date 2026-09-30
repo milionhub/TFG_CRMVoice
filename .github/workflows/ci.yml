@@ -1,0 +1,87 @@
+# CI de CRMVoice: tests del backend (sin Whisper/PyTorch ni servicios
+# externos) y análisis + tests del frontend Flutter. Sin build web ni deploy.
+name: CI
+
+on:
+  push:
+    branches: [develop, refactor/portfolio-v2]
+  pull_request:
+    branches: [develop]
+
+# Solo lectura: el workflow no necesita escribir en el repositorio
+permissions:
+  contents: read
+
+# Un push nuevo en la misma rama/PR cancela la ejecución anterior
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    # Sin secretos ni variables de entorno: tests/conftest.py fija valores
+    # ficticios, no lee backend/.env, usa SQLite temporal y bloquea la red
+    # externa, OpenAI y los imports de whisper/torch durante pytest.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-core.txt
+            backend/requirements-dev.txt
+
+      # requirements-dev = requirements-core + pytest/httpx (sin Whisper ni PyTorch)
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Check that Whisper and PyTorch are not installed
+        run: |
+          python - <<'EOF'
+          import importlib.util, sys
+          present = [m for m in ("whisper", "torch") if importlib.util.find_spec(m)]
+          sys.exit(f"Should not be installed in CI: {present}" if present else 0)
+          EOF
+
+      - name: Run pytest
+        run: python -m pytest
+
+  frontend:
+    name: Frontend (analyze + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.0
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      # pubspec.lock está versionado: se instalan exactamente esas versiones
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      # Falla con warnings y errores. Los "info" (sobre todo deprecaciones de
+      # withOpacity) no bloquean: corregirlos exige cambios masivos de UI que
+      # se harán en la fase de UI/UX.
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test

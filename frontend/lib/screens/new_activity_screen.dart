@@ -410,7 +410,7 @@ class _NewActivityScreenState extends State<NewActivityScreen> {
 
                   if (response["success"] == true) {
 
-                    if (!mounted) return;
+                    if (!context.mounted) return;
 
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -423,7 +423,7 @@ class _NewActivityScreenState extends State<NewActivityScreen> {
 
                   } else {
 
-                    if (!mounted) return;
+                    if (!context.mounted) return;
 
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(

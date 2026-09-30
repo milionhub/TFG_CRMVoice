@@ -1,6 +1,6 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
-import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 
 class ApiService {
@@ -286,7 +286,7 @@ Future<bool> updateActivity(int id, Map<String, dynamic> data) async {
     final json = jsonDecode(response.body);
     return json["success"] == true;
   } else {
-    print(response.body);
+    debugPrint(response.body);
     return false;
   }
 }

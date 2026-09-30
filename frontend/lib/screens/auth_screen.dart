@@ -10,7 +10,6 @@ import '../widgets/app_logo.dart';
 import '../core/app_colors.dart';
 import '../services/google_auth_service.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:provider/provider.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -342,7 +341,7 @@ class _AuthScreenState extends State<AuthScreen>
 
                       }
 
-                      if (!success) {
+                      if (!success && mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text("Credenciales incorrectas"),

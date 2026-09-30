@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 
 class GoogleAuthService {
@@ -42,7 +42,7 @@ class GoogleAuthService {
       final auth = await account.authentication;
       return auth.idToken;
     } catch (e) {
-      print("Google idToken error: $e");
+      debugPrint("Google idToken error: $e");
       return null;
     }
   }
@@ -57,7 +57,7 @@ class GoogleAuthService {
 
     } catch (e) {
 
-      print("Google login error: $e");
+      debugPrint("Google login error: $e");
 
     }
 

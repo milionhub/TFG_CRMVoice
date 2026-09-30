@@ -208,7 +208,7 @@ class AuthProvider extends ChangeNotifier {
       final googleAuth = GoogleAuthService();
       await googleAuth.signOut();
     } catch (e) {
-      print("Google logout error: $e");
+      debugPrint("Google logout error: $e");
     }
 
     _clearSession();
@@ -259,12 +259,12 @@ class AuthProvider extends ChangeNotifier {
         }),
       );
     } catch (e) {
-      print("Google login connection error: $e");
+      debugPrint("Google login connection error: $e");
       return false;
     }
 
     if (response.statusCode != 200) {
-      print("Google login backend error: ${response.body}");
+      debugPrint("Google login backend error: ${response.body}");
       return false;
     }
 
