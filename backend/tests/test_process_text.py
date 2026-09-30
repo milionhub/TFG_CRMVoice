@@ -1,7 +1,7 @@
 """
 /process-text (D.4): comportamiento ACTUAL.
 
-Solo aplica las regex de main.analyze_text: NO consulta el CRM (sin ids,
+Solo aplica las regex de services.text_analysis.analyze_text: NO consulta el CRM (sin ids,
 sin nombres oficiales, sin productos) y devuelve la fecha SIN hora. Es la
 divergencia B9 con /process-audio; aquí solo se caracteriza (se unificará
 en Voice V2). El frontend actual no llama a este endpoint (ApiService.analyzeText
@@ -13,7 +13,7 @@ from functools import partial
 import pytest
 
 import date_resolver
-import main
+from services import text_analysis
 
 THURSDAY = datetime(2026, 10, 1, 12, 0)
 RESPONSE_KEYS = {"cliente", "contacto", "accion", "fecha", "comentario"}
@@ -22,7 +22,7 @@ RESPONSE_KEYS = {"cliente", "contacto", "accion", "fecha", "comentario"}
 @pytest.fixture(autouse=True)
 def fixed_today(monkeypatch):
     """Fecha base fija, parcheada donde se usa (main)."""
-    monkeypatch.setattr(main, "resolve_relative_date",
+    monkeypatch.setattr(text_analysis, "resolve_relative_date",
                         partial(date_resolver.resolve_relative_date, today=THURSDAY))
 
 

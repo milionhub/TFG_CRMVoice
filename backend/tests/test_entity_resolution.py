@@ -15,7 +15,7 @@ import pytest
 
 import db
 import entity_resolver
-import main
+from services import text_analysis
 
 
 @pytest.fixture
@@ -203,9 +203,9 @@ def test_b12_producto_que_solo_difiere_en_el_numero_no_deberia_resolverse(factor
 # =====================================================================
 
 def test_cada_accion_de_detect_action_resuelve_a_un_tipo_de_actividad(dbq):
-    """detect_action (main) y db.ACTIVITY_TYPES deben seguir alineados."""
+    """detect_action (text_analysis) y db.ACTIVITY_TYPES deben seguir alineados."""
     texts = ["enviar presupuesto", "mandar la oferta", "concertar reunión", "visita", "llamar"]
-    actions = {main.detect_action(t) for t in texts}
+    actions = {text_analysis.detect_action(t) for t in texts}
 
     assert actions == set(db.ACTIVITY_TYPES)
     for action in actions:

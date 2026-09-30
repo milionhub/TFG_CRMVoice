@@ -172,6 +172,7 @@ assert Path(db.DB_PATH).resolve() != REAL_DB.resolve(), "CRMVOICE_DB_PATH apunta
 import ai_router  # noqa: E402
 import chat_memory  # noqa: E402
 import main  # noqa: E402
+from services import activities as activities_service  # noqa: E402
 import openai_service  # noqa: E402
 import semantic_search_service  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -422,11 +423,11 @@ def dbq():
 
 
 # =====================================================================
-# Dobles de OpenAI (se parchean donde se usan: en main)
+# Dobles de OpenAI (se parchean donde se usan: en services.activities)
 # =====================================================================
 
 class FakeEmbedding:
-    """Sustituye a main.generate_embedding: vector determinista y registro de llamadas."""
+    """Sustituye a generate_embedding de services.activities: vector determinista y registro de llamadas."""
 
     def __init__(self, vector=None, error=None):
         self.vector = vector if vector is not None else [0.1, 0.2, 0.3]
@@ -444,7 +445,7 @@ class FakeEmbedding:
 def fake_embedding(monkeypatch):
     """Embedding que funciona. Desactiva además la comprobación de duplicados (B2)."""
     fake = FakeEmbedding()
-    monkeypatch.setattr(main, "generate_embedding", fake)
+    monkeypatch.setattr(activities_service, "generate_embedding", fake)
     # main importa is_duplicate_activity de openai_service dentro de la función:
     # se parchea en openai_service para que estos tests no dependan de B2.
     monkeypatch.setattr(openai_service, "is_duplicate_activity", lambda *args, **kwargs: (False, 0))
@@ -454,5 +455,5 @@ def fake_embedding(monkeypatch):
 @pytest.fixture
 def failing_embedding(monkeypatch):
     fake = FakeEmbedding(error=RuntimeError("OpenAI no disponible (simulado)"))
-    monkeypatch.setattr(main, "generate_embedding", fake)
+    monkeypatch.setattr(activities_service, "generate_embedding", fake)
     return fake

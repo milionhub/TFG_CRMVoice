@@ -1,6 +1,6 @@
 """
 /process-audio (D.4): subida, detección de formato, transcripción (Whisper
-sustituido en main.transcribe_audio, donde se usa) y pipeline de resolución
+sustituido en services.voice_pipeline.transcribe_audio, donde se usa) y pipeline de resolución
 CRM. Nunca se usa Whisper ni FFmpeg reales.
 """
 from datetime import datetime
@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import date_resolver
-import main
+from services import text_analysis, voice_pipeline
 import whisper_service
 
 THURSDAY = datetime(2026, 10, 1, 12, 0)
@@ -36,7 +36,7 @@ def audio(suffix=".webm", size=64):
 
 
 class FakeTranscriber:
-    """Sustituye a main.transcribe_audio: registra lo recibido y devuelve un texto."""
+    """Sustituye a voice_pipeline.transcribe_audio: registra lo recibido y devuelve un texto."""
 
     def __init__(self, text="texto transcrito", error=None):
         self.text = text
@@ -53,13 +53,13 @@ class FakeTranscriber:
 @pytest.fixture
 def transcriber(monkeypatch):
     fake = FakeTranscriber()
-    monkeypatch.setattr(main, "transcribe_audio", fake)
+    monkeypatch.setattr(voice_pipeline, "transcribe_audio", fake)
     return fake
 
 
 @pytest.fixture(autouse=True)
 def fixed_today(monkeypatch):
-    monkeypatch.setattr(main, "resolve_relative_date",
+    monkeypatch.setattr(text_analysis, "resolve_relative_date",
                         partial(date_resolver.resolve_relative_date, today=THURSDAY))
 
 
@@ -96,14 +96,14 @@ def test_sin_fichero_422(client, user_a, transcriber):
 
 
 def test_audio_en_el_limite_de_tamano_se_acepta(client, user_a, transcriber):
-    response = upload(client, user_a, audio(".ogg", size=main.MAX_AUDIO_BYTES), "audio/ogg", "a.ogg")
+    response = upload(client, user_a, audio(".ogg", size=voice_pipeline.MAX_AUDIO_BYTES), "audio/ogg", "a.ogg")
 
     assert response.status_code == 200
-    assert len(transcriber.calls[0]["bytes"]) == main.MAX_AUDIO_BYTES
+    assert len(transcriber.calls[0]["bytes"]) == voice_pipeline.MAX_AUDIO_BYTES
 
 
 def test_audio_demasiado_grande_413(client, user_a, transcriber):
-    response = upload(client, user_a, audio(".ogg", size=main.MAX_AUDIO_BYTES + 1), "audio/ogg", "a.ogg")
+    response = upload(client, user_a, audio(".ogg", size=voice_pipeline.MAX_AUDIO_BYTES + 1), "audio/ogg", "a.ogg")
 
     assert response.status_code == 413
     assert transcriber.calls == []
@@ -153,7 +153,7 @@ def test_el_sufijo_se_decide_por_la_cabecera_no_por_el_nombre(client, user_a, tr
 # =====================================================================
 
 def test_error_de_transcripcion_500_controlado(client, user_a, monkeypatch):
-    monkeypatch.setattr(main, "transcribe_audio", FakeTranscriber(error=RuntimeError("ffmpeg no encontrado")))
+    monkeypatch.setattr(voice_pipeline, "transcribe_audio", FakeTranscriber(error=RuntimeError("ffmpeg no encontrado")))
 
     response = upload(client, user_a, audio())
 
@@ -189,7 +189,7 @@ def crm(factory):
 
 
 def process(client, user, monkeypatch, text):
-    monkeypatch.setattr(main, "transcribe_audio", FakeTranscriber(text))
+    monkeypatch.setattr(voice_pipeline, "transcribe_audio", FakeTranscriber(text))
     response = upload(client, user, audio())
     assert response.status_code == 200
     return response.json()
@@ -271,7 +271,7 @@ def test_b11_pipeline_hora_aislada_de_la_resolucion_de_productos(client, user_a,
     explícitamente para comprobar SOLO la fecha/hora.
     """
     factory.product("Portátil Nova 14")
-    monkeypatch.setattr(main, "resolve_products", lambda text: [])
+    monkeypatch.setattr(voice_pipeline, "resolve_products", lambda text: [])
 
     body = process(client, user_a, monkeypatch, HORIZONTE_VARIANTS[variant])
 

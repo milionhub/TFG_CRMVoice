@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import main
+from services import activities as activities_service
 import semantic_search_service
 
 
@@ -114,7 +114,7 @@ def test_semantic_search_endpoint_solo_usa_actividades_del_usuario(client, user_
         queries.append(text)
         return [1.0, 0.0, 0.0]
 
-    monkeypatch.setattr(main, "generate_embedding", fake_embedding)
+    monkeypatch.setattr(activities_service, "generate_embedding", fake_embedding)
 
     results_a = client.post("/semantic-search", json={"query": "secreto comercial"},
                             headers=user_a["headers"]).json()
@@ -132,7 +132,7 @@ def test_semantic_search_endpoint_solo_usa_actividades_del_usuario(client, user_
 
 
 def test_semantic_search_endpoint_usuario_sin_actividades(client, make_user, monkeypatch, semantic_data):
-    monkeypatch.setattr(main, "generate_embedding", lambda text: [1.0, 0.0, 0.0])
+    monkeypatch.setattr(activities_service, "generate_embedding", lambda text: [1.0, 0.0, 0.0])
     empty_user = make_user("sin.actividades@test.local")
 
     response = client.post("/semantic-search", json={"query": "lo que sea"}, headers=empty_user["headers"])

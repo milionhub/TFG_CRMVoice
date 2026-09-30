@@ -1,7 +1,7 @@
 """
 ACTIVITIES (P0): create / read / update / delete y aislamiento entre usuarios.
 
-OpenAI nunca se llama: main.generate_embedding se sustituye (fake_embedding /
+OpenAI nunca se llama: services.activities.generate_embedding se sustituye (fake_embedding /
 failing_embedding) y la comprobación de duplicados (B2) se desactiva en los
 tests de creación para que no dependan de ella. B2 queda pendiente (D.x).
 """
