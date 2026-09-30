@@ -1,7 +1,8 @@
 # Deuda técnica conocida
 
 Backlog de problemas **abiertos** detectados durante la Fase D (tests + CI). Los ya
-resueltos no aparecen: B1, B11 y B14 (Fase D) y B3, B6, B7, B10, B15 y B16 (Fase E).
+resueltos no aparecen: B1, B11 y B14 (Fase D), B3, B6, B7, B10, B15 y B16 (Fase E) y B12 y B13
+(Fase F.1).
 
 Donde existe, el test que describe el comportamiento deseado está marcado como `xfail`
 (backend, `strict=True`) o `skip` (frontend); al corregir el bug, ese test debe pasar a
@@ -19,9 +20,12 @@ responde 422 (no hay `PATCH`). El `comentario` es opcional: si no se envía, se 
 
 | ID | Resumen | Severidad |
 |---|---|---|
-| B12 | Un producto que solo difiere en el número se resuelve mal: "Nova 15" → "Portátil Nova 14" (1 `xfail`) | IMPORTANT |
-| B13 | Falsos positivos de las regex de `analyze_text`: el verbo inicial como contacto ("Enviar"), el cliente que absorbe palabras ("Orion Consultoría Hoy"), el cliente truncado ("Clínica") (2 `xfail`) | MINOR |
-| — | Sin detección de ambigüedad: un nombre de pila repetido resuelve a uno cualquiera; fuzzy permisivo ("Rivero" → Rivera) | MINOR |
+| F-I2 | `/process-audio`: si el cliente dicho no se resuelve ("Nora Quintana de Acme"), se hereda en silencio el cliente del contacto con confianza 100 (pendiente de F.2) | IMPORTANT |
+| F-I5 | La ambigüedad ya se detecta en los resolvers (no se elige en silencio), pero `/process-audio` no expone el estado ni los candidatos (pendiente de F.2) | IMPORTANT |
+| F-I6 | La confianza de `/process-audio` no refleja la certeza: el cliente heredado copia el score del contacto y la ausencia de productos penaliza (pendiente de F.2) | IMPORTANT |
+| — | Código muerto en `voice_pipeline`: el reintento de `resolve_contact` repite la misma llamada (pendiente de F.2) | MINOR |
+| — | Fuzzy permisivo con nombres cortos ("Alba" → Alma, "Villa" → Villademo); umbrales sin cambios | MINOR |
+| — | `detect_action` no reconoce "seguimiento", "email", "presentar", "llamé"… y el orden de las reglas prioriza "oferta" sobre "visita"/"reunión" | MINOR |
 
 ## G — Chat IA V2
 
