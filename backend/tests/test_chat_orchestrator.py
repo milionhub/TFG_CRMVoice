@@ -3,6 +3,8 @@ G.3 — Orquestador del chat (services.chat_orchestrator) con un modelo
 programado (ScriptedModel): bucle acotado, límites, llamadas repetidas,
 presupuesto total, reintentos y respuestas mal formadas. Nunca OpenAI real.
 """
+import json
+from datetime import datetime
 from types import SimpleNamespace
 
 import httpx
@@ -317,3 +319,114 @@ def test_el_cliente_del_chat_no_reintenta_en_el_sdk():
     chat_client = orch.make_chat_client()
     assert chat_client.max_retries == 0
     assert chat_client.timeout.read == orch.get_openai_client().timeout.read  # resto de la config de G.1
+
+
+# =====================================================================
+# G.4 — solo se confía en la evidencia vista, última llamada, calendario y política
+# =====================================================================
+
+def test_resultado_descartado_por_el_tope_de_evidencia_no_ensena_ids(chat_crm, model, clock, monkeypatch):
+    statuses = []
+    real_dispatch = orch.chat_tools.dispatch
+
+    def spy(name, arguments, ctx):
+        outcome = real_dispatch(name, arguments, ctx)
+        statuses.append((name, outcome.status))
+        return outcome
+
+    monkeypatch.setattr(orch.chat_tools, "dispatch", spy)
+    monkeypatch.setattr(orch, "MAX_EVIDENCE_CHARS", 100)   # ni siquiera cabe el resultado de find_entities
+    model.script([("find_entities", {"client_name": "Rivera"}),
+                  ("get_client_overview", {"client_id": chat_crm.rivera})], "fin")
+
+    result = run(chat_crm.a, clock)
+
+    # find_entities se ejecutó bien pero se descartó: su id no pasó a ser de confianza
+    assert statuses == [("find_entities", "ok"), ("get_client_overview", "unknown_id")]
+    assert result.outcomes[0].status == "evidence_limit"
+    assert model.requests[-1]["tool_choice"] == "none"
+
+
+def test_ultima_llamada_con_texto_y_tool_calls_devuelve_el_texto_sin_ejecutar(chat_crm, model, clock,
+                                                                             monkeypatch):
+    executed = []
+    real = crm_tools.crm_rankings
+    monkeypatch.setattr(crm_tools, "crm_rankings", lambda *a, **k: executed.append(a[0]) or real(*a, **k))
+    final = SimpleNamespace(content="Respuesta final.", refusal=None, tool_calls=[SimpleNamespace(
+        id="call_final", function=SimpleNamespace(name="crm_rankings", arguments='{"metric": "attention"}'))])
+    model.script(*[[("crm_rankings", {"metric": "billing", "limit": n})] for n in range(1, 4)], final)
+
+    result = run(chat_crm.a, clock)
+
+    assert result.answer == "Respuesta final."
+    assert executed == ["billing"] * 3                       # la de la última llamada no se ejecuta
+    assert model.requests[-1]["tool_choice"] == "none"
+
+
+@pytest.mark.parametrize("now, expected", [
+    (datetime(2026, 10, 7, 12, 0), {             # miércoles
+        "hoy": "2026-10-07", "ayer": "2026-10-06", "mañana": "2026-10-08",
+        "semana_actual": {"desde": "2026-10-05", "hasta": "2026-10-11"},
+        "semana_pasada": {"desde": "2026-09-28", "hasta": "2026-10-04"},
+        "semana_siguiente": {"desde": "2026-10-12", "hasta": "2026-10-18"}}),
+    (datetime(2026, 1, 1, 0, 0), {               # jueves; semana entre dos años
+        "hoy": "2026-01-01", "ayer": "2025-12-31", "mañana": "2026-01-02",
+        "semana_actual": {"desde": "2025-12-29", "hasta": "2026-01-04"},
+        "semana_pasada": {"desde": "2025-12-22", "hasta": "2025-12-28"},
+        "semana_siguiente": {"desde": "2026-01-05", "hasta": "2026-01-11"}}),
+    (datetime(2026, 10, 11, 23, 59), {           # domingo por la noche: sigue siendo la misma semana
+        "hoy": "2026-10-11", "ayer": "2026-10-10", "mañana": "2026-10-12",
+        "semana_actual": {"desde": "2026-10-05", "hasta": "2026-10-11"},
+        "semana_pasada": {"desde": "2026-09-28", "hasta": "2026-10-04"},
+        "semana_siguiente": {"desde": "2026-10-12", "hasta": "2026-10-18"}}),
+])
+def test_calendario_de_confianza(now, expected):
+    assert orch.calendar(now) == expected
+    message = orch.state_message(ChatState(client={"id": 3, "name": "X"}), now)
+    context = json.loads(message.split("\n", 1)[1])
+    assert context["calendario"] == expected
+    assert context["cliente_activo"] == {"id": 3, "name": "X"} and context["contacto_activo"] is None
+
+
+def test_politica_de_respuesta_en_el_prompt():
+    prompt = orch.SYSTEM_PROMPT
+    for fragment in [
+        "primera frase",                                    # responder primero
+        "6 viñetas",                                        # evidencia breve
+        "15.232 €",                                         # importes
+        "Separa los hechos del CRM de tu interpretación",
+        "No muestres teléfonos ni emails",
+        "Si necesitas algo más",                            # cierre genérico prohibido
+        "facturación total del cliente (todos los comerciales)",
+        "todavía no guarda si una actividad está hecha",    # pendiente
+        "no una puntuación",                                # attention
+        "no inventes otros criterios",
+        "He entendido 'Costa'",                             # partial (ejemplo, no frase obligatoria)
+        "combinando lo que dijo antes",                     # aclaración
+        "evidence_limit",                                   # evidencia parcial
+        "puede ser parcial",
+        "búsqueda por contenido no estaba disponible",      # fallback de la búsqueda semántica
+        "calendario del contexto",
+        "haya o no cliente activo",                         # G.3, intacto
+        # Prueba real de G.4: el contexto activo no es un filtro por defecto
+        "NO es un filtro por defecto",
+        "sin client_id ni contact_id",
+        # Prueba real final: alcance ambiguo, global explícito, productos sin fechas, dimensión y señales
+        "no adivines",
+        "scope_ambiguous",
+        "el contexto se conserva",
+        "el backend ya lo ha quitado",
+        "SIN fechas ni temporal_scope",
+        "total_without_date_filters",
+        "sin atribuir a todos",
+        "Responde a la dimensión preguntada",
+        "oportunidad valiosa",
+        "necesita al menos una herramienta en este turno",
+        "list_activities con product_name",
+        "mira primero lo que tienes",
+        "No conviertas el historial en",
+        "deja claro una vez a qué cliente lo has asociado",
+        "Estaré encantado",
+    ]:
+        assert fragment in prompt, fragment
+    assert len(prompt) < 6500                               # sigue siendo un prompt acotado (~1,5k tokens)

@@ -328,6 +328,30 @@ docs/KNOWN_ISSUES.md       deuda técnica conocida
    y recorta los resultados.
 4. El cliente/contacto activo se deriva de los resultados de las herramientas (nunca
    del texto del modelo) y el turno se guarda en `chat_conversations` / `chat_messages`.
+   Solo los ids de resultados que llegan de verdad al modelo pasan a ser de confianza.
+
+Qué entiende (G.4), siempre con datos de las herramientas y sin escribir nada en el CRM:
+
+- **Fechas relativas**: hoy, mañana, ayer, esta semana, la semana pasada o la que viene
+  (semanas de lunes a domingo). El backend calcula un calendario a partir de la hora de
+  la petición (hora local del servidor) y el modelo no hace aritmética de fechas.
+- **Nombres parciales**: si un nombre no se resuelve, se buscan clientes o contactos que
+  contengan todas sus palabras ("Costa" → Diputacion Costa Verde). Con una sola
+  coincidencia se resuelve y el asistente dice cómo lo ha entendido; con varias, pregunta.
+  Las aclaraciones ("el de San Lucas") se resuelven con el historial de la conversación.
+- **Contexto de la conversación**: el cliente/contacto activo sirve para "ellos", "su" o
+  "¿y mañana?", pero no es un filtro por defecto. "En general" consulta todo sin perder el
+  contexto; "Olvida Costa" / "Volvamos a general" lo borran. Si hay un cliente activo y una
+  consulta de actividades no dice si es sobre él, el asistente pregunta en vez de adivinar
+  (`services/chat_scope.py` + una guarda en `chat_tools`).
+- **Prioridades**: `crm_rankings` con `attention` devuelve señales deterministas por cliente
+  (nunca contactado, más de 90 días sin actividad, sin actividad próxima, entre los que más
+  facturan): no es una puntuación y el asistente debe justificar cada prioridad con ellas.
+- **Productos**: actividades por producto tratado (`product_name`) y productos más tratados
+  (`product_discussed`), siempre con tus actividades.
+- **Respuestas**: primero la respuesta y después solo la evidencia relevante; distingue tus
+  actividades de la facturación total del cliente (todos los comerciales), avisa si los datos
+  son parciales o una herramienta falla, y no muestra teléfonos ni emails salvo que se pidan.
 
 Petición: `{"message", "conversation_id"?}`. Respuesta: `{"type": "answer" | "error",
 "content" (Markdown), "metadata": {"active_client", "active_contact"}, "conversation_id"}`.

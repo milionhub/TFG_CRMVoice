@@ -8,14 +8,23 @@ Resolución de clientes y contactos para el chat, con la lógica de la Fase F
   exact/fuzzy/ambiguous/unresolved y el contexto cliente↔contacto
   (conflict, inherited).
 
+G.4 — coincidencia parcial (solo en esta herramienta; la voz no cambia):
+si el resolvedor deja un nombre en "unresolved", se buscan clientes (razón
+social o alias) o contactos (nombre) que contengan TODAS las palabras dichas
+como palabras completas (sin tildes ni mayúsculas; palabras de menos de
+PARTIAL_MIN_WORD_LENGTH letras se ignoran). Una sola coincidencia →
+status "partial" (resuelto); varias → "ambiguous" (candidatos, sin elegir);
+ninguna → sigue "unresolved". Ejemplo: "Costa" → "Diputacion Costa Verde".
+
 Clientes y contactos son catálogo global: salesperson_id no filtra nada
 aquí; se recibe para que todas las herramientas tengan el mismo contrato.
 """
 from services.crm_tools._common import ToolArgumentError, id_in_condition, open_connection
-from services.entity_resolver import resolve_client_and_contact
+from services.entity_resolver import normalize_text, resolve_client_and_contact
 from services.text_analysis import analyze_text
 
 MAX_TEXT_LENGTH = 500
+PARTIAL_MIN_WORD_LENGTH = 3
 
 
 def _check_text(value, name):
@@ -36,12 +45,91 @@ def _contact_info(conn, contact_ids: list[int]) -> dict[int, dict]:
             for r in rows}
 
 
+# --- Coincidencia parcial por palabras completas (G.4) -------------------
+
+def _words(mention: str) -> set[str]:
+    return {w for w in normalize_text(mention).split() if len(w) >= PARTIAL_MIN_WORD_LENGTH}
+
+
+def _contains_words(words: set[str], *names: str | None) -> bool:
+    return any(words <= set(normalize_text(name).split()) for name in names if name)
+
+
+def _partial_clients(conn, mention: str) -> list:
+    words = _words(mention)
+    if not words:
+        return []
+    rows = conn.execute("SELECT id, razon_social, alias FROM clients ORDER BY razon_social, id").fetchall()
+    return [r for r in rows if _contains_words(words, r["razon_social"], r["alias"])]
+
+
+def _partial_contacts(conn, mention: str, client_id: int | None) -> list:
+    words = _words(mention)
+    if not words:
+        return []
+    if client_id is None:
+        rows = conn.execute("SELECT id, nombre, client_id FROM contacts ORDER BY nombre, id").fetchall()
+    else:
+        rows = conn.execute("SELECT id, nombre, client_id FROM contacts WHERE client_id = ? ORDER BY nombre, id",
+                            (client_id,)).fetchall()
+    return [r for r in rows if _contains_words(words, r["nombre"])]
+
+
+def _with_partial_matches(resolution: dict, client_mention: str | None, contact_mention: str | None) -> dict:
+    """Aplica la coincidencia parcial a lo que el resolvedor de la Fase F dejó sin resolver."""
+    client, contact = resolution["client"], resolution["contact"]
+
+    with open_connection() as conn:
+        if client_mention and client["id"] is None and client["status"] in ("unresolved", "conflict"):
+            matches = _partial_clients(conn, client_mention)
+            if len(matches) == 1:
+                # Se resuelve con el nombre completo para reutilizar el contexto
+                # cliente↔contacto de la Fase F (contacto dentro del cliente, conflict)
+                resolution = resolve_client_and_contact(matches[0]["razon_social"], contact_mention)
+                client, contact = resolution["client"], resolution["contact"]
+                client.update(status="partial", score=0.0,
+                              candidates=[{"id": matches[0]["id"], "name": matches[0]["razon_social"], "score": 0.0}])
+            elif matches:
+                candidates = [{"id": r["id"], "name": r["razon_social"], "score": 0.0} for r in matches]
+                if client["status"] == "conflict" and contact["id"] is not None:
+                    # La Fase F ya resolvió el contacto fuera del cliente dicho. Solo
+                    # deshace la ambigüedad si es de uno de los candidatos; si no,
+                    # el conflicto se mantiene (no enseña ids ni cambia el estado).
+                    owner = conn.execute("SELECT client_id FROM contacts WHERE id = ?",
+                                         (contact["id"],)).fetchone()
+                    compatible = [c for c in candidates if owner and c["id"] == owner["client_id"]]
+                    if compatible:
+                        client.update(id=compatible[0]["id"], status="partial", score=0.0, candidates=compatible)
+                    else:
+                        client.update(candidates=candidates)
+                else:
+                    client.update(status="ambiguous", candidates=candidates)
+
+        if contact_mention and contact["id"] is None and contact["status"] == "unresolved":
+            matches = _partial_contacts(conn, contact_mention, client["id"])
+            if len(matches) == 1:
+                match = matches[0]
+                contact.update(id=match["id"], status="partial", score=0.0,
+                               candidates=[{"id": match["id"], "name": match["nombre"], "score": 0.0}])
+                if client["id"] is None and not client_mention:
+                    # Sin cliente dicho, el contacto aporta el suyo (como "inherited" en la Fase F)
+                    client.update(id=match["client_id"], status="inherited", origin="inherited", score=0.0)
+                elif client["id"] is None and client["status"] == "unresolved":
+                    # Se dijo un cliente que no existe y el contacto es de otro: conflicto (como en la Fase F)
+                    client.update(status="conflict")
+            elif matches:
+                contact.update(status="ambiguous",
+                               candidates=[{"id": r["id"], "name": r["nombre"], "score": 0.0} for r in matches])
+
+    return resolution
+
+
 def find_entities(text: str | None, salesperson_id: int, *, client_name: str | None = None,
                   contact_name: str | None = None) -> dict:
     """
     Cliente y contacto nombrados en `text`, o en client_name/contact_name
     (nombres ya extraídos; no se combinan con text). Nunca elige ante la
-    ambigüedad: id solo con status exact, fuzzy o inherited.
+    ambigüedad: id solo con status exact, fuzzy, partial o inherited.
     """
     structured = client_name is not None or contact_name is not None
     if structured and text is not None:
@@ -58,6 +146,7 @@ def find_entities(text: str | None, salesperson_id: int, *, client_name: str | N
         client_mention, contact_mention = analysis["cliente"], analysis["contacto"]
 
     resolution = resolve_client_and_contact(client_mention, contact_mention)
+    resolution = _with_partial_matches(resolution, client_mention, contact_mention)
     client, contact = resolution["client"], resolution["contact"]
 
     with open_connection() as conn:

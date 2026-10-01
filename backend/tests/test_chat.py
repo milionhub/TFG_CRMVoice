@@ -9,6 +9,8 @@ backend (propiedad, validación, inyección del comercial, ids conocidos,
 estado, persistencia), no la calidad del modelo.
 """
 import json
+import sqlite3
+from contextlib import contextmanager
 
 import httpx
 import openai
@@ -730,3 +732,89 @@ def test_empresa_desconocida_sin_estado_no_inventa_datos(client, user_a, dev_lik
     assert found["found"] is False and found["client"]["status"] == "unresolved"
     assert last_tool(model.requests[-1])["error"] == "unknown_id"          # un id inventado no sirve
     assert body["metadata"] == EMPTY_STATE
+
+
+# =====================================================================
+# G.4 — fallo al guardar el turno (M7): respuesta controlada, sin medio turno
+# =====================================================================
+
+@pytest.fixture
+def failing_turn_write(monkeypatch):
+    """
+    La transacción REAL de save_turn falla a mitad: el INSERT de la
+    conversación se ejecuta y el de los mensajes (executemany, que solo usa
+    save_turn) lanza sqlite3.OperationalError. db.connection debe deshacerlo todo.
+    """
+    real_connection = chat_service.chat_store.connection
+
+    class FailingMessages:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def executemany(self, sql, rows):
+            raise sqlite3.OperationalError("disk I/O error en /ruta/secreta/crm.db")
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    @contextmanager
+    def connection():
+        with real_connection() as conn:
+            yield FailingMessages(conn)
+
+    monkeypatch.setattr(chat_service.chat_store, "connection", connection)
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["conversacion_nueva", "conversacion_existente"])
+def test_fallo_al_guardar_respuesta_controlada(client, user_a, chat_crm, model, dbq, caplog, request,
+                                              tracked_connections, existing):
+    conversation_id = None
+    if existing:
+        model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera ok.")
+        conversation_id = post(client, user_a, "¿Cómo va Rivera?")["conversation_id"]
+    rows_before = dbq.all("SELECT * FROM chat_messages ORDER BY id")
+    conversations_before = dbq.all("SELECT * FROM chat_conversations ORDER BY id")
+    request.getfixturevalue("failing_turn_write")
+    tracked_connections.clear()
+    model.script(*resolve_then("get_client_overview", client_name="Nebula"), "Nebula ok.")
+    requests_before = len(model.requests)
+
+    body = post(client, user_a, "¿Y Nebula?", conversation_id)
+
+    assert body == {"type": "error", "content": chat_service.SAVE_FAILED_MESSAGE,
+                    "metadata": ({"active_client": rivera_ref(chat_crm), "active_contact": None} if existing
+                                 else EMPTY_STATE),
+                    "conversation_id": conversation_id}
+    assert "secreta" not in json.dumps(body) and "No se pudo guardar el turno del chat" in caplog.text
+    assert len(model.requests) - requests_before == 3            # find + ficha + respuesta: sin reintento
+    assert dbq.all("SELECT * FROM chat_messages ORDER BY id") == rows_before            # ni medio turno
+    assert dbq.all("SELECT * FROM chat_conversations ORDER BY id") == conversations_before   # ni estado nuevo
+    assert tracked_connections and all(c.closed for c in tracked_connections)
+
+
+# =====================================================================
+# G.4 F1 por /chat: un conflicto con candidatos parciales no cambia el estado
+# =====================================================================
+
+def test_f1_conflicto_con_candidatos_parciales_no_cambia_el_estado(client, user_a, chat_crm, model, factory, dbq):
+    factory.client("Diputacion Costa Verde", alias="Costa Verde")
+    factory.client("Costa Azul Viajes")
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera ok.")
+    conversation_id = post(client, user_a, "¿Cómo va Rivera?")["conversation_id"]
+
+    model.script([("find_entities", {"client_name": "Costa", "contact_name": "Pablo Gil"})],
+                 [("get_contact", {"contact_id": chat_crm.pablo}),
+                  ("get_client_overview", {"client_id": chat_crm.nebula})],
+                 "Pablo Gil no es contacto de ningún cliente 'Costa'. ¿A quién te refieres?")
+    body = post(client, user_a, "¿Qué tengo con Pablo Gil de Costa?", conversation_id)
+
+    found = model.last_tool_results()[0]           # resultados del turno, en orden: find_entities primero
+    assert found["client"]["status"] == "conflict"
+    assert (found["client"]["id"], found["contact"]["id"]) == (None, None)
+    assert [r.get("error") for r in model.last_tool_results()[-2:]] == ["unknown_id", "unknown_id"]
+    stored = json.loads(dbq.all("SELECT metadata FROM chat_messages ORDER BY id")[-1]["metadata"])
+    assert [(t["name"], t["status"]) for t in stored["tools"]] == [
+        ("find_entities", "ok"), ("get_contact", "unknown_id"), ("get_client_overview", "unknown_id")]
+    # El estado sigue siendo Rivera: ni Nebula ni Pablo Gil
+    assert body["metadata"] == {"active_client": rivera_ref(chat_crm), "active_contact": None}
+    assert conversation_row(dbq, conversation_id)["active_client_id"] == chat_crm.rivera

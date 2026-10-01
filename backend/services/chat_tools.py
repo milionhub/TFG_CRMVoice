@@ -31,6 +31,7 @@ logger = logging.getLogger("crmvoice")
 
 MAX_RESULT_CHARS = 8_000
 COMMENT_CHARS = 300
+LIST_COMMENT_CHARS = 200          # en listas, más margen bajo el tope de 8k por resultado
 EMBEDDING_TIMEOUT_S = 6.0
 MIN_EMBEDDING_TIMEOUT_S = 1.0
 LIST_DEFAULT_LIMIT = 10
@@ -48,6 +49,14 @@ class ToolContext:
     remaining: Callable[[], float]                    # segundos que quedan del presupuesto total
     known_clients: set[int] = field(default_factory=set)
     known_contacts: dict[int, int | None] = field(default_factory=dict)   # contact_id → client_id
+    # Alcance conversacional (chat_scope): estado activo previo y señal del mensaje actual
+    active_client_id: int | None = None
+    active_contact_id: int | None = None
+    active_label: str | None = None                   # p. ej. "Diputacion Costa Verde"
+    scope: str | None = None                          # "global" | "contextual" | None
+    # Ids aprendidos de resultados de ESTE turno (no solo del estado activo)
+    learned_clients: set[int] = field(default_factory=set)
+    learned_contacts: set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -105,8 +114,12 @@ def _check_id(value: int | None) -> int | None:
     return value
 
 
-ClientId = Field(None, description="id de un cliente obtenido de find_entities, de otro resultado o del cliente activo")
-ContactId = Field(None, description="id de un contacto obtenido de find_entities, de otro resultado o del contacto activo")
+# Filtros opcionales: el cliente/contacto activo NO es un valor por defecto (prueba real de G.4)
+ClientId = Field(None, description="Solo si el mensaje actual nombra este cliente o se refiere a él "
+                                   "(\"ellos\", \"ese cliente\"). Para preguntas generales (\"¿qué tengo mañana?\"), null: "
+                                   "así se consultan todas tus actividades")
+ContactId = Field(None, description="Solo si el mensaje actual nombra este contacto o se refiere a él (\"él\", "
+                                    "\"con ella\"). Para preguntas generales, null")
 
 
 class FindEntitiesArgs(_Args):
@@ -127,13 +140,19 @@ class FindEntitiesArgs(_Args):
 class ListActivitiesArgs(_Args):
     client_id: int | None = ClientId
     contact_id: int | None = ContactId
-    temporal_scope: Literal["today", "tomorrow", "this_week", "next_week", "upcoming", "past"] | None = Field(
-        None, description="Ámbito temporal. Para la última actividad: past con limit 1")
+    temporal_scope: Literal["today", "tomorrow", "yesterday", "this_week", "next_week", "last_week",
+                            "upcoming", "past"] | None = Field(
+        None, description="Ámbito temporal (semanas de lunes a domingo). Para la última actividad: past con "
+                          "limit 1. Para otros periodos, date_from/date_to con el calendario del contexto")
     date_from: str | None = Field(None, description="Día inicial YYYY-MM-DD (inclusive)")
     date_to: str | None = Field(None, description="Día final YYYY-MM-DD (inclusive)")
+    product_name: str | None = Field(
+        None, description="Nombre o alias de un producto del catálogo: solo actividades donde se trató. "
+                          "No añadas fechas ni temporal_scope salvo que el usuario diga un periodo")
     limit: int | None = Field(None, description="Máximo de actividades (1-20, por defecto 10)")
 
     _ids = field_validator("client_id", "contact_id")(_check_id)
+    _product = field_validator("product_name")(lambda v: _check_text(v, 100))
     _limit = field_validator("limit")(lambda v: _check_limit(v, 20))
 
 
@@ -158,10 +177,12 @@ class ContactArgs(_Args):
 
 
 class RankingsArgs(_Args):
-    metric: Literal["activity_count", "inactivity", "billing"] = Field(
-        description="activity_count: más actividades del usuario; inactivity: más tiempo sin actividad pasada; "
-                    "billing: más facturación (global)")
-    limit: int | None = Field(None, description="Número de clientes (1-10, por defecto 5)")
+    metric: Literal["activity_count", "inactivity", "billing", "attention", "product_discussed"] = Field(
+        description="activity_count: clientes con más actividades del usuario; inactivity: más tiempo sin "
+                    "actividad pasada; billing: más facturación (global); attention: señales para decidir a qué "
+                    "clientes prestar atención (incluye los nunca contactados; ver rules); product_discussed: "
+                    "productos más tratados en las actividades del usuario")
+    limit: int | None = Field(None, description="Número de elementos (1-10, por defecto 5)")
 
     _limit = field_validator("limit")(lambda v: _check_limit(v, 10))
 
@@ -194,7 +215,7 @@ def _ref(ref):
     return {"id": ref["id"], "name": ref["name"]} if ref else None
 
 
-def _activity(a):
+def _activity(a, comment_chars=COMMENT_CHARS):
     if a is None:
         return None
     return {
@@ -203,7 +224,7 @@ def _activity(a):
         "client": _ref(a["client"]),
         "contact": _ref(a["contact"]),
         "type": a["activity_type"]["name"] if a["activity_type"] else None,
-        "comment": _clip(a["comment"]),
+        "comment": _clip(a["comment"], comment_chars),
         "products": [p["name"] for p in a["products"]],
     }
 
@@ -230,7 +251,8 @@ def _overview(r):
         },
         "products": {},
     }
-    _cap([{k: x[k] for k in ("id", "name", "role", "phone", "email")} for x in r["contacts"]], 10, data, "contacts")
+    # Sin teléfono ni email: datos de contacto solo con get_contact (petición explícita)
+    _cap([{k: x[k] for k in ("id", "name", "role")} for x in r["contacts"]], 10, data, "contacts")
     _cap(_discussed(r["products"]["discussed"]), 8, data["products"], "discussed")
     _cap(_invoiced(r["products"]["invoiced"]), 8, data["products"], "invoiced")
     return data
@@ -272,14 +294,18 @@ def shape_find_entities(r):
 
 
 def shape_list_activities(r):
-    return {"found": r["found"], "count": r["count"], "has_more": r["has_more"],
-            "activities": [_activity(a) for a in r["activities"]]}
+    data = {"found": r["found"], "count": r["count"], "has_more": r["has_more"],
+            "activities": [_activity(a, LIST_COMMENT_CHARS) for a in r["activities"]]}
+    if r.get("product_filter"):
+        data["product_filter"] = r["product_filter"]   # solo nombres: nunca ids de producto
+    return data
 
 
 def shape_search_activities(r):
     return {"found": r["found"], "count": r["count"],
             "note": "score = similitud relativa con la consulta, no prueba de que se hablara de ello",
-            "results": [{"score": round(x["score"], 2), "activity": _activity(x["activity"])} for x in r["results"]]}
+            "results": [{"score": round(x["score"], 2), "activity": _activity(x["activity"], LIST_COMMENT_CHARS)}
+                        for x in r["results"]]}
 
 
 def shape_client_overview(r):
@@ -382,6 +408,7 @@ def learn_ids(value, ctx: ToolContext) -> None:
     client_id = client["id"] if isinstance(client, dict) and isinstance(client.get("id"), int) else None
     if client_id is not None:
         ctx.known_clients.add(client_id)
+        ctx.learned_clients.add(client_id)
 
     contact = value.get("contact")
     if isinstance(contact, dict) and isinstance(contact.get("id"), int):
@@ -389,8 +416,10 @@ def learn_ids(value, ctx: ToolContext) -> None:
         if isinstance(owner, int):
             ctx.known_contacts[contact["id"]] = owner
             ctx.known_clients.add(owner)
+            ctx.learned_clients.add(owner)
         else:
             ctx.known_contacts.setdefault(contact["id"], None)
+        ctx.learned_contacts.add(contact["id"])
 
     # Contactos de la ficha del cliente de este mismo nivel (consulta WHERE client_id = ?)
     contacts = value.get("contacts")
@@ -398,6 +427,7 @@ def learn_ids(value, ctx: ToolContext) -> None:
         for item in contacts:
             if isinstance(item, dict) and isinstance(item.get("id"), int):
                 ctx.known_contacts[item["id"]] = client_id
+                ctx.learned_contacts.add(item["id"])
 
     for key, item in value.items():
         if key not in ("client", "contact", "contacts"):
@@ -463,8 +493,9 @@ _TOOLS = (
         "Busca clientes y/o contactos del CRM por el nombre, alias o parte del nombre que use el usuario "
         "(no hace falta el nombre completo) y devuelve sus ids. Úsala siempre que el mensaje nombre a un "
         "cliente o contacto, haya o no cliente activo, y antes de cualquier herramienta que necesite un id. "
-        "status: exact/fuzzy/inherited = resuelto; ambiguous = varios candidatos (pregunta al usuario); "
-        "unresolved = no existe; conflict = el contacto no es de ese cliente.",
+        "status: exact/fuzzy/inherited = resuelto; partial = resuelto por coincidencia parcial de palabras "
+        "(di cómo lo has entendido); ambiguous = varios candidatos (pregunta al usuario); unresolved = no existe; "
+        "conflict = el contacto no es de ese cliente.",
         FindEntitiesArgs,
         lambda a, ctx: crm_tools.find_entities(None, ctx.salesperson_id, client_name=a.client_name,
                                                contact_name=a.contact_name),
@@ -472,16 +503,21 @@ _TOOLS = (
     ),
     ChatTool(
         "list_activities",
-        "Actividades (agenda e historial) del usuario, filtradas por cliente, contacto, ámbito temporal y/o fechas.",
+        "Actividades (agenda e historial) del usuario. Sin client_id ni contact_id busca en TODAS sus actividades. "
+        "Filtros opcionales: cliente, contacto, ámbito temporal, fechas y producto tratado. Para \"¿con qué "
+        "clientes se habló de un producto?\" usa product_name: product_filter.by_client resume por cliente "
+        "(si el producto es ambiguo o no existe, product_filter lo indica).",
         ListActivitiesArgs,
         lambda a, ctx: crm_tools.list_activities(
             ctx.salesperson_id, client_id=a.client_id, contact_id=a.contact_id, temporal_scope=a.temporal_scope,
-            date_from=a.date_from, date_to=a.date_to, limit=a.limit or LIST_DEFAULT_LIMIT, now=ctx.now),
+            date_from=a.date_from, date_to=a.date_to, product_name=a.product_name,
+            limit=a.limit or LIST_DEFAULT_LIMIT, now=ctx.now),
         shape_list_activities, lambda a, r, ctx: _focus_args(a, ctx),
     ),
     ChatTool(
         "search_activities",
-        "Búsqueda por significado en los comentarios de las actividades del usuario (p. ej. de qué se habló).",
+        "Búsqueda por significado en los comentarios de las actividades del usuario (temas libres, p. ej. de qué "
+        "se habló). Para un producto del catálogo usa list_activities con product_name.",
         SearchActivitiesArgs, _search, shape_search_activities, lambda a, r, ctx: _focus_args(a, ctx),
     ),
     ChatTool(
@@ -500,7 +536,8 @@ _TOOLS = (
     ),
     ChatTool(
         "crm_rankings",
-        "Ranking de clientes por actividad del usuario, inactividad o facturación global.",
+        "Rankings deterministas: clientes por actividad del usuario, inactividad, facturación global o señales "
+        "de atención (attention), y productos más tratados (product_discussed).",
         RankingsArgs,
         lambda a, ctx: crm_tools.crm_rankings(a.metric, ctx.salesperson_id, limit=a.limit, now=ctx.now),
         shape_rankings, _no_focus,
@@ -552,8 +589,47 @@ def _unknown_id(args: _Args, ctx: ToolContext) -> str | None:
     return None
 
 
+# Consultas de actividades que el contexto activo podría estrechar sin que el usuario lo pida
+SCOPE_GUARDED_TOOLS = {"list_activities", "search_activities"}
+
+
+def _scoped_only_by_active_state(args: _Args, ctx: ToolContext) -> bool:
+    """El filtro de cliente/contacto sale SOLO del estado activo previo (nada de este turno lo respalda)."""
+    client_id = getattr(args, "client_id", None)
+    contact_id = getattr(args, "contact_id", None)
+    client_from_state = (client_id is not None and client_id == ctx.active_client_id
+                         and client_id not in ctx.learned_clients)
+    contact_from_state = (contact_id is not None and contact_id == ctx.active_contact_id
+                          and contact_id not in ctx.learned_contacts)
+    return client_from_state or contact_from_state
+
+
+def _scope_guard(name: str, args: _Args, ctx: ToolContext, arguments: dict) -> ToolOutcome | None:
+    """
+    Alcance ambiguo o contradictorio (prueba real de G.4): una consulta de
+    actividades acotada solo con el contexto activo, cuando el mensaje no se
+    refiere a él, no se ejecuta (daría un "no tienes nada" engañoso).
+    """
+    if name not in SCOPE_GUARDED_TOOLS or not _scoped_only_by_active_state(args, ctx):
+        return None
+    if ctx.scope == "global":
+        return error_outcome(name, "scope_global",
+                             "El usuario pide todas sus actividades: repite la consulta sin client_id ni contact_id.",
+                             arguments)
+    if ctx.scope is None:
+        label = ctx.active_label or "el cliente activo"
+        return error_outcome(name, "scope_ambiguous",
+                             f"La pregunta no dice si es sobre {label} o sobre todas las actividades del usuario. "
+                             f"No consultes nada más: pregunta «¿Te refieres a {label} o a todas tus actividades?».",
+                             arguments)
+    return None
+
+
 def dispatch(name: str, raw_arguments: str, ctx: ToolContext) -> ToolOutcome:
-    """Valida y ejecuta UNA llamada pedida por el modelo. Nunca lanza: todo fallo es un resultado controlado."""
+    """
+    Valida y ejecuta UNA llamada pedida por el modelo. Nunca lanza: todo fallo
+    es un resultado controlado. No amplía los ids conocidos (ver trust_result).
+    """
     tool = REGISTRY.get(name)
     if tool is None:
         return error_outcome(str(name)[:64], "unknown_tool", "Esa herramienta no existe.")
@@ -570,6 +646,10 @@ def dispatch(name: str, raw_arguments: str, ctx: ToolContext) -> ToolOutcome:
                              f"{field_name} desconocido: resuelve antes el nombre con find_entities "
                              "o usa el id del contexto activo.", arguments)
 
+    guarded = _scope_guard(name, args, ctx, arguments)
+    if guarded:
+        return guarded
+
     try:
         raw = tool.run(args, ctx)
     except ToolArgumentError as error:
@@ -584,9 +664,16 @@ def dispatch(name: str, raw_arguments: str, ctx: ToolContext) -> ToolOutcome:
     if not result.get("ok"):
         return ToolOutcome(name=name, status=result["error"], result=result, arguments=arguments)
 
-    learn_ids(result, ctx)
+    # Sus ids aún NO son de confianza: lo serán con trust_result si el resultado
+    # llega de verdad al modelo (puede descartarse por el tope de evidencia)
     return ToolOutcome(name=name, status="ok", result=result, arguments=arguments,
                        focus=tool.focus(args, raw, ctx))
+
+
+def trust_result(outcome: ToolOutcome, ctx: ToolContext) -> None:
+    """Los ids de un resultado correcto pasan a ser conocidos cuando se envía al modelo."""
+    if outcome.status == "ok":
+        learn_ids(outcome.result, ctx)
 
 
 # =====================================================================

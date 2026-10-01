@@ -77,7 +77,7 @@ def day_bound(day: date) -> str:
 
 # Ámbitos temporales cerrados. No existe "pendiente": la tabla activities no
 # tiene estado (pendiente/hecha/cancelada); solo se sabe si es pasada o próxima.
-TEMPORAL_SCOPES = ("today", "tomorrow", "this_week", "next_week", "upcoming", "past")
+TEMPORAL_SCOPES = ("today", "tomorrow", "yesterday", "this_week", "next_week", "last_week", "upcoming", "past")
 
 
 def scope_conditions(scope: str, now: datetime) -> list[tuple[str, str]]:
@@ -93,8 +93,10 @@ def scope_conditions(scope: str, now: datetime) -> list[tuple[str, str]]:
     start, end = {
         "today": (today, today + timedelta(days=1)),
         "tomorrow": (today + timedelta(days=1), today + timedelta(days=2)),
+        "yesterday": (today - timedelta(days=1), today),
         "this_week": (monday, monday + timedelta(days=7)),        # lunes a domingo
         "next_week": (monday + timedelta(days=7), monday + timedelta(days=14)),
+        "last_week": (monday - timedelta(days=7), monday),
     }[scope]
     return [("a.datetime_iso >= ?", day_bound(start)), ("a.datetime_iso < ?", day_bound(end))]
 
@@ -184,6 +186,24 @@ def fetch_activities(conn: sqlite3.Connection, salesperson_id: int, conditions=(
         }
         for r in rows
     ], has_more
+
+
+def activities_by_client(conn: sqlite3.Connection, salesperson_id: int, conditions=()) -> list[dict]:
+    """
+    Recuento por cliente de TODAS las actividades del comercial que cumplen
+    `conditions` (sin el límite de la lista): responde a "¿con qué clientes…?".
+    """
+    where = ["a.salesperson_id = ?"] + [sql for sql, _ in conditions]
+    rows = conn.execute(f"""
+        SELECT a.client_id, c.razon_social, COUNT(*) AS total, MAX(a.datetime_iso) AS last_date
+        FROM activities a
+        LEFT JOIN clients c ON c.id = a.client_id
+        WHERE {" AND ".join(where)}
+        GROUP BY a.client_id
+        ORDER BY total DESC, c.razon_social, a.client_id
+    """, [salesperson_id] + _params(conditions)).fetchall()
+    return [{"client": _ref(r["client_id"], r["razon_social"]), "activity_count": r["total"],
+             "last_activity_datetime": r["last_date"]} for r in rows]
 
 
 def activity_summary(conn: sqlite3.Connection, salesperson_id: int, now: datetime, *,

@@ -539,3 +539,323 @@ def test_busqueda_semantica_con_timeout_un_solo_intento(world, monkeypatch):
     # 4.5 s en total: conexión acotada (min(2, total/3)) y el resto para leer, sin sumarse
     assert (timeout.connect, timeout.read) == (1.5, 3.0)
     assert timeout.connect + timeout.read == 4.5
+
+
+# =====================================================================
+# G.4 — ámbitos yesterday / last_week (intervalos semiabiertos por día)
+# =====================================================================
+
+@pytest.fixture
+def dated(factory, user_a, user_b):
+    client = factory.client("Fechas Prueba S.L.")
+    times = ["2026-09-27T23:59:59", "2026-09-28T00:00:00", "2026-10-03T23:59:59", "2026-10-04T00:00:00",
+             "2026-10-04T23:59:59.999", "2026-10-05T00:00:00", "2026-10-10T12:00:00", "2026-10-11T23:59:59"]
+    for t in times:
+        factory.activity(user_a["id"], client, datetime_iso=t, comentario=f"{A_ONLY} {t}")
+    factory.activity(user_b["id"], client, datetime_iso="2026-10-04T10:00:00", comentario=f"{B_ONLY} ayer")
+    return SimpleNamespace(a=user_a["id"])
+
+
+def _times(result):
+    return [a["datetime"] for a in result["activities"]]
+
+
+def test_yesterday_y_last_week_desde_un_lunes_a_medianoche(dated):
+    monday_midnight = datetime(2026, 10, 5, 0, 0)
+
+    yesterday = crm_tools.list_activities(dated.a, temporal_scope="yesterday", now=monday_midnight)
+    assert _times(yesterday) == ["2026-10-04T00:00:00", "2026-10-04T23:59:59.999"]   # domingo entero, con ms
+    assert B_ONLY not in json.dumps(yesterday)
+
+    last_week = crm_tools.list_activities(dated.a, temporal_scope="last_week", now=monday_midnight)
+    assert _times(last_week) == ["2026-09-28T00:00:00", "2026-10-03T23:59:59", "2026-10-04T00:00:00",
+                                 "2026-10-04T23:59:59.999"]                       # lunes 28 a domingo 4
+    assert last_week["order"] == "asc"
+
+
+def test_last_week_desde_el_domingo_por_la_noche_es_la_misma_semana_anterior(dated):
+    sunday_night = datetime(2026, 10, 11, 23, 59, 59)
+
+    last_week = crm_tools.list_activities(dated.a, temporal_scope="last_week", now=sunday_night)
+    yesterday = crm_tools.list_activities(dated.a, temporal_scope="yesterday", now=sunday_night)
+
+    assert _times(last_week)[0] == "2026-09-28T00:00:00" and _times(last_week)[-1] == "2026-10-04T23:59:59.999"
+    assert _times(yesterday) == ["2026-10-10T12:00:00"]
+
+
+def test_ambitos_existentes_sin_cambios(dated):
+    now = datetime(2026, 10, 5, 0, 0)
+    assert _times(crm_tools.list_activities(dated.a, temporal_scope="today", now=now)) == ["2026-10-05T00:00:00"]
+    assert "yesterday" in crm_tools.TEMPORAL_SCOPES and "last_week" in crm_tools.TEMPORAL_SCOPES
+    with pytest.raises(ToolArgumentError):
+        crm_tools.list_activities(dated.a, temporal_scope="anteayer", now=now)
+
+
+# =====================================================================
+# G.4 — coincidencia parcial por palabras completas (solo find_entities)
+# =====================================================================
+
+@pytest.fixture
+def partial_catalog(factory):
+    ids = {
+        "costa": factory.client("Diputacion Costa Verde", alias="Costa Verde"),
+        "sierra": factory.client("Grupo Sierra Norte SL", alias="Sierra Norte"),
+        "valle": factory.client("Ayuntamiento de Valle Alto", alias="Valle Alto"),
+        "lucas": factory.client("Instituto San Lucas", alias="San Lucas"),
+        "rivera": factory.client("Tecnologia Rivera SL", alias="Rivera"),
+    }
+    ids["ruiz"] = factory.contact(ids["lucas"], "Carlos Ruiz")
+    ids["perez"] = factory.contact(ids["rivera"], "Carlos Perez")
+    ids["raul"] = factory.contact(ids["costa"], "Raul Navarro")
+    return ids
+
+
+@pytest.mark.parametrize("mention, key", [
+    ("Costa", "costa"), ("Sierra", "sierra"), ("Valle", "valle"), ("VALLE", "valle"), ("válle", "valle"),
+])
+def test_coincidencia_parcial_unica_resuelve(partial_catalog, mention, key):
+    result = crm_tools.find_entities(None, 1, client_name=mention)
+
+    assert result["found"] is True
+    assert (result["client"]["id"], result["client"]["status"]) == (partial_catalog[key], "partial")
+
+
+def test_coincidencia_parcial_ambigua_no_elige(partial_catalog, factory):
+    factory.client("Costa Azul Viajes")
+
+    result = crm_tools.find_entities(None, 1, client_name="Costa")
+
+    assert result["found"] is False and result["client"]["id"] is None
+    assert result["client"]["status"] == "ambiguous"
+    assert {c["name"] for c in result["client"]["candidates"]} == {"Costa Azul Viajes", "Diputacion Costa Verde"}
+
+
+@pytest.mark.parametrize("mention", ["Construcciones", "de", "SL", "Costa Brava"])
+def test_sin_coincidencia_sigue_sin_resolver(partial_catalog, mention):
+    result = crm_tools.find_entities(None, 1, client_name=mention)
+    assert result["found"] is False and result["client"]["status"] == "unresolved"
+
+
+def test_contacto_parcial_y_dentro_del_cliente(partial_catalog):
+    by_surname = crm_tools.find_entities(None, 1, contact_name="Ruiz")
+    assert by_surname["contact"]["id"] == partial_catalog["ruiz"] and by_surname["contact"]["status"] == "partial"
+    assert by_surname["client"]["id"] == partial_catalog["lucas"] and by_surname["client"]["status"] == "inherited"
+
+    # Cliente parcial + contacto: el contacto se resuelve dentro de ese cliente (lógica de la Fase F)
+    scoped = crm_tools.find_entities(None, 1, client_name="Costa", contact_name="Raul")
+    assert scoped["client"]["status"] == "partial" and scoped["contact"]["id"] == partial_catalog["raul"]
+
+    # Cliente dicho que no existe + contacto (parcial) de otro cliente: conflicto, como en la Fase F
+    conflict = crm_tools.find_entities(None, 1, client_name="Construcciones", contact_name="Ruiz")
+    assert conflict["client"]["status"] == "conflict" and conflict["client"]["id"] is None
+    assert conflict["contact"]["status"] == "partial"
+
+    # "Carlos" sigue siendo ambiguo: dos contactos lo contienen
+    carlos = crm_tools.find_entities(None, 1, contact_name="Carlos")
+    assert carlos["contact"]["status"] == "ambiguous" and carlos["contact"]["id"] is None
+
+
+def test_el_resolvedor_de_la_voz_no_cambia(partial_catalog):
+    from services.entity_resolver import resolve_client_and_contact
+
+    # La coincidencia parcial es solo de la herramienta del chat: la voz sigue igual
+    assert resolve_client_and_contact("Costa", None)["client"]["status"] == "unresolved"
+    assert voice_pipeline.resolve_client_and_contact is resolve_client_and_contact
+
+
+# =====================================================================
+# G.4 — métrica attention
+# =====================================================================
+
+ATT_NOW = datetime(2026, 10, 7, 12, 0)
+
+
+@pytest.fixture
+def attention_world(factory, user_a, user_b):
+    a, b = user_a["id"], user_b["id"]
+    c = {name: factory.client(name) for name in
+         ["Alfa Activo", "Beta Inactivo", "Gamma Nunca", "Delta Solo B", "Epsilon Sin Factura"]}
+    # Alfa: actividad pasada reciente y una próxima (A)
+    factory.activity(a, c["Alfa Activo"], datetime_iso="2026-09-27T10:00:00", comentario=A_ONLY)
+    factory.activity(a, c["Alfa Activo"], datetime_iso="2026-10-20T10:00:00", comentario=A_ONLY)
+    # Beta: la última actividad de A fue hace 120 días
+    factory.activity(a, c["Beta Inactivo"], datetime_iso="2026-06-09T10:00:00", comentario=A_ONLY)
+    # Delta: solo B tiene actividad (reciente y próxima); para A, "nunca contactado"
+    factory.activity(b, c["Delta Solo B"], datetime_iso="2026-10-06T10:00:00", comentario=B_ONLY)
+    factory.activity(b, c["Delta Solo B"], datetime_iso="2026-10-30T10:00:00", comentario=B_ONLY)
+    # Epsilon: A tuvo actividad hace 30 días
+    factory.activity(a, c["Epsilon Sin Factura"], datetime_iso="2026-09-07T10:00:00", comentario=A_ONLY)
+
+    conn = db.get_connection()
+    # Facturación GLOBAL (sin propietario): 4 clientes con facturación > 0 → tercio superior = 2
+    for name, total in [("Gamma Nunca", 9000), ("Beta Inactivo", 8000), ("Delta Solo B", 3000), ("Alfa Activo", 1000)]:
+        invoice = conn.execute("INSERT INTO invoices (fecha, client_id) VALUES ('2026-05-01', ?)", (c[name],)).lastrowid
+        conn.execute("INSERT INTO invoice_lines (invoice_id, cantidad, precio, total) VALUES (?, 1, ?, ?)",
+                     (invoice, total, total))
+    conn.commit()
+    conn.close()
+    return SimpleNamespace(a=a, b=b, c=c)
+
+
+def _attention(world, user, limit=10):
+    return crm_tools.crm_rankings("attention", user, limit=limit, now=ATT_NOW)
+
+
+def test_attention_senales_y_universo_completo(attention_world):
+    result = _attention(attention_world, attention_world.a)
+    by_name = {i["client"]["name"]: i for i in result["items"]}
+
+    assert result["clients_considered"] == 5 and set(by_name) == set(attention_world.c)
+    assert result["scope"] == {"activity": "salesperson", "billing": "global"}
+    assert "no una puntuación" in result["rules"] and "90 días" in result["rules"]
+
+    assert by_name["Gamma Nunca"]["signals"] == ["never_contacted", "no_upcoming", "top_billing",
+                                                 "top_billing_low_attention"]
+    assert by_name["Beta Inactivo"]["signals"] == ["inactive_90d", "no_upcoming", "top_billing",
+                                                   "top_billing_low_attention"]
+    assert by_name["Beta Inactivo"]["days_since_last_activity"] == 120
+    assert by_name["Delta Solo B"]["signals"] == ["never_contacted", "no_upcoming"]   # lo de B no cuenta
+    assert by_name["Epsilon Sin Factura"]["signals"] == ["no_upcoming"]
+    assert by_name["Alfa Activo"]["signals"] == []
+    assert by_name["Alfa Activo"]["next_activity_datetime"] == "2026-10-20T10:00:00"
+    assert by_name["Alfa Activo"]["activities_last_90_days"] == 1     # la próxima no cuenta como reciente
+    assert by_name["Epsilon Sin Factura"]["total_billed"] == 0 and by_name["Gamma Nunca"]["total_billed"] == 9000
+
+
+def test_attention_orden_determinista_y_limite(attention_world):
+    names = [i["client"]["name"] for i in _attention(attention_world, attention_world.a)["items"]]
+    # 4 señales (nunca contactado antes que 120 días), después 2, 1 y 0
+    assert names == ["Gamma Nunca", "Beta Inactivo", "Delta Solo B", "Epsilon Sin Factura", "Alfa Activo"]
+
+    limited = _attention(attention_world, attention_world.a, limit=2)
+    assert [i["client"]["name"] for i in limited["items"]] == names[:2]
+    assert limited["clients_considered"] == 5
+
+
+def test_attention_aislada_por_comercial_y_facturacion_global(attention_world):
+    for_b = {i["client"]["name"]: i for i in _attention(attention_world, attention_world.b)["items"]}
+    for_a = {i["client"]["name"]: i for i in _attention(attention_world, attention_world.a)["items"]}
+
+    # B sí tiene Delta (reciente y próxima); para B, Alfa nunca se ha contactado
+    assert for_b["Delta Solo B"]["signals"] == []
+    assert "never_contacted" in for_b["Alfa Activo"]["signals"]
+    # La facturación es la misma para los dos (global)
+    assert {n: i["total_billed"] for n, i in for_a.items()} == {n: i["total_billed"] for n, i in for_b.items()}
+
+    dump_a = json.dumps(_attention(attention_world, attention_world.a))
+    assert "2026-10-06" not in dump_a and "2026-10-30" not in dump_a     # fechas de B
+
+
+def test_attention_las_actividades_de_b_no_cambian_lo_de_a(attention_world, factory):
+    before = _attention(attention_world, attention_world.a)
+    factory.activity(attention_world.b, attention_world.c["Gamma Nunca"], datetime_iso="2026-10-06T09:00:00",
+                     comentario=B_ONLY)
+    factory.activity(attention_world.b, attention_world.c["Beta Inactivo"], datetime_iso="2026-11-01T09:00:00",
+                     comentario=B_ONLY)
+
+    assert _attention(attention_world, attention_world.a) == before
+
+
+# =====================================================================
+# G.4 — product_discussed y filtro product_name
+# =====================================================================
+
+def test_product_discussed_solo_con_actividad_propia(world):
+    for_a = crm_tools.crm_rankings("product_discussed", world.a, limit=10, now=NOW)
+    for_b = crm_tools.crm_rankings("product_discussed", world.b, limit=10, now=NOW)
+
+    assert for_a["scope"] == "salesperson"
+    assert [(i["product"]["name"], i["activity_count"], i["client_count"]) for i in for_a["items"]] == [
+        ("Monitor Vela 27", 2, 2), ("Mesa Elevable", 1, 1), ("Silla Ergonómica", 1, 1)]
+    assert [(i["product"]["name"], i["activity_count"]) for i in for_b["items"]] == [("Mesa Elevable", 1)]
+    assert '"id"' not in json.dumps(for_a["items"])
+
+
+def test_filtro_por_producto_exacto_alias_y_aislado(world):
+    exact = crm_tools.list_activities(world.a, product_name="monitor vela 27", now=NOW)
+    alias = crm_tools.list_activities(world.a, product_name="Pantalla Vela", now=NOW)
+
+    assert exact["product_filter"] == {
+        "query": "monitor vela 27", "status": "resolved", "product": "Monitor Vela 27", "candidates": [],
+        "by_client": [  # TODAS las de A con el producto, agrupadas por cliente (2 clientes, 1 cada uno)
+            {"client": {"id": world.lucas, "name": "Clínica San Lucas S.L."}, "activity_count": 1,
+             "last_activity_datetime": "2026-10-06T11:00:00"},
+            {"client": {"id": world.rivera, "name": "Rivera Industrial S.L."}, "activity_count": 1,
+             "last_activity_datetime": "2026-10-01T10:00:00"}]}
+    assert sorted(a["id"] for a in exact["activities"]) == sorted([world.ids.a_rivera_past, world.ids.a_lucas])
+    assert [a["id"] for a in alias["activities"]] == [a["id"] for a in exact["activities"]]
+
+    # Mesa: A la trató con San Lucas; B, con Rivera. Cada uno ve solo lo suyo
+    mesa_a = crm_tools.list_activities(world.a, product_name="Mesa Elevable", now=NOW)
+    mesa_b = crm_tools.list_activities(world.b, product_name="Mesa Elevable", now=NOW)
+    assert [a["id"] for a in mesa_a["activities"]] == [world.ids.a_lucas]
+    assert [a["id"] for a in mesa_b["activities"]] == [world.ids.b_rivera_tomorrow]
+
+
+def test_filtro_por_producto_combinado_con_cliente_y_fechas(world):
+    by_client = crm_tools.list_activities(world.a, product_name="Monitor Vela 27", client_id=world.rivera, now=NOW)
+    in_range = crm_tools.list_activities(world.a, product_name="Monitor Vela 27", date_from="2026-10-05",
+                                         date_to="2026-10-06", now=NOW)
+
+    assert [a["id"] for a in by_client["activities"]] == [world.ids.a_rivera_past]
+    assert [a["id"] for a in in_range["activities"]] == [world.ids.a_lucas]
+
+
+def test_producto_ambiguo_o_desconocido_no_se_adivina(world, factory):
+    factory.product("Monitor Vela 32", 400)
+
+    ambiguous = crm_tools.list_activities(world.a, product_name="vela", now=NOW)
+    unknown = crm_tools.list_activities(world.a, product_name="Proyector Láser", now=NOW)
+
+    assert ambiguous["found"] is False and ambiguous["activities"] == []
+    assert ambiguous["product_filter"]["status"] == "ambiguous"
+    assert set(ambiguous["product_filter"]["candidates"]) == {"Monitor Vela 27", "Monitor Vela 32"}
+    assert unknown["found"] is False and unknown["product_filter"] == {
+        "query": "Proyector Láser", "status": "unresolved", "product": None, "candidates": []}
+    with pytest.raises(ToolArgumentError):
+        crm_tools.list_activities(world.a, product_name="  ", now=NOW)
+    assert crm_tools.list_activities(world.a, product_name="¡¿!?", now=NOW)["product_filter"]["status"] == "unresolved"
+
+
+# =====================================================================
+# G.4 F1 — la coincidencia parcial no puede deshacer un conflicto de la Fase F
+# =====================================================================
+
+@pytest.fixture
+def two_costas(partial_catalog, factory):
+    """Dos clientes contienen "Costa"; Pablo Gil es de un tercero (Nebula)."""
+    ids = dict(partial_catalog)
+    ids["costa_azul"] = factory.client("Costa Azul Viajes")
+    ids["nebula"] = factory.client("Nebula Logistica", alias="Nebula")
+    ids["pablo"] = factory.contact(ids["nebula"], "Pablo Gil")
+    return ids
+
+
+def test_f1_contacto_de_otro_cliente_mantiene_el_conflicto(two_costas):
+    from services.entity_resolver import resolve_client_and_contact
+
+    assert resolve_client_and_contact("Costa", "Pablo Gil")["client"]["status"] == "conflict"   # Fase F
+
+    result = crm_tools.find_entities(None, 1, client_name="Costa", contact_name="Pablo Gil")
+
+    assert result["client"]["status"] == "conflict" and result["client"]["id"] is None
+    # Los candidatos parciales quedan para aclarar, pero ninguno es el cliente del contacto
+    assert {c["name"] for c in result["client"]["candidates"]} == {"Costa Azul Viajes", "Diputacion Costa Verde"}
+    assert two_costas["nebula"] not in [c["id"] for c in result["client"]["candidates"]]
+
+
+def test_f1_contacto_compatible_deshace_la_ambiguedad(two_costas):
+    result = crm_tools.find_entities(None, 1, client_name="Costa", contact_name="Raul")
+
+    assert (result["client"]["status"], result["client"]["id"]) == ("partial", two_costas["costa"])
+    assert result["client"]["candidates"] == [{"id": two_costas["costa"], "name": "Diputacion Costa Verde",
+                                               "score": 0.0}]
+    assert result["contact"]["id"] == two_costas["raul"] and result["contact"]["client_id"] == two_costas["costa"]
+
+
+def test_f1_sin_contacto_sigue_ambiguo(two_costas):
+    result = crm_tools.find_entities(None, 1, client_name=" Costa ")
+
+    assert (result["client"]["status"], result["client"]["id"]) == ("ambiguous", None)
+    assert {c["name"] for c in result["client"]["candidates"]} == {"Costa Azul Viajes", "Diputacion Costa Verde"}
+    assert result["contact"]["id"] is None

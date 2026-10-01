@@ -34,6 +34,11 @@ blanca y estado activo derivado de los resultados de las herramientas. Eso cierr
 descartado) y la memoria sin TTL ni reset, local al proceso. `POST /prepare-meeting` se
 eliminó (el chat usa `prepare_meeting_context`). FE-D7-05 (`Bearer null`) se corrigió.
 
+G.4 (fiabilidad e inteligencia, sin cambios de esquema) cerró dos MINOR de la revisión de G.3:
+los ids de un resultado descartado por el tope de evidencia ya no pasan a ser de confianza
+(solo cuenta lo que llega al modelo), y un fallo de SQLite al guardar el turno devuelve un
+error controlado (sin medio turno guardado) en vez de un 500.
+
 | ID | Resumen | Severidad |
 |---|---|---|
 | B4 | `build_context` (solo `GET /client-context`) siempre devuelve un dict: un cliente inexistente responde 200 con `client_name=None` en vez de 404 | MINOR |
@@ -41,6 +46,9 @@ eliminó (el chat usa `prepare_meeting_context`). FE-D7-05 (`Bearer null`) se co
 | — | Chat: el presupuesto de unos 30 s por petición no es un corte exacto de reloj. Se comprueba antes de cada llamada a OpenAI y el timeout de cada una (conexión + lectura) no supera lo que queda, pero el de lectura de httpx limita la espera entre bytes, no la respuesta completa; la resolución DNS y las esperas por bloqueo de SQLite tampoco cuentan | MINOR |
 | — | Chat: sin límite de peticiones ni de coste por usuario; los mensajes de una conversación no caducan (solo el contexto enviado al modelo está acotado); dos peticiones simultáneas a la misma conversación guardan el estado de la última | MINOR |
 | — | Chat: la compatibilidad de los esquemas estrictos de las herramientas con la API real de OpenAI solo se valida con la prueba manual (los tests usan un modelo simulado). La búsqueda semántica siempre devuelve los más parecidos aunque la similitud sea baja | MINOR |
+| — | Chat: el modo `query_only` cubre las conexiones de `crm_tools`; las lecturas del resolvedor de entidades y de la búsqueda semántica usan conexiones normales (solo hacen SELECT: no hay escritura alcanzable). Los esquemas estrictos con llamadas en paralelo y la detección de llamadas repetidas (textual) quedan acotados por la validación del backend y el tope de 8 herramientas | MINOR |
+| — | Chat: el alcance del turno (`chat_scope`) se detecta con pocas señales explícitas (olvidar, "en general", pronombres, "¿y …?", el nombre de la entidad activa); una frase fuera de ellas se trata como ambigua (se pregunta) y "olvida" en otro sentido ("¿se me olvida algo?") también borra el contexto. La guarda solo cubre `list_activities` / `search_activities` acotadas con el estado previo; si el modelo responde sin herramientas o elige global sin preguntar, depende del prompt | MINOR |
+| — | Chat: "pendiente" solo puede responderse como "próximas actividades" porque `activities` no guarda estado; la facturación es global (las facturas no tienen comercial); "hoy", "ayer", etc. usan la hora local del servidor | MINOR |
 | — | ChatScreen (rediseño en G.5): las respuestas son Markdown; las tarjetas antiguas (facturación, búsqueda, resumen) y los botones de acciones sugeridas quedan sin uso; el `conversation_id` solo vive en memoria y no hay carga de historial | MINOR |
 
 ## H — Voz / actividades V2
@@ -62,6 +70,7 @@ eliminó (el chat usa `prepare_meeting_context`). FE-D7-05 (`Bearer null`) se co
 | ID | Resumen | Severidad |
 |---|---|---|
 | FE-02 | No hay manejo global de 401: con un token rechazado la sesión sigue activa (1 `skip`) | IMPORTANT |
+| — | ChatScreen: el aviso "Cliente activo" sale de una heurística antigua del propio frontend (`_activeClient` = lo que sigue a "cliente" en el texto del usuario), no de `metadata.active_client` del backend. Con "¿Con qué clientes he hablado…?" muestra "Cliente activo: s he hablado…" (visto en la prueba real de G.4). Para G.5: pintar el aviso desde `metadata.active_client` o quitarlo | MINOR |
 | FE-D7-01 | History (actividades y filtros) y Calendar no capturan errores: spinner infinito sin aviso y `setState` sin comprobar `mounted` (2 `skip`) | IMPORTANT |
 | B8 | `ApiService.getActivity` llama a `GET /activities/{id}`, que no existe (405); no se usa: eliminarlo | MINOR |
 | FE-D7-04 | `Activity.fromJson` falla con `comentario` null; `Activity` y `ActivityProvider` no se usan en ninguna pantalla (1 `skip`) | MINOR |

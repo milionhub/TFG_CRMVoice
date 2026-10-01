@@ -5,12 +5,13 @@ resultados, errores controlados y estado activo derivado de la traza.
 """
 import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
 from conftest import CHAT_A_ONLY, CHAT_B_ONLY, CHAT_NOW
 from services import chat_tools, crm_tools
-from services.chat_tools import Focus, ToolContext, ToolOutcome, derive_state, dispatch
+from services.chat_tools import Focus, ToolContext, ToolOutcome, derive_state, dispatch, trust_result
 
 EXPECTED_TOOLS = {
     "find_entities", "list_activities", "search_activities", "get_client_overview", "get_contact",
@@ -24,7 +25,10 @@ def make_ctx(salesperson_id, *, clients=(), contacts=None, remaining=30.0):
 
 
 def call(name, args, ctx):
-    return dispatch(name, args if isinstance(args, str) else json.dumps(args), ctx)
+    """Como el orquestador: ejecutar y, si el resultado llega al modelo, confiar en sus ids."""
+    outcome = dispatch(name, args if isinstance(args, str) else json.dumps(args), ctx)
+    trust_result(outcome, ctx)
+    return outcome
 
 
 # =====================================================================
@@ -60,7 +64,7 @@ def test_herramienta_desconocida(chat_crm):
     ("list_activities", '{"client_id": "1"}'),          # estricto: sin conversión de tipos
     ("list_activities", '{"client_id": 1.0}'),
     ("list_activities", '{"limit": 21}'),
-    ("list_activities", '{"temporal_scope": "yesterday"}'),
+    ("list_activities", '{"temporal_scope": "anteayer"}'),
     ("list_activities", '{"date_from": "2026-13-01"}'),  # lo valida la herramienta de G.2
     ("list_activities", '{"client_id": 0}'),
     ("find_entities", "{}"),
@@ -374,3 +378,200 @@ def test_conflicto_no_ensena_ids(chat_crm, client_name, contact_name):
     # Resolverlo sin contradicción sí lo hace utilizable
     call("find_entities", {"contact_name": "Pablo Gil"}, ctx)
     assert call("get_contact", {"contact_id": chat_crm.pablo}, ctx).status == "ok"
+
+
+# =====================================================================
+# G.4 — esquemas, PII, coincidencia parcial, M6 y recorte de listas
+# =====================================================================
+
+def _schema(name):
+    return next(t["function"] for t in chat_tools.TOOL_SCHEMAS if t["function"]["name"] == name)
+
+
+def test_esquemas_g4_nuevos_ambitos_metricas_y_producto():
+    list_props = _schema("list_activities")["parameters"]["properties"]
+    scopes = list_props["temporal_scope"]["anyOf"][0]["enum"]
+    assert {"yesterday", "last_week"} <= set(scopes)
+    assert "product_name" in list_props and "product_id" not in list_props   # nunca un id de producto
+    metrics = _schema("crm_rankings")["parameters"]["properties"]["metric"]["enum"]
+    assert {"attention", "product_discussed"} <= set(metrics)
+    assert "partial" in _schema("find_entities")["description"]
+    test_esquemas_estrictos_sin_argumentos_de_confianza()   # siguen siendo estrictos
+
+
+def test_ficha_y_reunion_sin_telefono_ni_email_pero_get_contact_si(chat_crm):
+    ctx = make_ctx(chat_crm.a, clients={chat_crm.rivera}, contacts={chat_crm.marta_lopez: chat_crm.rivera})
+
+    overview = call("get_client_overview", {"client_id": chat_crm.rivera}, ctx).result
+    meeting = call("prepare_meeting_context", {"client_id": chat_crm.rivera}, ctx).result
+    contact = call("get_contact", {"contact_id": chat_crm.marta_lopez}, ctx).result
+
+    assert [set(c) for c in overview["contacts"]] == [{"id", "name", "role"}]
+    assert [set(c) for c in meeting["contacts"]] == [{"id", "name", "role"}]
+    assert {"phone", "email"} <= set(contact["contact"])
+
+
+def test_coincidencia_parcial_unica_ensena_el_id_y_la_ambigua_no(factory, user_a):
+    costa = factory.client("Diputacion Costa Verde", alias="Costa Verde")
+    ctx = make_ctx(user_a["id"])
+
+    unique = call("find_entities", {"client_name": "Costa"}, ctx)
+    assert unique.result["client"]["status"] == "partial" and unique.result["client"]["id"] == costa
+    assert unique.focus == Focus(clients=(costa,)) and costa in ctx.known_clients
+    assert call("get_client_overview", {"client_id": costa}, ctx).status == "ok"
+
+    other = factory.client("Costa Azul Viajes")
+    ctx2 = make_ctx(user_a["id"])
+    ambiguous = call("find_entities", {"client_name": "Costa"}, ctx2)
+    assert ambiguous.result["client"]["status"] == "ambiguous" and ambiguous.result["client"]["id"] is None
+    assert ctx2.known_clients == set() and ambiguous.focus == Focus()
+    assert call("get_client_overview", {"client_id": other}, ctx2).status == "unknown_id"
+
+
+def test_contacto_parcial_con_cliente_inexistente_es_conflicto_sin_ids(chat_crm):
+    ctx = make_ctx(chat_crm.a)
+
+    found = call("find_entities", {"client_name": "Construcciones", "contact_name": "Gil"}, ctx)
+
+    assert found.result["client"]["status"] == "conflict"
+    assert (found.result["client"]["id"], found.result["contact"]["id"]) == (None, None)   # M4: sin ids
+    assert found.focus == Focus() and ctx.known_clients == set() and ctx.known_contacts == {}
+
+
+def test_dispatch_no_confia_en_los_ids_hasta_trust_result(chat_crm):
+    ctx = make_ctx(chat_crm.a)
+
+    outcome = dispatch("find_entities", json.dumps({"client_name": "Rivera"}), ctx)
+    assert outcome.status == "ok" and ctx.known_clients == set()      # aún no ha llegado al modelo
+
+    trust_result(outcome, ctx)
+    assert ctx.known_clients == {chat_crm.rivera}
+
+    failed = chat_tools.error_outcome("find_entities", "evidence_limit", "x")
+    trust_result(failed, ctx)                                          # un error nunca enseña ids
+    assert ctx.known_clients == {chat_crm.rivera}
+
+
+def test_listas_con_comentarios_mas_cortos_que_el_detalle(chat_crm, factory):
+    long_comment = "largo " + "y" * 2000
+    factory.activity(chat_crm.a, chat_crm.rivera, datetime_iso="2026-10-05T10:00:00", comentario=long_comment)
+    ctx = make_ctx(chat_crm.a, clients={chat_crm.rivera})
+
+    listed = call("list_activities", {"client_id": chat_crm.rivera, "temporal_scope": "past"}, ctx).result
+    overview = call("get_client_overview", {"client_id": chat_crm.rivera}, ctx).result
+
+    assert len(listed["activities"][0]["comment"]) == chat_tools.LIST_COMMENT_CHARS
+    assert len(overview["activity"]["last_activity"]["comment"]) == chat_tools.COMMENT_CHARS
+
+
+def test_filtro_de_producto_en_el_chat_sin_ids(chat_crm):
+    ctx = make_ctx(chat_crm.a)
+
+    resolved = call("list_activities", {"product_name": "Monitor Vela 27"}, ctx).result
+    unknown = call("list_activities", {"product_name": "Proyector"}, ctx).result
+
+    assert resolved["product_filter"]["status"] == "resolved" and resolved["count"] == 1
+    assert CHAT_B_ONLY not in json.dumps(resolved)
+    assert unknown["found"] is False and unknown["product_filter"]["status"] == "unresolved"
+    assert "id" not in resolved["product_filter"]
+
+
+# =====================================================================
+# G.4 F1 — conflicto con candidatos parciales: ni ids ni cambio de estado
+# =====================================================================
+
+@pytest.fixture
+def costas(chat_crm, factory):
+    """Dos clientes contienen "Costa"; Raul es de uno de ellos; Pablo Gil, de Nebula (chat_crm)."""
+    verde = factory.client("Diputacion Costa Verde", alias="Costa Verde")
+    azul = factory.client("Costa Azul Viajes")
+    raul = factory.contact(verde, "Raul Navarro")
+    return SimpleNamespace(verde=verde, azul=azul, raul=raul)
+
+
+def test_f1_contacto_no_relacionado_no_ensena_ids_ni_cambia_el_estado(chat_crm, costas):
+    ctx = make_ctx(chat_crm.a, clients={chat_crm.rivera})       # estado activo previo: Rivera
+
+    found = call("find_entities", {"client_name": "Costa", "contact_name": "Pablo Gil"}, ctx)
+
+    assert found.status == "ok" and found.result["client"]["status"] == "conflict"
+    assert (found.result["client"]["id"], found.result["contact"]["id"], found.result["contact"]["client_id"]) == (
+        None, None, None)
+    assert "id" not in json.dumps(found.result["client"]["candidates"])
+    assert found.focus == Focus()
+    assert ctx.known_clients == {chat_crm.rivera} and ctx.known_contacts == {}
+    assert derive_state(chat_crm.rivera, None, [found]) == (chat_crm.rivera, None)
+    for name, args in [("get_contact", {"contact_id": chat_crm.pablo}),
+                       ("get_client_overview", {"client_id": chat_crm.nebula}),
+                       ("get_client_overview", {"client_id": costas.verde})]:
+        assert call(name, args, ctx).status == "unknown_id"
+
+
+def test_f1_contacto_compatible_puede_enfocar_su_cliente(chat_crm, costas):
+    ctx = make_ctx(chat_crm.a)
+
+    found = call("find_entities", {"client_name": "Costa", "contact_name": "Raul"}, ctx)
+
+    assert found.result["client"]["status"] == "partial" and found.result["client"]["id"] == costas.verde
+    assert found.focus == Focus(clients=(costas.verde,), contacts=((costas.raul, costas.verde),))
+    assert ctx.known_contacts == {costas.raul: costas.verde} and costas.verde in ctx.known_clients
+    assert derive_state(None, None, [found]) == (costas.verde, costas.raul)
+
+
+def test_f1_sin_contacto_ambiguo_sin_ids(chat_crm, costas):
+    ctx = make_ctx(chat_crm.a)
+
+    found = call("find_entities", {"client_name": "Costa"}, ctx)
+
+    assert found.result["client"]["status"] == "ambiguous" and found.result["client"]["id"] is None
+    assert set(found.result["client"]["candidates"]) == {"Costa Azul Viajes", "Diputacion Costa Verde"}
+    assert ctx.known_clients == set() and found.focus == Focus()
+
+
+# =====================================================================
+# G.4 — guarda de alcance: el contexto activo no estrecha una consulta de
+# actividades si el mensaje no se refiere a él
+# =====================================================================
+
+def scoped_ctx(chat_crm, scope):
+    ctx = make_ctx(chat_crm.a, clients={chat_crm.rivera})
+    ctx.active_client_id, ctx.active_label, ctx.scope = chat_crm.rivera, "Rivera Industrial S.L.", scope
+    return ctx
+
+
+def test_alcance_ambiguo_no_ejecuta_ni_ensena_nada(chat_crm, monkeypatch):
+    executed = []
+    monkeypatch.setattr(crm_tools, "list_activities", lambda *a, **k: executed.append(1))
+    ctx = scoped_ctx(chat_crm, None)
+
+    outcome = call("list_activities", {"client_id": chat_crm.rivera, "temporal_scope": "last_week"}, ctx)
+
+    assert outcome.status == "scope_ambiguous" and executed == []
+    assert "¿Te refieres a Rivera Industrial S.L. o a todas tus actividades?" in outcome.result["message"]
+    assert outcome.focus == Focus() and ctx.known_clients == {chat_crm.rivera}
+    assert derive_state(chat_crm.rivera, None, [outcome]) == (chat_crm.rivera, None)
+
+
+def test_alcance_global_rechaza_el_filtro_del_contexto(chat_crm):
+    outcome = call("search_activities", {"query": "visita", "client_id": chat_crm.rivera}, scoped_ctx(chat_crm, "global"))
+    assert outcome.status == "scope_global" and "sin client_id" in outcome.result["message"]
+
+
+def test_referencia_contextual_permite_el_filtro(chat_crm):
+    outcome = call("list_activities", {"client_id": chat_crm.rivera, "temporal_scope": "past"},
+                   scoped_ctx(chat_crm, "contextual"))
+    assert outcome.status == "ok" and outcome.result["count"] == 1
+
+
+def test_sin_filtro_o_con_entidad_resuelta_en_el_turno_no_hay_guarda(chat_crm):
+    ctx = scoped_ctx(chat_crm, None)
+    assert call("list_activities", {"temporal_scope": "past"}, ctx).status == "ok"      # global: sin filtro
+    call("find_entities", {"client_name": "Rivera"}, ctx)                              # nombrado en este turno
+    assert call("list_activities", {"client_id": chat_crm.rivera, "temporal_scope": "past"}, ctx).status == "ok"
+
+
+def test_herramientas_de_un_cliente_no_llevan_guarda(chat_crm):
+    # "¿Y sus productos?" o una ficha necesitan un cliente: no hay alternativa global que confundir
+    ctx = scoped_ctx(chat_crm, None)
+    assert call("get_client_products", {"client_id": chat_crm.rivera}, ctx).status == "ok"
+    assert call("get_client_overview", {"client_id": chat_crm.rivera}, ctx).status == "ok"

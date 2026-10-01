@@ -12,6 +12,43 @@ from services.entity_resolver import normalize_text
 CATALOG_DEFAULT_LIMIT = 20
 CATALOG_MAX_LIMIT = 50
 CLIENT_PRODUCTS_LIMIT = 20
+PRODUCT_NAME_MAX_LENGTH = 100
+
+
+def _catalog(conn):
+    """Productos (orden nombre, id) y sus alias {product_id: [alias]}."""
+    products = conn.execute("SELECT id, nombre, precio FROM products ORDER BY nombre, id").fetchall()
+    aliases = {}
+    for a in conn.execute("SELECT product_id, alias FROM product_aliases ORDER BY alias, id").fetchall():
+        aliases.setdefault(a["product_id"], []).append(a["alias"])
+    return products, aliases
+
+
+def resolve_product(conn, product_name: str) -> dict:
+    """
+    Un producto del catálogo a partir del nombre o alias que diga el usuario
+    (sin mayúsculas ni tildes). Nunca elige ante la ambigüedad:
+    - coincidencia exacta con un nombre o alias de un solo producto → resolved;
+    - si no, productos cuyo nombre o alias CONTIENE el texto: uno → resolved;
+      varios → ambiguous (solo nombres); ninguno → unresolved.
+    Devuelve {"status", "product": {"id", "name"} | None, "candidates": [nombres]}.
+    """
+    products, aliases = _catalog(conn)
+    needle = normalize_text(product_name)
+    if not needle:                       # solo signos de puntuación: no contiene nada útil
+        return {"status": "unresolved", "product": None, "candidates": []}
+
+    def names(p):
+        return [normalize_text(n) for n in [p["nombre"], *aliases.get(p["id"], [])]]
+
+    exact = [p for p in products if needle in names(p)]
+    matches = exact or [p for p in products if any(needle in n for n in names(p))]
+
+    if len(matches) == 1:
+        return {"status": "resolved", "product": {"id": matches[0]["id"], "name": matches[0]["nombre"]},
+                "candidates": []}
+    return {"status": "ambiguous" if matches else "unresolved", "product": None,
+            "candidates": [p["nombre"] for p in matches]}
 
 
 def search_product_catalog(query: str | None = None, *, limit: int | None = None) -> dict:
@@ -24,12 +61,7 @@ def search_product_catalog(query: str | None = None, *, limit: int | None = None
     limit = validate_limit(limit, CATALOG_DEFAULT_LIMIT, CATALOG_MAX_LIMIT)
 
     with open_connection() as conn:
-        products = conn.execute("SELECT id, nombre, precio FROM products ORDER BY nombre, id").fetchall()
-        alias_rows = conn.execute("SELECT product_id, alias FROM product_aliases ORDER BY alias, id").fetchall()
-
-    aliases = {}
-    for a in alias_rows:
-        aliases.setdefault(a["product_id"], []).append(a["alias"])
+        products, aliases = _catalog(conn)
 
     needle = normalize_text(query) if query else None
     matches = [
