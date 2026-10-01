@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
+import '../models/chat_message.dart';
 import '../providers/auth_provider.dart';
 
 class ApiService {
@@ -302,4 +304,101 @@ Future<void> deleteActivity(int id) async {
   }
 }
 
+  // ===================================================================
+  // Chat IA (G.5)
+  // ===================================================================
+
+  /// Tiempo máximo de una consulta al chat (el backend se acota en ~30 s).
+  static const Duration chatTimeout = Duration(seconds: 45);
+
+  /// POST /chat. Devuelve la respuesta tipada o lanza [ChatException]
+  /// (sin texto del servidor ni de la excepción original).
+  Future<ChatReply> sendChatMessage(String message, {int? conversationId}) async {
+    final http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse("$baseUrl/chat"),
+            headers: _headers(),
+            body: jsonEncode({
+              "message": message,
+              if (conversationId != null) "conversation_id": conversationId,
+            }),
+          )
+          .timeout(chatTimeout);
+    } on TimeoutException {
+      throw const ChatException(ChatErrorKind.timeout);
+    } catch (_) {
+      throw const ChatException(ChatErrorKind.network);
+    }
+
+    switch (response.statusCode) {
+      case 200:
+        return ChatReply.parse(response.bodyBytes);
+      case 401:
+        throw const ChatException(ChatErrorKind.unauthorized);
+      case 404:
+        throw const ChatException(ChatErrorKind.notFound);
+      default:
+        throw const ChatException(ChatErrorKind.server);
+    }
+  }
+}
+
+enum ChatErrorKind { unauthorized, notFound, timeout, network, server }
+
+/// Fallo de una consulta al chat, solo con su tipo (nunca detalles del servidor).
+class ChatException implements Exception {
+  final ChatErrorKind kind;
+
+  const ChatException(this.kind);
+
+  @override
+  String toString() => 'ChatException(${kind.name})';
+}
+
+/// Respuesta de POST /chat.
+///
+/// [hasMetadata] distingue "metadata con cliente/contacto a null" (el
+/// backend ha borrado el contexto) de "sin metadata" (no hay que tocarlo).
+class ChatReply {
+  final bool isError;
+  final String content;
+  final int? conversationId;
+  final bool hasMetadata;
+  final ChatEntity? activeClient;
+  final ChatEntity? activeContact;
+
+  const ChatReply({
+    required this.isError,
+    required this.content,
+    this.conversationId,
+    this.hasMetadata = false,
+    this.activeClient,
+    this.activeContact,
+  });
+
+  /// JSON en UTF-8 por definición (no depende del charset de la cabecera).
+  factory ChatReply.parse(List<int> bodyBytes) {
+    try {
+      final data = jsonDecode(utf8.decode(bodyBytes));
+      if (data is! Map || data["content"] is! String) {
+        throw const FormatException("respuesta del chat sin content");
+      }
+      final metadata = data["metadata"];
+      final conversationId = data["conversation_id"];
+      return ChatReply(
+        isError: data["type"] == "error",
+        content: data["content"] as String,
+        conversationId: conversationId is int ? conversationId : null,
+        hasMetadata: metadata is Map,
+        activeClient: metadata is Map ? ChatEntity.fromJson(metadata["active_client"]) : null,
+        activeContact: metadata is Map ? ChatEntity.fromJson(metadata["active_contact"]) : null,
+      );
+    } on ChatException {
+      rethrow;
+    } catch (_) {
+      throw const ChatException(ChatErrorKind.server);
+    }
+  }
 }

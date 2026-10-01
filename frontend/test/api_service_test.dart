@@ -2,9 +2,11 @@
 // URLs, cabeceras (Bearer / Content-Type), JSON, status y errores de red.
 // Sin cambios de producción: ApiService usa las funciones globales de
 // package:http, que http.runWithClient redirige al MockClient de FakeBackend.
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:frontend/models/chat_message.dart';
 import 'package:frontend/providers/auth_provider.dart';
 import 'package:frontend/services/api_service.dart';
 import 'package:http/http.dart' as http;
@@ -281,6 +283,144 @@ void main() {
   // -------------------------------------------------------------------
   // FE-02: manejo global de 401 (pendiente)
   // -------------------------------------------------------------------
+
+  // -------------------------------------------------------------------
+  // Chat V2 (G.5): POST /chat tipado
+  // -------------------------------------------------------------------
+
+  http.Response chatJson(Map<String, Object?> body, {int status = 200}) => http.Response(
+      jsonEncode(body), status,
+      headers: {'content-type': 'application/json; charset=utf-8'});
+
+  Matcher chatError(ChatErrorKind kind) =>
+      throwsA(isA<ChatException>().having((e) => e.kind, 'kind', kind));
+
+  test('sendChatMessage: POST /chat con Bearer, sin conversation_id en el primer turno', () async {
+    final api = await authedApi();
+    backend.on('POST', '/chat', (_) => chatJson(
+        {"type": "answer", "content": "Hola", "metadata": null, "conversation_id": 5}));
+
+    final reply = await backend.run(() => api.sendChatMessage('hola'));
+
+    final request = only('POST', '/chat');
+    expect(request.url.toString(), 'http://127.0.0.1:8000/chat');
+    expect(request.headers['Authorization'], 'Bearer ${api.auth.token}');
+    expect(jsonDecode(request.body), {"message": "hola"});
+    expect(reply.isError, isFalse);
+    expect(reply.content, 'Hola');
+    expect(reply.conversationId, 5);
+  });
+
+  test('sendChatMessage: envía conversation_id y decodifica UTF-8', () async {
+    final api = await authedApi();
+    backend.on('POST', '/chat', (_) => chatJson(
+        {"type": "answer", "content": "Mañana: reunión con Peña", "metadata": null, "conversation_id": 7}));
+
+    final reply = await backend.run(() => api.sendChatMessage('¿qué tengo?', conversationId: 7));
+
+    expect(jsonDecode(only('POST', '/chat').body), {"message": "¿qué tengo?", "conversation_id": 7});
+    expect(reply.content, 'Mañana: reunión con Peña');
+  });
+
+  test('sendChatMessage: metadata objeto (con campos null) frente a metadata null', () async {
+    final api = await authedApi();
+    backend.on('POST', '/chat', (_) => chatJson({
+          "type": "answer",
+          "content": "ok",
+          "metadata": {
+            "active_client": {"id": 1, "name": "Rivera"},
+            "active_contact": {"id": 3, "name": "Laura", "client_id": 1},
+          },
+          "conversation_id": 1,
+        }));
+    final withContext = await backend.run(() => api.sendChatMessage('a'));
+    expect(withContext.hasMetadata, isTrue);
+    expect(withContext.activeClient, const ChatEntity(id: 1, name: 'Rivera'));
+    expect(withContext.activeContact, const ChatEntity(id: 3, name: 'Laura'));
+
+    backend.on('POST', '/chat', (_) => chatJson({
+          "type": "answer",
+          "content": "ok",
+          "metadata": {"active_client": null, "active_contact": null},
+          "conversation_id": 1,
+        }));
+    final cleared = await backend.run(() => api.sendChatMessage('b', conversationId: 1));
+    expect(cleared.hasMetadata, isTrue);
+    expect(cleared.activeClient, isNull);
+    expect(cleared.activeContact, isNull);
+
+    backend.on('POST', '/chat', (_) => chatJson(
+        {"type": "error", "content": "El mensaje no puede estar vacío.", "metadata": null, "conversation_id": 1}));
+    final noMetadata = await backend.run(() => api.sendChatMessage('c', conversationId: 1));
+    expect(noMetadata.hasMetadata, isFalse);
+    expect(noMetadata.isError, isTrue);
+  });
+
+  test('sendChatMessage: type error se devuelve como respuesta, no como excepción', () async {
+    final api = await authedApi();
+    backend.on('POST', '/chat', (_) => chatJson({
+          "type": "error",
+          "content": "No he podido completar la consulta.",
+          "metadata": {"active_client": null, "active_contact": null},
+          "conversation_id": 9,
+        }));
+
+    final reply = await backend.run(() => api.sendChatMessage('x', conversationId: 9));
+
+    expect(reply.isError, isTrue);
+    expect(reply.conversationId, 9);
+  });
+
+  for (final (status, kind) in [
+    (401, ChatErrorKind.unauthorized),
+    (404, ChatErrorKind.notFound),
+    (422, ChatErrorKind.server),
+    (500, ChatErrorKind.server),
+  ]) {
+    test('sendChatMessage $status → ChatErrorKind.${kind.name}', () async {
+      final api = await authedApi();
+      backend.json('POST', '/chat', {"detail": "detalle interno"}, status: status);
+
+      await expectLater(backend.run(() => api.sendChatMessage('x')), chatError(kind));
+    });
+  }
+
+  test('sendChatMessage: JSON malformado o sin content → server', () async {
+    final api = await authedApi();
+    backend.on('POST', '/chat', (_) => http.Response('<html>', 200));
+    await expectLater(backend.run(() => api.sendChatMessage('x')), chatError(ChatErrorKind.server));
+
+    backend.on('POST', '/chat', (_) => chatJson({"type": "answer", "metadata": null, "conversation_id": 1}));
+    await expectLater(backend.run(() => api.sendChatMessage('x')), chatError(ChatErrorKind.server));
+  });
+
+  test('sendChatMessage: excepción del cliente HTTP → network', () async {
+    final api = await authedApi();
+    backend.on('POST', '/chat', (_) => throw http.ClientException('sin conexión'));
+
+    await expectLater(backend.run(() => api.sendChatMessage('x')), chatError(ChatErrorKind.network));
+  });
+
+  testWidgets('sendChatMessage: sin respuesta en 45 s → timeout', (tester) async {
+    final api = await tester.runAsync(authedApi);
+    final pending = Completer<http.Response>();
+    backend.on('POST', '/chat', (_) => pending.future);
+
+    ChatException? error;
+    unawaited(backend.run(() async {
+      try {
+        await api!.sendChatMessage('x');
+      } on ChatException catch (e) {
+        error = e;
+      }
+    }));
+
+    await tester.pump(const Duration(seconds: 44));
+    expect(error, isNull);
+    await tester.pump(const Duration(seconds: 2));
+    expect(error?.kind, ChatErrorKind.timeout);
+    expect(ApiService.chatTimeout, const Duration(seconds: 45));
+  });
 
   test('401 en una llamada de datos: hoy solo se lanza una excepción genérica', () async {
     final api = await authedApi();

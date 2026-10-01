@@ -39,6 +39,12 @@ los ids de un resultado descartado por el tope de evidencia ya no pasan a ser de
 (solo cuenta lo que llega al modelo), y un fallo de SQLite al guardar el turno devuelve un
 error controlado (sin medio turno guardado) en vez de un 500.
 
+G.5 (Chat V2 en Flutter) cerró los avisos del frontend: el contexto se pinta solo desde
+`metadata.active_client` / `active_contact` (ya no se deduce del texto: adiós a "Cliente
+activo: s he hablado…"), la conversación sobrevive al cambio escritorio ↔ móvil, el Markdown
+usa un tema claro propio del chat (sin texto ilegible sobre el tema oscuro) y se eliminaron
+la intención pendiente, las tarjetas antiguas y los botones de acciones sugeridas.
+
 | ID | Resumen | Severidad |
 |---|---|---|
 | B4 | `build_context` (solo `GET /client-context`) siempre devuelve un dict: un cliente inexistente responde 200 con `client_name=None` en vez de 404 | MINOR |
@@ -49,7 +55,9 @@ error controlado (sin medio turno guardado) en vez de un 500.
 | — | Chat: el modo `query_only` cubre las conexiones de `crm_tools`; las lecturas del resolvedor de entidades y de la búsqueda semántica usan conexiones normales (solo hacen SELECT: no hay escritura alcanzable). Los esquemas estrictos con llamadas en paralelo y la detección de llamadas repetidas (textual) quedan acotados por la validación del backend y el tope de 8 herramientas | MINOR |
 | — | Chat: el alcance del turno (`chat_scope`) se detecta con pocas señales explícitas (olvidar, "en general", pronombres, "¿y …?", el nombre de la entidad activa); una frase fuera de ellas se trata como ambigua (se pregunta) y "olvida" en otro sentido ("¿se me olvida algo?") también borra el contexto. La guarda solo cubre `list_activities` / `search_activities` acotadas con el estado previo; si el modelo responde sin herramientas o elige global sin preguntar, depende del prompt | MINOR |
 | — | Chat: "pendiente" solo puede responderse como "próximas actividades" porque `activities` no guarda estado; la facturación es global (las facturas no tienen comercial); "hoy", "ayer", etc. usan la hora local del servidor | MINOR |
-| — | ChatScreen (rediseño en G.5): las respuestas son Markdown; las tarjetas antiguas (facturación, búsqueda, resumen) y los botones de acciones sugeridas quedan sin uso; el `conversation_id` solo vive en memoria y no hay carga de historial | MINOR |
+| — | Chat (frontend, tras G.5): el `conversation_id` y el contexto solo viven en memoria (no hay historial ni se recupera la conversación al recargar); el chat gestiona su propio 401 con "Iniciar sesión", pero el resto de la app sigue sin manejo global (FE-02); el tema claro es local al chat (la app sigue con `ThemeData.dark()`); `flutter_markdown` 0.6.x figura como descontinuado en pub.dev (sustituto: `flutter_markdown_plus`) | MINOR |
+| — | Chat: el timeout de 45 s del frontend (o un corte de red) no cancela la petición; si el backend acaba y guarda el turno, "Reintentar" con el mismo `conversation_id` lo repite y el historial queda [P, R1, P, R2] (R1 y su metadata nunca se mostraron; la siguiente respuesta trae el contexto bueno). Solo lectura, sin efectos laterales y requiere > 45 s. Arreglarlo exige idempotencia o cancelación en el backend (fuera de G.5) | MINOR |
+| — | Chat (Markdown): las imágenes nunca se cargan (se muestra su texto alternativo), pero `flutter_markdown` 0.6.x hace `Uri.parse` del src antes de llamar al `imageBuilder`: una URL de imagen mal formada (p. ej. `http://[::1`) hace fallar el render de ESE mensaje (sin petición de red). Evitarlo exige un builder propio para `img` con `package:markdown` como dependencia directa; revisarlo al migrar a `flutter_markdown_plus` | MINOR |
 
 ## H — Voz / actividades V2
 
@@ -70,7 +78,6 @@ error controlado (sin medio turno guardado) en vez de un 500.
 | ID | Resumen | Severidad |
 |---|---|---|
 | FE-02 | No hay manejo global de 401: con un token rechazado la sesión sigue activa (1 `skip`) | IMPORTANT |
-| — | ChatScreen: el aviso "Cliente activo" sale de una heurística antigua del propio frontend (`_activeClient` = lo que sigue a "cliente" en el texto del usuario), no de `metadata.active_client` del backend. Con "¿Con qué clientes he hablado…?" muestra "Cliente activo: s he hablado…" (visto en la prueba real de G.4). Para G.5: pintar el aviso desde `metadata.active_client` o quitarlo | MINOR |
 | FE-D7-01 | History (actividades y filtros) y Calendar no capturan errores: spinner infinito sin aviso y `setState` sin comprobar `mounted` (2 `skip`) | IMPORTANT |
 | B8 | `ApiService.getActivity` llama a `GET /activities/{id}`, que no existe (405); no se usa: eliminarlo | MINOR |
 | FE-D7-04 | `Activity.fromJson` falla con `comentario` null; `Activity` y `ActivityProvider` no se usan en ninguna pantalla (1 `skip`) | MINOR |

@@ -1,61 +1,80 @@
-import 'dart:convert';
+// Chat IA (G.5): consulta del CRM en lenguaje natural.
+//
+// - Un único ChatView con GlobalKey: cambiar entre escritorio y móvil
+//   (< 800 px) no destruye la conversación.
+// - El contexto activo (cliente/contacto) sale SOLO de la metadata de la
+//   respuesta; nunca del texto del usuario ni del asistente.
+// - Una conversación por visita a la pantalla, sin persistencia local;
+//   "Nueva conversación" empieza otra en el backend.
+// - Época (_epoch): una respuesta que llega después de reiniciar se ignora.
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
+
+import '../models/chat_message.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
-import '../core/app_colors.dart';
+import '../widgets/chat/chat_composer.dart';
+import '../widgets/chat/chat_context_bar.dart';
+import '../widgets/chat/chat_empty_state.dart';
+import '../widgets/chat/chat_message_bubble.dart';
+import '../widgets/chat/chat_theme.dart';
 import 'home_screen.dart';
 
-class ChatMessage {
-  final String content;
-  final bool isUser;
-  final String? type;
-  final List<String>? actions;
-  final List<dynamic>? results;
-  final Map<String, dynamic>? billing;
-  final Map<String, dynamic>? summary;
+const _title = "CRMVoice IA";
+const _subtitle = "Consulta tu CRM en lenguaje natural";
+const _newConversationLabel = "Nueva conversación";
 
-  ChatMessage({
-    required this.content,
-    required this.isUser,
-    this.type,
-    this.actions,
-    this.results,
-    this.billing,
-    this.summary,
-  });
-}
-
-class ChatScreen extends StatelessWidget {
+class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 800;
-
-    if (isMobile) {
-      return const _MobileLayoutChat();
-    } else {
-      return const _DesktopLayoutChat();
-    }
-  }
+  State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _DesktopLayoutChat extends StatelessWidget {
-  const _DesktopLayoutChat();
+class _ChatScreenState extends State<ChatScreen> {
+  // La misma instancia de ChatView en cualquier tamaño de ventana
+  final _chatKey = GlobalKey<ChatViewState>();
+  final _canReset = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _canReset.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 800;
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ChatColors.background,
+      drawer: isMobile ? const MobileDrawer() : null,
+      appBar: isMobile
+          ? AppBar(
+              backgroundColor: ChatColors.surface,
+              foregroundColor: ChatColors.textPrimary,
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              shape: const Border(bottom: BorderSide(color: ChatColors.border)),
+              title: const Text(_title, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+              actions: [
+                ValueListenableBuilder<bool>(
+                  valueListenable: _canReset,
+                  builder: (context, canReset, _) => IconButton(
+                    tooltip: _newConversationLabel,
+                    icon: const Icon(Icons.add_comment_outlined),
+                    onPressed: canReset ? () => _chatKey.currentState?.newConversation() : null,
+                  ),
+                ),
+              ],
+            )
+          : null,
       body: Row(
         children: [
-          const Sidebar(currentIndex: 3),
-          const Expanded(
+          if (!isMobile) const Sidebar(currentIndex: 3),
+          Expanded(
             child: SafeArea(
-              child: ChatContent(),
+              child: ChatView(key: _chatKey, showHeader: !isMobile, canReset: _canReset),
             ),
           ),
         ],
@@ -64,854 +83,332 @@ class _DesktopLayoutChat extends StatelessWidget {
   }
 }
 
-class _MobileLayoutChat extends StatelessWidget {
-  const _MobileLayoutChat();
+class ChatView extends StatefulWidget {
+  /// Cabecera propia (escritorio); en móvil la pone el AppBar.
+  final bool showHeader;
+
+  /// Se mantiene al día para el botón "Nueva conversación" del AppBar.
+  final ValueNotifier<bool> canReset;
+
+  const ChatView({super.key, required this.showHeader, required this.canReset});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      drawer: const MobileDrawer(),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        title: const Text("Asistente IA"),
-      ),
-      body: const SafeArea(
-        child: ChatContent(),
-      ),
-    );
-  }
+  State<ChatView> createState() => ChatViewState();
 }
 
-class ChatContent extends StatefulWidget {
-  const ChatContent({super.key});
+class ChatViewState extends State<ChatView> {
+  final _messages = <ChatEntry>[];
+  final _input = TextEditingController();
+  final _scroll = ScrollController();
+  final _focus = FocusNode();
+  // Respuesta o aviso más reciente: se lleva a la vista desde su principio
+  final _latestReplyKey = GlobalKey();
 
-  @override
-  State<ChatContent> createState() => _ChatContentState();
-}
-
-class _ChatContentState extends State<ChatContent> {
-  final List<ChatMessage> _messages = [];
-  final TextEditingController _controller = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-
-  bool _loading = false;
-
-  // Conversación del backend (G.3): solo en memoria, dura lo que esta pantalla
   int? _conversationId;
+  ChatContext _context = ChatContext.empty;
+  bool _sending = false;
+  String? _retryText; // pregunta del último turno fallido que se puede reintentar
+  int _epoch = 0;
 
-  String? _activeClient;
-  String? _pendingIntent;
-
-  final String baseUrl = ApiService.baseUrl;
+  bool get _canReset => _messages.isNotEmpty && !_sending;
 
   @override
-  void initState() {
-    super.initState();
-
-    _messages.add(
-      ChatMessage(
-        content:
-            "Hola 👋\n\nSoy tu asistente CRM.\n\nPuedo ayudarte con:\n\n• Preparar reuniones\n• Analizar clientes\n• Consultar facturación\n• Buscar actividades",
-        isUser: false,
-      ),
-    );
+  void dispose() {
+    _input.dispose();
+    _scroll.dispose();
+    _focus.dispose();
+    super.dispose();
   }
 
- Future<void> _sendMessage() async {
-    // Sin doble envío: dos peticiones a la vez crearían dos conversaciones
-    if (_loading) return;
+  void _update(VoidCallback change) {
+    setState(change);
+    widget.canReset.value = _canReset;
+  }
 
-    String text = _controller.text.trim();
+  bool get _isDesktop => MediaQuery.sizeOf(context).width >= 800;
 
-    // 🔹 Si hay intención pendiente → construir mensaje completo
-    if (_pendingIntent != null) {
-      text = "$_pendingIntent $text";
-      _pendingIntent = null;
-    }
+  // ------------------------------------------------------------------
+  // Envío
+  // ------------------------------------------------------------------
 
-    if (text.isEmpty) return;
-
-    // 🔹 Detectar cliente activo
-    if (text.toLowerCase().contains("cliente")) {
-      final parts = text.split("cliente");
-      if (parts.length > 1) {
-        _activeClient = parts.last.trim();
-      }
-    }
-
-    setState(() {
-      _messages.add(ChatMessage(content: text, isUser: true));
-      _loading = true;
+  /// Composer, Enter y ejemplos pasan por aquí: un único camino.
+  /// Solo un envío desde el composer lo vacía: un ejemplo no borra el borrador.
+  void _submit(String raw, {bool fromComposer = false}) {
+    if (_sending || !ChatComposer.canSend(raw)) return;
+    final text = raw.trim();
+    _update(() {
+      _messages.add(ChatEntry.user(text));
+      _retryText = null;
     });
+    if (fromComposer) _input.clear();
+    _request(text);
+  }
 
-    _controller.clear();
-    _scrollToBottom();
+  /// Reintenta la última pregunta fallida sin repetir el mensaje del usuario.
+  void _retry() {
+    final text = _retryText;
+    if (text == null || _sending) return;
+    _update(() {
+      if (_messages.isNotEmpty && _messages.last.kind == ChatEntryKind.notice) _messages.removeLast();
+      _retryText = null;
+    });
+    _request(text);
+  }
 
-    final token = context.read<AuthProvider>().token;
+  Future<void> _request(String text) async {
+    final epoch = _epoch;
+    final api = context.read<ApiService>();
+    _update(() => _sending = true);
+    _scrollToEnd();
 
+    ChatReply? reply;
+    ChatErrorKind? failure;
     try {
-      final response = await http.post(
-        Uri.parse("$baseUrl/chat"),
-        headers: {
-          "Content-Type": "application/json",
-          if (token != null) "Authorization": "Bearer $token",
-        },
-        body: jsonEncode({
-          "message": text,
-          if (_conversationId != null) "conversation_id": _conversationId,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final conversationId = data["conversation_id"];
-        if (conversationId is int) _conversationId = conversationId;
-
-        setState(() {
-          _messages.add(
-            ChatMessage(
-              content: data["content"],
-              isUser: false,
-              type: data["type"],
-              actions: data["metadata"]?["suggested_actions"] != null
-                  ? List<String>.from(data["metadata"]["suggested_actions"])
-                  : null,
-              results: data["metadata"]?["results"],
-              billing: data["metadata"]?["billing"],
-              summary: data["metadata"]?["summary"],
-            ),
-          );
-        });
-      } else if (response.statusCode == 404) {
-        // La conversación ya no existe (o no es de este usuario): se empieza una nueva
-        _conversationId = null;
-        setState(() {
-          _messages.add(
-            ChatMessage(
-              content: "La conversación ya no está disponible. Vuelve a escribir tu pregunta.",
-              isUser: false,
-            ),
-          );
-        });
-      } else {
-        setState(() {
-          _messages.add(
-            ChatMessage(
-              content: "Error del servidor",
-              isUser: false,
-            ),
-          );
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _messages.add(
-          ChatMessage(
-            content: "Error de conexión",
-            isUser: false,
-          ),
-        );
-      });
+      reply = await api.sendChatMessage(text, conversationId: _conversationId);
+    } on ChatException catch (error) {
+      failure = error.kind;
     }
+    // La pantalla se cerró o se empezó otra conversación mientras tanto
+    if (!mounted || epoch != _epoch) return;
 
-    setState(() => _loading = false);
-    _scrollToBottom();
+    final followReply = _isNearEnd;
+    _update(() {
+      _sending = false;
+      if (reply != null) {
+        _applyReply(reply, text);
+      } else {
+        _applyFailure(failure!, text);
+      }
+    });
+    if (followReply) _revealLatestReply();
+    if (_isDesktop) _focus.requestFocus();
   }
 
-  void _scrollToBottom() {
+  void _applyReply(ChatReply reply, String text) {
+    if (reply.conversationId != null) _conversationId = reply.conversationId;
+    // Metadata presente: manda (null = borrado). Ausente: el contexto no se toca.
+    if (reply.hasMetadata) {
+      _context = ChatContext(client: reply.activeClient, contact: reply.activeContact);
+    }
+    if (reply.isError) {
+      _messages.add(ChatEntry.notice(reply.content, action: NoticeAction.retry));
+      _retryText = text;
+    } else {
+      _messages.add(ChatEntry.assistant(reply.content));
+    }
+  }
+
+  void _applyFailure(ChatErrorKind kind, String text) {
+    switch (kind) {
+      case ChatErrorKind.unauthorized:
+        _messages.add(const ChatEntry.notice("Tu sesión ha caducado. Vuelve a iniciar sesión.",
+            action: NoticeAction.login));
+      case ChatErrorKind.notFound:
+        // La conversación ya no existe: se empieza otra (el reintento va sin id)
+        _conversationId = null;
+        _context = ChatContext.empty;
+        _messages.add(const ChatEntry.notice(
+            "La conversación anterior ya no está disponible. He empezado una nueva.",
+            action: NoticeAction.retry));
+        _retryText = text;
+      case ChatErrorKind.timeout:
+      case ChatErrorKind.network:
+        _messages.add(const ChatEntry.notice("No se pudo enviar la consulta.", action: NoticeAction.retry));
+        _retryText = text;
+      case ChatErrorKind.server:
+        _messages.add(const ChatEntry.notice("No se ha podido completar la consulta.", action: NoticeAction.retry));
+        _retryText = text;
+    }
+  }
+
+  /// "Nueva conversación": todo local a cero; la siguiente pregunta crea otra en el backend.
+  void newConversation() {
+    _update(() {
+      _epoch++;
+      _messages.clear();
+      _conversationId = null;
+      _context = ChatContext.empty;
+      _retryText = null;
+      _sending = false;
+    });
+    _input.clear();
+  }
+
+  // ------------------------------------------------------------------
+  // Scroll
+  // ------------------------------------------------------------------
+
+  bool get _isNearEnd =>
+      !_scroll.hasClients || _scroll.position.maxScrollExtent - _scroll.offset < 160;
+
+  /// Tras enviar: la pregunta (y la respuesta pendiente) a la vista.
+  void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
+      if (!mounted || !_scroll.hasClients) return;
+      _scroll.animateTo(_scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
     });
   }
 
-  Widget _buildMessage(ChatMessage message) {
-    return Row(
-      mainAxisAlignment:
-          message.isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-
-        if (!message.isUser)
-          const Padding(
-            padding: EdgeInsets.only(left: 16, right: 8, top: 6),
-            child: CircleAvatar(
-              radius: 14,
-              backgroundColor: AppColors.primary,
-              child: Icon(Icons.smart_toy, size: 16, color: Colors.white),
-            ),
-          ),
-
-        Flexible(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-
-              /// MENSAJE
-              Container(
-                margin: const EdgeInsets.symmetric(vertical: 6),
-                padding: const EdgeInsets.all(14),
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.55,
-                ),
-                decoration: BoxDecoration(
-                  color: message.isUser
-                      ? AppColors.primary
-                      : Colors.white,
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(18),
-                    topRight: const Radius.circular(18),
-                    bottomLeft: message.isUser
-                        ? const Radius.circular(18)
-                        : const Radius.circular(4),
-                    bottomRight: message.isUser
-                        ? const Radius.circular(4)
-                        : const Radius.circular(18),
-                  ),
-                    border: Border.all(
-                      color: AppColors.border,
-                    ),
-                ),
-                child: message.isUser
-                    ? Text(
-                        message.content,
-                        style: const TextStyle(color: Colors.white),
-                      )
-                    : message.type == "billing_summary"
-                      ? _buildBillingCard(message)
-                      : message.type == "semantic_search"
-                          ? _buildActivitiesList(message)
-                          : message.type == "client_summary"
-                            ? _buildClientSummary(message)
-                          : MarkdownBody(
-                            data: message.content,
-                            styleSheet: MarkdownStyleSheet(
-                              p: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
-                              h3: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.textPrimary,
-                              ),
-                            ),
-                          ),
-              ),
-
-              /// BOTONES SUGERIDOS
-              if (!message.isUser && message.actions != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Wrap(
-                    spacing: 8,
-                    children: message.actions!
-                      .map((action) {
-                        
-                        final config = actionConfig[action];
-
-                        if (config == null) return const SizedBox();
-
-                        final label = config["label"]!;
-                        final baseMessage = config["message"]!;
-
-                        return OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.primary,
-                            side: BorderSide(color: AppColors.border),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                          ),
-                          onPressed: () {
-
-                            String finalMessage = baseMessage;
-
-                            if (_activeClient != null) {
-                              finalMessage = "$baseMessage $_activeClient";
-                            }
-
-                            _pendingIntent = null;
-
-                            _controller.text = finalMessage;
-                            _sendMessage();
-                          },
-                          child: Text(label),
-                        );
-                      })
-                      .toList(),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
+  /// Tras la respuesta: su principio arriba (una respuesta larga se lee desde el inicio).
+  void _revealLatestReply() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _latestReplyKey.currentContext;
+      if (!mounted || target == null) return;
+      Scrollable.ensureVisible(target, alignment: 0.0, duration: const Duration(milliseconds: 250));
+    });
   }
 
-  Widget _buildClientSummary(ChatMessage message) {
-    final summary = message.summary;
+  // ------------------------------------------------------------------
+  // Vista
+  // ------------------------------------------------------------------
 
-    if (summary == null) {
-      return const Text("No hay datos");
-    }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          /// 🧾 HEADER
-          const Text(
-            "📊 Resumen del cliente",
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary, 
-            ),
-          ),
-
-          const SizedBox(height: 14),
-
-          /// 🟢 ESTADO
-          if (summary["status"] != null)
-            _summaryBlock(
-              title: "Estado",
-              content: summary["status"],
-            ),
-
-          /// 🔵 ACTIVIDAD
-          if (summary["activity"] != null)
-            _summaryBlock(
-              title: "Actividad",
-              content: summary["activity"],
-            ),
-
-          /// 🟣 OPORTUNIDADES
-          if (summary["opportunities"] != null &&
-              (summary["opportunities"] as List).isNotEmpty)
-            _summaryList(
-              title: "Oportunidades",
-              items: summary["opportunities"],
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryBlock({
-    required String title,
-    required String content,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(content),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryList({
-    required String title,
-    required List items,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 6),
-          ...items.map((e) => Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(
-              "• $e",
-              style: const TextStyle(
-                color: AppColors.primary,
-              ),
-            ),
-          )),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActivitiesList(ChatMessage message) {
-    final results = message.results ?? [];
-
-    if (results.isEmpty) {
-      return const Text("No hay actividades");
-    }
-
-    return Column(
-      children: results.map((r) {
-
-        return Container(
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-
-              /// 🟣 TIPO (ej: llamada, visita, etc.)
-              if (r["tipo"] != null)
-                Text(
-                  r["tipo"],
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                ),
-
-              const SizedBox(height: 6),
-
-              /// 🟢 CLIENTE
-              if (r["cliente"] != null)
-                Text(
-                  r["cliente"],
-                  style: const TextStyle(
-                    color: Colors.grey,
-                    fontSize: 12,
-                  ),
-                ),
-
-              const SizedBox(height: 8),
-
-              /// 📝 COMENTARIO
-              Text(
-                r["comentario"] ?? "",
-                style: const TextStyle(fontSize: 14),
-              ),
-
-              const SizedBox(height: 8),
-
-              /// 📅 FECHA
-              if (r["fecha"] != null)
-                Text(
-                  r["fecha"],
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey,
-                  ),
-                ),
-            ],
-          ),
+  Widget _entry(int index) {
+    final entry = _messages[index];
+    final isLatest = index == _messages.length - 1;
+    final Widget child;
+    switch (entry.kind) {
+      case ChatEntryKind.user:
+        child = UserMessage(text: entry.text);
+      case ChatEntryKind.assistant:
+        child = AssistantMessage(markdown: entry.text);
+      case ChatEntryKind.notice:
+        // Solo el último aviso tiene la acción activa
+        final active = isLatest && !_sending;
+        child = NoticeMessage(
+          text: entry.text,
+          actionLabel: switch (entry.action) {
+            NoticeAction.retry => active && _retryText != null ? "Reintentar" : null,
+            NoticeAction.login => active ? "Iniciar sesión" : null,
+            NoticeAction.none => null,
+          },
+          onAction: switch (entry.action) {
+            NoticeAction.retry => _retry,
+            NoticeAction.login => () => context.read<AuthProvider>().logout(),
+            NoticeAction.none => null,
+          },
         );
-
-      }).toList(),
-    );
-  }
-
-  Widget _buildBillingCard(ChatMessage message) {
-    final billing = message.billing;
-
-    if (billing == null) {
-      return const Text("No hay datos");
     }
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          /// 🧾 TÍTULO
-          const Text(
-            "💰 Facturación",
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          /// 💵 TOTAL
-          Text(
-            "${billing["total_facturado"]} €",
-            style: const TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              color: AppColors.primary,
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          /// 📊 DETALLES
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _metric("Facturas", billing["total_facturas"]),
-              _metric("Ticket medio", billing["ticket_medio"]),
-            ],
-          ),
-
-          const SizedBox(height: 10),
-
-          /// 📅 ÚLTIMA FACTURA
-          if (billing["ultima_factura"] != null)
-            Text(
-              "Última factura: ${billing["ultima_factura"]}",
-              style: const TextStyle(color: AppColors.textPrimary, fontSize: 12),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _metric(String label, dynamic value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "$value",
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            color: AppColors.primary,
-          ),
-        ),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildQuickActions() {
+    final isReply = isLatest && entry.kind != ChatEntryKind.user;
     return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Wrap(
-        alignment: WrapAlignment.start,
-        spacing: 12,
-        runSpacing: 12,
-        children: [
-
-          _quickButton("Preparar reunión", "prepara una reunion con"),
-          _quickButton("Resumen cliente", "resumen cliente"),
-          _quickButton("Facturación cliente", "facturacion cliente"),
-          _quickButton("Buscar actividad", "buscar actividades de"),
-        ],
-      ),
+      key: isReply ? _latestReplyKey : null,
+      padding: const EdgeInsets.only(bottom: 14),
+      child: child,
     );
   }
 
-  Widget _quickButton(String label, String message) {
-    return ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: AppColors.primary,
-        elevation: 0,
-        side: const BorderSide(color: Color(0xffe5e7eb)),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  Widget _column(double gutter, Widget child) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: ChatLayout.maxColumnWidth + 64),
+        child: Padding(padding: EdgeInsets.symmetric(horizontal: gutter), child: child),
       ),
-      onPressed: () {
-
-        if (_activeClient != null) {
-          // ya tenemos cliente → ejecutar directo
-          _controller.text = "$message $_activeClient";
-          _pendingIntent = null;
-          _sendMessage();
-        } else {
-          // NO enviar todavía → solo guardar intención
-          _pendingIntent = message;
-
-          setState(() {
-            _messages.add(
-              ChatMessage(
-                content: _questionForIntent(message),
-                isUser: false,
-              ),
-            );
-          });
-        }
-
-      },
-      child: Text(label),
     );
   }
-
-  String _questionForIntent(String intent) {
-    if (intent.contains("facturacion")) {
-      return "¿De qué cliente quieres consultar la facturación?";
-    } else if (intent.contains("reunion")) {
-      return "¿Para qué cliente quieres preparar la reunión?";
-    } else if (intent.contains("resumen")) {
-      return "¿De qué cliente quieres el resumen?";
-    } else if (intent.contains("actividad")) {
-      return "¿Qué cliente quieres consultar?";
-    }
-    return "¿Para qué cliente?";
-  }
-
-  Map<String, Map<String, String>> actionConfig = {
-    "prepare_meeting": {
-      "label": "Preparar reunión",
-      "message": "prepara una reunion con"
-    },
-    "client_summary": {
-      "label": "Resumen cliente",
-      "message": "resumen cliente"
-    },
-    "billing_query": {
-      "label": "Facturación",
-      "message": "facturacion cliente"
-    },
-    "semantic_search": {
-      "label": "Buscar actividad",
-      "message": "buscar actividades de"
-    },
-  };
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
+    final width = MediaQuery.sizeOf(context).width;
+    final gutter = ChatLayout.gutter(width);
+    final showEmpty = _messages.isEmpty && !_sending;
 
-       
-    /// HEADER
-      Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-        child: Row(
+    return Theme(
+      data: chatTheme(),
+      child: ColoredBox(
+        color: ChatColors.background,
+        child: Column(
           children: [
-            const Icon(Icons.smart_toy, color: AppColors.textSecondary),
-            const SizedBox(width: 10),
-            Text(
-              "Asistente CRM",
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: AppColors.textPrimary,
-                    fontWeight: FontWeight.w600,
+            if (widget.showHeader)
+              _ChatHeader(onNewConversation: _canReset ? newConversation : null),
+            if (!_context.isEmpty)
+              Padding(
+                padding: EdgeInsets.only(top: widget.showHeader ? 0 : 12, bottom: 4),
+                child: _column(gutter, Align(alignment: Alignment.centerLeft, child: ChatContextBar(chatContext: _context))),
+              ),
+            Expanded(
+              child: showEmpty
+                  ? SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: _column(gutter, ChatEmptyState(onSelected: _submit)),
+                    )
+                  : SelectionArea(
+                      child: ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        itemCount: _messages.length + (_sending ? 1 : 0),
+                        itemBuilder: (context, index) => _column(
+                          gutter,
+                          index == _messages.length
+                              ? const Padding(padding: EdgeInsets.only(bottom: 14), child: PendingMessage())
+                              : _entry(index),
+                        ),
+                      ),
+                    ),
+            ),
+            Padding(
+              padding: EdgeInsets.only(bottom: width < 800 ? 8 : 20, top: 4),
+              child: _column(
+                gutter,
+                ChatComposer(
+                  controller: _input,
+                  focusNode: _focus,
+                  sending: _sending,
+                  onSend: () => _submit(_input.text, fromComposer: true),
+                ),
               ),
             ),
           ],
         ),
       ),
-
-      /// CLIENTE ACTIVO
-      if (_activeClient != null)
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.assistantBubble,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.business, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                "Cliente activo: $_activeClient",
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-      const Divider(height: 1),
-
-        
-
-        /// CHAT
-        Expanded(
-          child: _messages.length == 1
-              ? Center(
-                child: Padding(padding: const EdgeInsets.only(bottom: 120),
-                child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildMessage(_messages.first),
-                      const SizedBox(height: 16),
-                      _buildQuickActions(),
-                    ],
-                  ),
-                )
-                  
-              )
-          : ListView.builder(
-            controller: _scrollController,
-            itemCount: _messages.length,
-            itemBuilder: (_, index) {
-              return _buildMessage(_messages[index]);
-            },
-          ),
-        ),
-
-       if (_loading)
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const CircleAvatar(
-                  radius: 16,
-                  backgroundColor: AppColors.assistantBubble,
-                  child: Icon(
-                    Icons.smart_toy,
-                    size: 18,
-                    color: AppColors.primary,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.assistantBubble,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: const TypingIndicator(),
-                ),
-              ],
-            ),
-          ),
-
-        /// INPUT
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          color: Colors.white,
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _controller,
-                  decoration: InputDecoration(
-                    hintText: "Pregunta algo sobre tu CRM...",
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                  onSubmitted: (_) => _sendMessage(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: const Icon(Icons.send),
-                color: AppColors.primary,
-                onPressed: _sendMessage,
-              )
-            ],
-          ),
-        )
-      ],
     );
   }
-
 }
 
-class TypingIndicator extends StatefulWidget {
-  const TypingIndicator({super.key});
+class _ChatHeader extends StatelessWidget {
+  final VoidCallback? onNewConversation;
 
-  @override
-  State<TypingIndicator> createState() => _TypingIndicatorState();
-}
-
-class _TypingIndicatorState extends State<TypingIndicator>
-    with SingleTickerProviderStateMixin {
-
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  Widget _dot(double delay) {
-    return FadeTransition(
-      opacity: Tween(begin: 0.2, end: 1.0).animate(
-        CurvedAnimation(
-          parent: _controller,
-          curve: Interval(delay, delay + 0.4, curve: Curves.easeInOut),
-        ),
-      ),
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 2),
-        child: CircleAvatar(
-          radius: 3,
-          backgroundColor: Colors.black54,
-        ),
-      ),
-    );
-  }
+  const _ChatHeader({required this.onNewConversation});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _dot(0.0),
-        _dot(0.2),
-        _dot(0.4),
-      ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(32, 24, 32, 12),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: ChatColors.accentSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.insights_outlined, color: ChatColors.accent),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_title,
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: ChatColors.textPrimary)),
+                SizedBox(height: 2),
+                Text(_subtitle, style: TextStyle(fontSize: 13, color: ChatColors.textSecondary)),
+              ],
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: onNewConversation,
+            icon: const Icon(Icons.add_comment_outlined, size: 18),
+            label: const Text(_newConversationLabel),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: ChatColors.accent,
+              side: const BorderSide(color: ChatColors.border),
+              minimumSize: const Size(44, 44),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
