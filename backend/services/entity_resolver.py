@@ -23,6 +23,10 @@ PRODUCT_THRESHOLD = 85
 AMBIGUITY_MARGIN = 5
 MAX_CANDIDATES = 3
 
+# Un cliente heredado del contacto no se ha dicho: vale el score del
+# contacto con este descuento
+INHERITED_CLIENT_FACTOR = 0.9
+
 # Formas jurídicas que no forman parte del nombre por el que se nombra a un cliente
 _LEGAL_SUFFIXES = (("s", "l", "u"), ("s", "l"), ("s", "a"), ("slu",), ("sl",), ("sa",))
 
@@ -221,6 +225,83 @@ def resolve_contact(contacto_raw: str, client_id: int | None = None):
     """(contact_id | None, score). None también si el nombre es ambiguo."""
     match = match_contact(contacto_raw, client_id)
     return match["id"], match["score"]
+
+
+def _contact_client(contact_id: int):
+    """(client_id, razón social) del contacto."""
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT c.id, c.razon_social
+            FROM contacts ct
+            JOIN clients c ON c.id = ct.client_id
+            WHERE ct.id = ?
+        """, (contact_id,)).fetchone()
+    finally:
+        conn.close()
+    return (row["id"], row["razon_social"]) if row else (None, None)
+
+
+def resolve_client_and_contact(cliente_raw: str | None, contacto_raw: str | None) -> dict:
+    """
+    Resolución contextual cliente↔contacto (F.2), común a /process-audio y
+    a las herramientas del chat:
+    - con cliente resuelto, el contacto se busca solo dentro de ese cliente;
+      si existe pero en otro cliente, el contacto queda en "conflict";
+    - sin cliente dicho, un contacto inequívoco aporta su cliente ("inherited");
+    - un cliente dicho que no existe no se sustituye por el del contacto: "conflict".
+
+    client: {id, raw, status, origin, score, candidates}; `raw` es el nombre
+    dicho o, si se hereda, la razón social del contacto. Los candidatos del
+    cliente solo se exponen si se dijo. contact: {id, status, score, candidates}.
+    """
+    client_match = match_client(cliente_raw)
+    client_id = client_match["id"]
+    client_status = client_match["status"]
+    client_score = client_match["score"]
+    client_origin = "detected" if cliente_raw else None
+
+    contact_match = match_contact(contacto_raw, client_id)
+    contact_status = contact_match["status"]
+    contact_candidates = contact_match["candidates"]
+
+    if client_id and contacto_raw and contact_status == "unresolved":
+        # ¿Existe, pero en otro cliente? Conflicto: no se asocia
+        elsewhere = match_contact(contacto_raw)
+        if elsewhere["status"] != "unresolved":
+            contact_status = "conflict"
+            contact_candidates = elsewhere["candidates"]
+
+    contact_id = contact_match["id"]
+
+    if contact_id and not cliente_raw:
+        # No se dijo cliente y el contacto es inequívoco: se hereda el suyo
+        client_id, cliente_raw = _contact_client(contact_id)
+        if client_id:
+            client_status = "inherited"
+            client_origin = "inherited"
+            client_score = contact_match["score"] * INHERITED_CLIENT_FACTOR
+
+    elif contact_id and client_status == "unresolved":
+        # Se dijo un cliente que no existe y el contacto es de otro: conflicto
+        client_status = "conflict"
+
+    return {
+        "client": {
+            "id": client_id,
+            "raw": cliente_raw,
+            "status": client_status,
+            "origin": client_origin,
+            "score": client_score,
+            "candidates": client_match["candidates"] if client_origin == "detected" else [],
+        },
+        "contact": {
+            "id": contact_id,
+            "status": contact_status,
+            "score": contact_match["score"],
+            "candidates": contact_candidates,
+        },
+    }
 
 
 def find_contact_in_text(text: str, markers=("con", "a", "para")) -> str | None:

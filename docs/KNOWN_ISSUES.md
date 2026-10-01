@@ -32,6 +32,7 @@ en silencio. La confianza solo pondera lo mencionado. Los MINOR pendientes está
 | B4 | `build_context` siempre devuelve un dict: un cliente inexistente llega a OpenAI con `client_name=None` (rama "no encontrado" muerta) | MINOR |
 | B5 | `client_summary` llama a OpenAI y descarta el resultado (coste sin uso) | MINOR |
 | FE-D7-05 | El chat del frontend monta la cabecera a mano: sin token enviaría `Bearer null` | MINOR |
+| — | `activities.datetime_iso` se guarda tal como llega (hay valores con y sin milisegundos, sin validar): las herramientas CRM (G.2) comparan como texto ISO y un formato distinto quedaría fuera de los filtros por fecha. `activities` no tiene estado (pendiente/hecha/cancelada): solo se distingue pasada/próxima | MINOR |
 | — | La rama `client_analysis` es inalcanzable; la memoria no tiene TTL ni reset, es local al proceso y una intención pendiente no caduca | MINOR |
 
 ## H — Voz / actividades V2

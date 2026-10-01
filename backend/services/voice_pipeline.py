@@ -6,7 +6,8 @@ Pipeline de /process-audio (sin FastAPI):
 - análisis del texto, resolución de entidades del CRM, fecha/hora,
   herencia cliente↔contacto y confianza global.
 
-Resolución contextual (F.2):
+Resolución contextual (F.2, en entity_resolver.resolve_client_and_contact,
+compartida con las herramientas del chat):
 - un cliente dicho pero no resuelto no se sustituye por el del contacto;
 - solo se hereda el cliente de un contacto inequívoco si no se dijo ninguno;
 - la ambigüedad y los conflictos se exponen (status, candidates, origen).
@@ -15,7 +16,7 @@ El router se encarga de la subida (UploadFile) y de traducir errores a HTTP.
 """
 from services.date_resolver import resolve_time
 from db import get_connection
-from services.entity_resolver import match_client, match_contact, resolve_activity_type, resolve_products
+from services.entity_resolver import resolve_activity_type, resolve_client_and_contact, resolve_products
 from services.text_analysis import analyze_text
 from services.whisper_service import transcribe_audio  # noqa: F401 (lo usa el router: voice_pipeline.transcribe_audio)
 
@@ -77,30 +78,11 @@ WEIGHT_CONTACT = 0.3
 WEIGHT_PRODUCT = 0.2
 WEIGHT_ACTION = 0.1
 
-# Un cliente heredado del contacto no se ha dicho: vale el score del
-# contacto con este descuento
-INHERITED_CLIENT_FACTOR = 0.9
-
 RESOLVED = ("exact", "fuzzy")
 
 
-def _candidates(match: dict) -> list[dict]:
-    return [{"id": c["id"], "nombre": c["name"], "score": round(c["score"], 1)} for c in match["candidates"]]
-
-
-def _contact_client(contact_id: int):
-    """(client_id, razón social) del contacto."""
-    conn = get_connection()
-    try:
-        row = conn.execute("""
-            SELECT c.id, c.razon_social
-            FROM contacts ct
-            JOIN clients c ON c.id = ct.client_id
-            WHERE ct.id = ?
-        """, (contact_id,)).fetchone()
-    finally:
-        conn.close()
-    return (row["id"], row["razon_social"]) if row else (None, None)
+def _candidates(candidates: list[dict]) -> list[dict]:
+    return [{"id": c["id"], "nombre": c["name"], "score": round(c["score"], 1)} for c in candidates]
 
 
 def _overall_confidence(client_score, contact_score, product_scores, action_score, contact_mentioned):
@@ -164,48 +146,25 @@ def analyze_transcription(text_transcribed: str) -> dict:
     contacto_raw = analysis["contacto"]
 
     # -------------------------------
-    # 2️⃣ Resolver entidades
+    # 2️⃣ Resolver entidades (y 3️⃣ contacto ↔ cliente: entity_resolver)
     # -------------------------------
-    client_match = match_client(cliente_raw)
-    client_id = client_match["id"]
-    client_status = client_match["status"]
-    client_confidence = client_match["score"]
-    client_origin = "detected" if cliente_raw else None
+    resolution = resolve_client_and_contact(cliente_raw, contacto_raw)
+    client, contact = resolution["client"], resolution["contact"]
 
-    # Con cliente resuelto, el contacto se busca solo dentro de ese cliente
-    contact_match = match_contact(contacto_raw, client_id)
-    contact_status = contact_match["status"]
-    contact_candidates = _candidates(contact_match)
+    client_id = client["id"]
+    cliente_raw = client["raw"]  # si se hereda, la razón social del contacto
+    client_status = client["status"]
+    client_confidence = client["score"]
+    client_origin = client["origin"]
+    client_candidates = _candidates(client["candidates"])
 
-    if client_id and contacto_raw and contact_status == "unresolved":
-        # ¿Existe, pero en otro cliente? Conflicto: no se asocia
-        elsewhere = match_contact(contacto_raw)
-        if elsewhere["status"] != "unresolved":
-            contact_status = "conflict"
-            contact_candidates = _candidates(elsewhere)
-
-    contact_id = contact_match["id"]
-    contact_confidence = contact_match["score"]
+    contact_id = contact["id"]
+    contact_status = contact["status"]
+    contact_confidence = contact["score"]
+    contact_candidates = _candidates(contact["candidates"])
 
     activity_type_id = resolve_activity_type(accion_raw)
     products_detected = resolve_products(text_transcribed)
-
-    # -------------------------------
-    # 3️⃣ Contacto ↔ cliente
-    # -------------------------------
-    if contact_id and not cliente_raw:
-        # No se dijo cliente y el contacto es inequívoco: se hereda el suyo
-        client_id, cliente_raw = _contact_client(contact_id)
-        if client_id:
-            client_status = "inherited"
-            client_origin = "inherited"
-            client_confidence = contact_confidence * INHERITED_CLIENT_FACTOR
-
-    elif contact_id and client_status == "unresolved":
-        # Se dijo un cliente que no existe y el contacto es de otro: conflicto
-        client_status = "conflict"
-
-    client_candidates = _candidates(client_match) if client_origin == "detected" else []
 
     # -------------------------------
     # 4️⃣ Confidence global
