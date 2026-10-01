@@ -1,8 +1,8 @@
 # Deuda técnica conocida
 
 Backlog de problemas **abiertos** detectados durante la Fase D (tests + CI). Los ya
-resueltos no aparecen: B1, B11 y B14 (Fase D), B3, B6, B7, B10, B15 y B16 (Fase E) y B12, B13,
-F-I2, F-I5 y F-I6 (Fase F) y B18, B19 y B20 (Fase G.1).
+resueltos no aparecen: B1, B11 y B14 (Fase D), B3, B6, B7, B10, B15 y B16 (Fase E), B12, B13,
+F-I2, F-I5 y F-I6 (Fase F), B18, B19 y B20 (Fase G.1) y B17, B5 y FE-D7-05 (Fase G.3).
 
 Donde existe, el test que describe el comportamiento deseado está marcado como `xfail`
 (backend, `strict=True`) o `skip` (frontend); al corregir el bug, ese test debe pasar a
@@ -26,14 +26,22 @@ en silencio. La confianza solo pondera lo mencionado. Los MINOR pendientes está
 
 ## G — Chat IA V2
 
+G.3 sustituyó el chat por ramas (router de intención, detector por palabras, memoria en
+diccionarios del proceso e intención pendiente) por un orquestador de solo lectura con
+conversaciones persistentes (`chat_conversations` / `chat_messages`), herramientas en lista
+blanca y estado activo derivado de los resultados de las herramientas. Eso cierra B17
+(la intención pendiente de `client_summary` repetía la pregunta), B5 (resumen de OpenAI
+descartado) y la memoria sin TTL ni reset, local al proceso. `POST /prepare-meeting` se
+eliminó (el chat usa `prepare_meeting_context`). FE-D7-05 (`Bearer null`) se corrigió.
+
 | ID | Resumen | Severidad |
 |---|---|---|
-| B17 | La intención pendiente de `client_summary` nunca se resuelve y repite la pregunta (1 `xfail`) | IMPORTANT |
-| B4 | `build_context` siempre devuelve un dict: un cliente inexistente llega a OpenAI con `client_name=None` (rama "no encontrado" muerta) | MINOR |
-| B5 | `client_summary` llama a OpenAI y descarta el resultado (coste sin uso) | MINOR |
-| FE-D7-05 | El chat del frontend monta la cabecera a mano: sin token enviaría `Bearer null` | MINOR |
+| B4 | `build_context` (solo `GET /client-context`) siempre devuelve un dict: un cliente inexistente responde 200 con `client_name=None` en vez de 404 | MINOR |
 | — | `activities.datetime_iso` se guarda tal como llega (hay valores con y sin milisegundos, sin validar): las herramientas CRM (G.2) comparan como texto ISO y un formato distinto quedaría fuera de los filtros por fecha. `activities` no tiene estado (pendiente/hecha/cancelada): solo se distingue pasada/próxima | MINOR |
-| — | La rama `client_analysis` es inalcanzable; la memoria no tiene TTL ni reset, es local al proceso y una intención pendiente no caduca | MINOR |
+| — | Chat: el presupuesto de unos 30 s por petición no es un corte exacto de reloj. Se comprueba antes de cada llamada a OpenAI y el timeout de cada una (conexión + lectura) no supera lo que queda, pero el de lectura de httpx limita la espera entre bytes, no la respuesta completa; la resolución DNS y las esperas por bloqueo de SQLite tampoco cuentan | MINOR |
+| — | Chat: sin límite de peticiones ni de coste por usuario; los mensajes de una conversación no caducan (solo el contexto enviado al modelo está acotado); dos peticiones simultáneas a la misma conversación guardan el estado de la última | MINOR |
+| — | Chat: la compatibilidad de los esquemas estrictos de las herramientas con la API real de OpenAI solo se valida con la prueba manual (los tests usan un modelo simulado). La búsqueda semántica siempre devuelve los más parecidos aunque la similitud sea baja | MINOR |
+| — | ChatScreen (rediseño en G.5): las respuestas son Markdown; las tarjetas antiguas (facturación, búsqueda, resumen) y los botones de acciones sugeridas quedan sin uso; el `conversation_id` solo vive en memoria y no hay carga de historial | MINOR |
 
 ## H — Voz / actividades V2
 

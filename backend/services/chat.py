@@ -1,508 +1,64 @@
 """
-Chat IA (/chat) y preparación de reuniones (/prepare-meeting).
+Chat IA (/chat), G.3: asistente CRM de solo lectura con conversación persistente.
 
-Código trasladado tal cual desde main.py (E.3): mismas ramas, mensajes,
-memoria por user_id (chat_memory) y llamadas a OpenAI. Su limpieza queda
-para la fase G.
+Por petición:
+  1. chat_store.load_conversation: conversación propia + estado revalidado +
+     historial acotado (lee y cierra la BD);
+  2. chat_orchestrator.run: modelo ↔ herramientas del registro, SIN conexión
+     abierta mientras se espera a OpenAI;
+  3. chat_tools.derive_state: nuevo cliente/contacto activo a partir de la
+     traza de herramientas (nunca del texto del modelo);
+  4. chat_store.save_turn: turno + estado en una transacción corta.
 """
-import re
+from datetime import datetime
 
 from schemas.chat import ChatResponse
-from services.ai_router import analyze_user_message
-from services.chat_memory import set_last_client, get_last_client, set_pending_intent, get_pending_intent, clear_pending_intent
-from services.context import build_context, get_client_billing_summary
-from services.entity_resolver import resolve_client
-from services.insights import detect_opportunities, get_crm_insights
-from services.intent_service import detect_intent
-from services.openai_client import AIServiceError
-from services.openai_service import generate_meeting_summary, generate_client_summary, generate_account_analysis
-from services.semantic_search_service import semantic_search_activities
+from services import chat_orchestrator, chat_store, chat_tools
+from services.chat_store import ChatState
 
-# Mensajes al usuario cuando falla la IA: nunca el texto de la excepción
-MEETING_SUMMARY_ERROR = (
-    "Error generando resumen: el asistente de IA no está disponible. Inténtalo de nuevo en unos minutos."
-)
-AI_UNAVAILABLE_MESSAGE = "El asistente de IA no está disponible en este momento. Inténtalo de nuevo en unos minutos."
 EMPTY_MESSAGE = "Escribe un mensaje para que pueda ayudarte."
+AI_UNAVAILABLE_MESSAGE = "El asistente de IA no está disponible en este momento. Inténtalo de nuevo en unos minutos."
+BUDGET_EXCEEDED_MESSAGE = (
+    "No he podido completar la consulta a tiempo. Inténtalo de nuevo o haz una pregunta más concreta."
+)
+_ERROR_MESSAGES = {
+    chat_orchestrator.AI_UNAVAILABLE: AI_UNAVAILABLE_MESSAGE,
+    chat_orchestrator.BUDGET_EXCEEDED: BUDGET_EXCEEDED_MESSAGE,
+}
 
 
-def _ai_unavailable_response() -> ChatResponse:
-    return ChatResponse(type="error", content=AI_UNAVAILABLE_MESSAGE)
+def current_time() -> datetime:
+    """Instante de la petición: el mismo para el contexto del modelo y todas las herramientas."""
+    return datetime.now().replace(microsecond=0)
 
 
-def detect_client_from_message(message: str):
-
-    client_id, confidence = resolve_client(message)
-
-    if client_id and confidence >= 70:
-        return client_id
-
-    return None
+def _context_metadata(state: ChatState) -> dict:
+    return {"active_client": state.client, "active_contact": state.contact}
 
 
-def prepare_meeting_by_client_id(client_id: int, salesperson_id: int):
-
-    context_data = build_context(client_id, salesperson_id)
-
-    if not context_data:
-        return None, "Cliente no encontrado"
-
-    try:
-        summary = generate_meeting_summary(context_data)
-    except AIServiceError:
-        return None, MEETING_SUMMARY_ERROR
-
-    return summary, None
-
-
-def prepare_meeting(client_id: int, salesperson_id: int) -> dict:
-
-    context_data = build_context(client_id, salesperson_id)
-
-    if not context_data:
-        return {"error": "Cliente no encontrado"}
-
-    try:
-        summary = generate_meeting_summary(context_data)
-    except AIServiceError:
-        return {"error": MEETING_SUMMARY_ERROR}
-
-    return {
-        "client_id": client_id,
-        "meeting_preparation": summary
-    }
-
-
-def handle_chat_message(message: str, user_id: int) -> ChatResponse:
+def handle_chat_message(message: str, salesperson_id: int, conversation_id: int | None = None) -> ChatResponse:
+    """Lanza chat_store.ConversationNotFound si conversation_id no es una conversación del comercial."""
     if not message.strip():
         return ChatResponse(type="error", content=EMPTY_MESSAGE)
 
-    user_message = message.lower()
+    conversation = chat_store.load_conversation(conversation_id, salesperson_id)
+    previous = conversation.state
 
-    pending = get_pending_intent(user_id)
+    result = chat_orchestrator.run(message, conversation.history, previous, salesperson_id, now=current_time())
 
-    # 🔥 CASO 1 — hay intención pendiente → NO usar IA
-    if pending:
-        if pending["waiting_for"] == "client":
-
-            client_id, confidence = resolve_client(message)
-
-            if client_id:
-                set_last_client(user_id, client_id)
-
-                # 🔥 usar intent original
-                intent = pending["intent"]
-
-                # limpiar estado
-                clear_pending_intent(user_id)
-
-                # 👇 IMPORTANTE: NO hay ai_client_name aquí
-                ai_client_name = None
-
-            else:
-                return ChatResponse(
-                    type="error",
-                    content="No he podido identificar el cliente. ¿Puedes especificarlo mejor?"
-                )
-
-    # 🔥 CASO 2 — NO hay pending → usar IA
+    if result.error:
+        # Sin respuesta fiable el estado no cambia (aunque alguna herramienta fuera bien)
+        response_type, content = "error", _ERROR_MESSAGES[result.error]
+        client_id, contact_id = previous.client_id, previous.contact_id
     else:
+        response_type, content = "answer", result.answer
+        previous_contact = (previous.contact["id"], previous.contact["client_id"]) if previous.contact else None
+        client_id, contact_id = chat_tools.derive_state(previous.client_id, previous_contact, result.outcomes)
 
-        analysis = analyze_user_message(message)
+    metadata = {"tools": [outcome.summary() for outcome in result.outcomes], "error": result.error}
+    saved_id, state = chat_store.save_turn(conversation, salesperson_id, message, content, metadata,
+                                           client_id, contact_id)
 
-        intent = analysis.get("intent")
-        ai_client_name = analysis.get("client_name")
-        confidence = analysis.get("confidence", 0)
+    return ChatResponse(type=response_type, content=content, metadata=_context_metadata(state),
+                        conversation_id=saved_id)
 
-        # fallback
-        if not intent or confidence < 60:
-            intent = detect_intent(message)
-
-        # normalización
-        intent_mapping = {
-            "client_analysis": "client_summary"
-        }
-
-        if intent in intent_mapping:
-            intent = intent_mapping[intent]
-
-        # cliente desde IA
-        if ai_client_name:
-            client_id_ai, conf_ai = resolve_client(ai_client_name)
-
-            if client_id_ai:
-                set_last_client(user_id, client_id_ai)
-
-        # fallback cliente antiguo
-        else:
-            auto_client_id = detect_client_from_message(message)
-
-            if auto_client_id:
-                set_last_client(user_id, auto_client_id)
-
-    if intent == "prepare_meeting":
-
-        # 🔥 EXTRAER SOLO EL CLIENTE
-        match = re.search(r"con (.+)", message, re.IGNORECASE)
-
-        if match:
-            client_text = match.group(1).strip()
-        else:
-            client_text = message
-
-        client_id, confidence = resolve_client(client_text)
-
-        if client_id:
-            set_last_client(user_id, client_id)
-        else:
-            client_id = get_last_client(user_id)
-
-        if not client_id:
-
-            set_pending_intent(
-                user_id,
-                intent="prepare_meeting",
-                waiting_for="client"
-            )
-
-            return ChatResponse(
-                type="prepare_meeting",
-                content="¿Para qué cliente quieres preparar la reunión?"
-            )
-
-        summary, error = prepare_meeting_by_client_id(client_id, user_id)
-
-        if error:
-            return ChatResponse(
-                type="prepare_meeting",
-                content=error
-            )
-
-        return ChatResponse(
-            type="prepare_meeting",
-            content=summary,
-            metadata={
-                "client_id": client_id,
-                "suggested_actions": [
-                    "client_summary",
-                    "billing_query",
-                    "semantic_search"
-                ]
-             }
-        )
-
-    # --- FACTURACIÓN ---
-    if intent == "billing_query":
-
-        # Intentamos extraer nombre después de "de" o "tiene"
-        match = re.search(r"(de|tiene)\s+(.+)", message, re.IGNORECASE)
-
-        if match:
-            client_text = match.group(2).strip()
-        else:
-            # Si no hay patrón claro, usamos todo el mensaje
-            client_text = message
-
-        client_id, confidence = resolve_client(client_text)
-
-        if client_id:
-            set_last_client(user_id, client_id)
-
-        if not client_id:
-
-            client_id = get_last_client(user_id)
-
-        if not client_id:
-
-            set_pending_intent(
-                user_id,
-                intent="billing_query",
-                waiting_for="client"
-            )
-
-            return ChatResponse(
-                type="billing_query",
-                content="¿De qué cliente quieres consultar la facturación?"
-            )
-
-        billing = get_client_billing_summary(client_id)
-
-        return ChatResponse(
-            type="billing_summary",
-            content="Resumen de facturación",
-            metadata={
-                "client_id": client_id,
-                "billing": billing,
-                "suggested_actions": [
-                    "client_summary",
-                    "prepare_meeting",
-                    "semantic_search"
-                ]
-            }
-        )
-
-
-    # --- RESUMEN CLIENTE ---
-    if intent == "client_summary":
-
-        match = re.search(r"cliente (.+)", message, re.IGNORECASE)
-
-        if match:
-            client_text = match.group(1).strip()
-
-        if not match:
-
-            set_pending_intent(
-                user_id,
-                intent="client_summary",
-                waiting_for="client"
-            )
-
-            return ChatResponse(
-                type="client_summary",
-                content="¿De qué cliente quieres el resumen?"
-            )
-
-        client_id, confidence = resolve_client(client_text)
-
-        if client_id:
-            set_last_client(user_id, client_id)
-
-        if not client_id:
-
-            client_id = get_last_client(user_id)
-
-        if not client_id:
-
-            set_pending_intent(
-                user_id,
-                intent="client_summary",
-                waiting_for="client"
-            )
-
-            return ChatResponse(
-                type="client_summary",
-                content=f"No he podido identificar el cliente '{client_text}'. ¿Puedes especificarlo mejor?"
-            )
-
-        context = build_context(client_id, user_id)
-
-
-        try:
-            summary_text = generate_client_summary(context)
-        except AIServiceError:
-            return _ai_unavailable_response()
-
-        short_status = summary_text.split("\n")[0]
-
-        # 🔹 separar oportunidades (ya lo tienes)
-        opportunities = detect_opportunities(context)
-
-        return ChatResponse(
-            type="client_summary",
-            content="Resumen cliente",
-            metadata={
-                "client_id": client_id,
-                "client_name": context["client_name"],
-
-                # 🔥 AQUÍ ESTÁ LA CLAVE
-                "summary": {
-                    "status": (
-                        "Cliente activo"
-                        if context["total_activities"] > 3
-                        else "Cliente con baja actividad"
-                    ),
-                    "activity": f"{context['total_activities']} actividades registradas",
-                    "opportunities": opportunities or []
-                },
-
-                "suggested_actions": [
-                    "billing_query",
-                    "prepare_meeting",
-                    "semantic_search"
-                ]
-            }
-        )
-
-
-    # --- CONTEXTO CLIENTE ---
-    if "contexto" in user_message:
-        return ChatResponse(
-            type="client_context",
-            content="Buscando contexto del cliente..."
-        )
-
-    # --- BÚSQUEDA SEMÁNTICA ---
-    if intent == "semantic_search":
-
-        # Intentamos detectar cliente en el mensaje completo
-        client_id, confidence = resolve_client(message)
-
-        try:
-            if client_id:
-                results = semantic_search_activities(message, user_id, client_id=client_id)
-            else:
-                results = semantic_search_activities(message, user_id)
-        except AIServiceError:
-            return _ai_unavailable_response()
-
-
-
-        return ChatResponse(
-            type="semantic_search",
-            content=f"Resultados encontrados",
-            metadata={
-                "results": results,
-                "suggested_actions": [
-                    "client_summary",
-                    "billing_query",
-                    "prepare_meeting"
-                ]
-            }
-        )
-
-
-    # --- CRM INSIGHTS ---
-    if intent == "crm_insights":
-
-        insights = get_crm_insights(user_id)
-        activity_insights = insights.get("activity_insights", [])
-        activity_text = "\n".join(f"- {a}" for a in activity_insights)
-
-
-        top_clients = "\n".join(
-            f"- {c['razon_social']}"
-            for c in insights["top_clients"]
-        )
-
-        inactive_clients = "\n".join(
-            f"- {c['razon_social']}"
-            for c in insights["inactive_clients"]
-        )
-
-        content = f"""
-    📊 Insights del CRM
-
-    Clientes con mayor facturación:
-    {top_clients}
-
-    Clientes sin actividad reciente:
-    {inactive_clients}
-
-    Actividad comercial detectada:
-    {activity_text}
-    """
-
-        return ChatResponse(
-            type="crm_insights",
-            content=content,
-            metadata={
-                "suggested_actions": [
-                    "client_summary",
-                    "billing_query",
-                    "semantic_search"
-                ]
-            }
-        )
-
-
-    # --- ANÁLISIS COMPLETO DE CLIENTE ---
-    if intent == "client_analysis":
-
-        client_id, confidence = resolve_client(message)
-
-        if client_id:
-            set_last_client(user_id, client_id)
-
-        if not client_id:
-            client_id = get_last_client(user_id)
-        if not client_id:
-
-            set_pending_intent(
-                user_id,
-                intent="client_analysis",
-                waiting_for="client"
-            )
-
-            return ChatResponse(
-                type="client_analysis",
-                content="¿Qué cliente quieres analizar?"
-            )
-
-        context = build_context(client_id, user_id)
-
-        opportunities = detect_opportunities(context)
-
-        try:
-            analysis = generate_account_analysis(context)
-        except AIServiceError:
-            return _ai_unavailable_response()
-
-        if opportunities:
-
-            analysis += "\n\n📈 Insights automáticos detectados:\n"
-
-            for o in opportunities:
-                analysis += f"- {o}\n"
-
-        return ChatResponse(
-            type="client_analysis",
-            content=analysis,
-            metadata={
-                "client_id": client_id,
-                "suggested_actions": [
-                    "billing_query",
-                    "prepare_meeting",
-                    "semantic_search"
-                ]
-        }
-        )
-
-    # --- OPORTUNIDADES CLIENTE ---
-    if intent == "client_opportunities":
-
-        client_id, confidence = resolve_client(message)
-
-        if client_id:
-            set_last_client(user_id, client_id)
-
-        if not client_id:
-            client_id = get_last_client(user_id)
-
-        if not client_id:
-
-            set_pending_intent(
-                user_id,
-                intent="client_opportunities",
-                waiting_for="client"
-            )
-
-            return ChatResponse(
-                type="client_opportunities",
-                content="¿De qué cliente quieres ver oportunidades?"
-            )
-        context = build_context(client_id, user_id)
-
-        opportunities = detect_opportunities(context)
-
-        if not opportunities:
-            content = "No se han detectado oportunidades claras en este cliente."
-        else:
-            content = "📈 Oportunidades detectadas:\n\n"
-            for o in opportunities:
-                content += f"- {o}\n"
-
-        return ChatResponse(
-            type="client_opportunities",
-            content=content,
-            metadata={
-                "client_id": client_id
-            }
-        )
-
-
-    # --- DEFAULT ---
-    return ChatResponse(
-        type="error",
-        content=f"No he entendido la petición. Prueba de nuevo."
-    )

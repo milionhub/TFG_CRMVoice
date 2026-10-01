@@ -1,671 +1,732 @@
 """
-D.6 — Chat IA (POST /chat y POST /prepare-meeting): memoria, aislamiento
-entre comerciales, contexto CRM, contrato y errores de OpenAI.
+G.3 — POST /chat: conversación persistente y propia, contexto acotado,
+estado activo de confianza, aislamiento entre comerciales, errores de
+OpenAI y ninguna escritura en los datos del CRM.
 
-Frontera sustituida: el atributo `client` (cliente OpenAI) de ai_router,
-openai_service y semantic_search_service. Los prompts los construye el
-código real (ai_router.analyze_user_message, openai_service.generate_*,
-services.context.build_context, ...); el doble solo registra lo que se
-enviaría a OpenAI y devuelve una respuesta controlada.
-
-Memoria real (chat_memory): dos diccionarios globales de proceso, indexados
-por user_id (el `sub` del JWT):
-  - _last_client_by_user:   {user_id: client_id}
-  - _pending_intent_by_user: {user_id: {"intent", "waiting_for": "client"}}
-NO se guarda el texto de los mensajes ni historial: ningún prompt incluye
-mensajes anteriores. No hay endpoint de reset ni límite/TTL (una entrada
-por usuario como máximo en cada diccionario).
+El modelo es un ScriptedModel (conftest): decide qué herramientas pide y
+qué responde, de forma determinista. Lo que se prueba son las fronteras del
+backend (propiedad, validación, inyección del comercial, ids conocidos,
+estado, persistencia), no la calidad del modelo.
 """
 import json
-from datetime import date
-from types import SimpleNamespace
 
+import httpx
+import openai
 import pytest
 
+import db
 import main
+from conftest import CHAT_A_ONLY, CHAT_B_ONLY, CHAT_NOW
 from schemas.chat import CHAT_MESSAGE_MAX_LENGTH
-from services import ai_router, chat_memory, openai_service, semantic_search_service
 from services import chat as chat_service
+from services import chat_orchestrator, crm_tools
 
+NOT_FOUND = {"detail": "Conversación no encontrada"}
+EMPTY_STATE = {"active_client": None, "active_contact": None}
 SECRET_A = "SECRET_A_ONLY_7F3C"
-MESSAGE_B = "MESSAGE_B_ONLY_91D2"
-CRM_A = "CRM_A_ONLY_4C81"
-CRM_B = "CRM_B_ONLY_8A22"
+_REQUEST = httpx.Request("POST", "https://api.openai.invalid/v1/chat/completions")
+
+CRM_TABLES = ("client_groups", "clients", "contacts", "products", "product_aliases", "activity_types",
+              "salespeople", "activities", "activity_products", "activity_embeddings", "invoices",
+              "invoice_lines")
 
 
-# =====================================================================
-# Doble de OpenAI
-# =====================================================================
-
-class FakeOpenAI:
-    """
-    Registra todas las llamadas (chat y embeddings) de los tres módulos.
-    `router` decide la respuesta del router de intención a partir del mensaje
-    del usuario; `summary` es el texto de los generadores de resúmenes.
-    """
-
-    def __init__(self):
-        self.calls = []  # [{"module", "kind", "kwargs"}]
-        self.router = lambda message: {"intent": "general", "client_name": None, "confidence": 95}
-        self.router_raw = None       # texto crudo alternativo para el router
-        self.summary = "Resumen generado por el modelo (simulado)"
-        self.errors = {}             # {"router"|"summary"|"embedding": Exception}
-        self.embedding = [1.0, 0.0, 0.0]
-
-    def client_for(self, module):
-        fake = self
-
-        class _Completions:
-            def create(self, **kwargs):
-                return fake._chat(module, kwargs)
-
-        class _Embeddings:
-            def create(self, **kwargs):
-                return fake._embed(module, kwargs)
-
-        return SimpleNamespace(chat=SimpleNamespace(completions=_Completions()), embeddings=_Embeddings())
-
-    def _chat(self, module, kwargs):
-        kind = "router" if module == "ai_router" else "summary"
-        self.calls.append({"module": module, "kind": kind, "kwargs": kwargs})
-        if kind in self.errors:
-            raise self.errors[kind]
-        if kind == "router":
-            content = self.router_raw if self.router_raw is not None else json.dumps(
-                self.router(_router_message(kwargs)))
-        else:
-            content = self.summary
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
-
-    def _embed(self, module, kwargs):
-        self.calls.append({"module": module, "kind": "embedding", "kwargs": kwargs})
-        if "embedding" in self.errors:
-            raise self.errors["embedding"]
-        return SimpleNamespace(data=[SimpleNamespace(embedding=list(self.embedding))])
-
-    # --- inspección ---
-    def sent_text(self, calls=None):
-        """Todo el texto enviado a OpenAI (mensajes de chat e inputs de embeddings)."""
-        parts = []
-        for call in (self.calls if calls is None else calls):
-            kw = call["kwargs"]
-            parts.extend(m["content"] for m in kw.get("messages", []))
-            if "input" in kw:
-                parts.append(str(kw["input"]))
-        return "\n".join(parts)
-
-    def of_kind(self, kind):
-        return [c for c in self.calls if c["kind"] == kind]
+@pytest.fixture(autouse=True)
+def fixed_now(monkeypatch):
+    monkeypatch.setattr(chat_service, "current_time", lambda: CHAT_NOW)
 
 
-def _router_message(kwargs):
-    prompt = kwargs["messages"][-1]["content"]
-    return prompt.split("Mensaje:", 1)[1].strip().strip('"')
-
-
-@pytest.fixture
-def openai_fake(monkeypatch):
-    fake = FakeOpenAI()
-    monkeypatch.setattr(ai_router, "client", fake.client_for("ai_router"))
-    monkeypatch.setattr(openai_service, "client", fake.client_for("openai_service"))
-    monkeypatch.setattr(semantic_search_service, "client", fake.client_for("semantic_search_service"))
-    return fake
-
-
-def route(intent, client_name=None, confidence=95):
-    return {"intent": intent, "client_name": client_name, "confidence": confidence}
-
-
-def chat(client, user, message):
-    response = client.post("/chat", json={"message": message}, headers=user["headers"])
-    assert response.status_code == 200, response.text
+def post(client, user, message, conversation_id=None, *, expect=200):
+    body = {"message": message}
+    if conversation_id is not None:
+        body["conversation_id"] = conversation_id
+    response = client.post("/chat", json=body, headers=user["headers"])
+    assert response.status_code == expect, response.text
     return response.json()
 
 
-def during(fake, action):
-    """Ejecuta `action` y devuelve solo las llamadas a OpenAI que produjo."""
-    start = len(fake.calls)
-    result = action()
-    return result, fake.calls[start:]
+def last_tool(request):
+    """Resultado de la última herramienta enviada en una petición al modelo."""
+    return json.loads([m for m in request["messages"] if m["role"] == "tool"][-1]["content"])
 
 
-# =====================================================================
-# Datos CRM: catálogo global + actividades privadas marcadas
-# =====================================================================
+def resolve_then(tool, **find):
+    """Pasos: find_entities(**find) y después `tool` con el id que haya resuelto el backend."""
+    def next_step(request):
+        found = last_tool(request)
+        if tool == "get_contact":
+            return [(tool, {"contact_id": found["contact"]["id"]})]
+        return [(tool, {"client_id": found["client"]["id"]})]
 
-@pytest.fixture
-def crm(factory, user_a, user_b):
-    nebula = factory.client("Nebula Logística S.L.", alias="Nebula")
-    orion = factory.client("Orion Consultoría S.L.", alias="Orion")
-    reunion = factory.activity_type_id("Concertar reunión")
-    today = date.today().isoformat()
+    return [("find_entities", {"client_name": None, "contact_name": None, **find})], next_step
 
-    a_ids = [factory.activity(user_a["id"], nebula, activity_type_id=reunion,
-                              datetime_iso=f"{today}T1{i}:00:00",
-                              comentario=f"{CRM_A} visita {i} a Nebula",
-                              embedding=[1.0, 0.0, 0.0]) for i in range(5)]
-    b_ids = [factory.activity(user_b["id"], nebula, activity_type_id=reunion,
-                              datetime_iso=f"{today}T0{i}:00:00",
-                              comentario=f"{CRM_B} llamada {i} a Nebula",
-                              embedding=[1.0, 0.0, 0.0]) for i in range(2)]
-    b_ids += [factory.activity(user_b["id"], orion, activity_type_id=reunion,
-                               datetime_iso=f"{today}T0{i}:30:00",
-                               comentario=f"{CRM_B} Orion {i}",
-                               embedding=[0.9, 0.1, 0.0]) for i in range(5)]
 
-    # Facturación global de Nebula (sin propietario por diseño)
-    import db
+def crm_dump():
     conn = db.get_connection()
-    product = conn.execute("INSERT INTO products (nombre, precio) VALUES ('Licencia Chat', 100)").lastrowid
-    invoice = conn.execute("INSERT INTO invoices (fecha, client_id) VALUES ('2026-06-01', ?)", (nebula,)).lastrowid
-    conn.execute("INSERT INTO invoice_lines (invoice_id, product_id, cantidad, precio, total) VALUES (?, ?, 3, 100, 300)",
-                 (invoice, product))
-    conn.commit()
-    conn.close()
-    return SimpleNamespace(nebula=nebula, orion=orion, a_ids=a_ids, b_ids=b_ids)
+    try:
+        return {t: [tuple(r) for r in conn.execute(f"SELECT * FROM {t} ORDER BY rowid")] for t in CRM_TABLES}
+    finally:
+        conn.close()
+
+
+def conversation_row(dbq, conversation_id):
+    return dbq.one("SELECT salesperson_id, active_client_id, active_contact_id FROM chat_conversations WHERE id = ?",
+                   (conversation_id,))
+
+
+def rivera_ref(chat_crm):
+    return {"id": chat_crm.rivera, "name": "Rivera Industrial S.L."}
 
 
 # =====================================================================
-# D.6.1 AUTH (sin token / token inválido: ver test_auth.PROTECTED_ENDPOINTS)
+# Autenticación
 # =====================================================================
 
-def test_token_valido_entra_en_el_flujo_y_llega_al_router(client, user_a, openai_fake):
-    body = chat(client, user_a, "hola")
-
-    assert set(body) == {"type", "content", "metadata"}
-    assert len(openai_fake.of_kind("router")) == 1
-
-
-def test_sin_token_no_se_llama_a_openai(client, openai_fake):
-    assert client.post("/chat", json={"message": SECRET_A}).status_code == 401
-    assert openai_fake.calls == []
+def test_sin_token_no_llega_al_modelo(client, model):
+    response = client.post("/chat", json={"message": "hola"})
+    assert response.status_code in (401, 403)
+    assert model.requests == []
 
 
-def test_token_de_usuario_inexistente_401_sin_llamar_a_openai(client, openai_fake, jwt_factory):
-    """Un JWT bien firmado de un comercial que ya no existe no entra en el chat."""
-    token = jwt_factory(987654, "borrado@test.local")
-
+def test_token_de_usuario_inexistente_401_sin_llamar_al_modelo(client, model, jwt_factory):
+    token = jwt_factory(99999, "fantasma@test.local")
     response = client.post("/chat", json={"message": "hola"}, headers={"Authorization": f"Bearer {token}"})
-
-    assert response.status_code == 401
-    assert openai_fake.calls == []
-    assert chat_memory._last_client_by_user == {} and chat_memory._pending_intent_by_user == {}
+    assert response.status_code == 401 and model.requests == []
 
 
 # =====================================================================
-# D.6.2 MEMORIA DE CHAT (P0)
+# Contrato y compatibilidad
 # =====================================================================
 
-def test_memoria_no_guarda_texto_de_mensajes_solo_cliente_e_intencion(client, user_a, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query")
-    chat(client, user_a, f"{SECRET_A} cuanto nos factura")
+def test_primer_mensaje_crea_conversacion(client, user_a, model, dbq):
+    model.script("Hola, ¿en qué te ayudo?")
 
-    memory_dump = repr(chat_memory._last_client_by_user) + repr(chat_memory._pending_intent_by_user)
-    assert SECRET_A not in memory_dump
-    assert chat_memory._pending_intent_by_user == {
-        user_a["id"]: {"intent": "billing_query", "waiting_for": "client"},
-    }
+    body = post(client, user_a, "hola")
 
-
-def test_el_prompt_del_router_solo_contiene_el_mensaje_actual(client, user_a, openai_fake):
-    chat(client, user_a, f"primero {SECRET_A}")
-    _, calls = during(openai_fake, lambda: chat(client, user_a, "segundo mensaje"))
-
-    sent = openai_fake.sent_text(calls)
-    assert "segundo mensaje" in sent
-    assert SECRET_A not in sent  # sin historial: ni siquiera el propio usuario lo recibe
+    assert body == {"type": "answer", "content": "Hola, ¿en qué te ayudo?", "metadata": EMPTY_STATE,
+                    "conversation_id": body["conversation_id"]}
+    assert conversation_row(dbq, body["conversation_id"]) == {
+        "salesperson_id": user_a["id"], "active_client_id": None, "active_contact_id": None}
+    messages = dbq.all("SELECT role, content FROM chat_messages ORDER BY id")
+    assert messages == [{"role": "user", "content": "hola"},
+                        {"role": "assistant", "content": "Hola, ¿en qué te ayudo?"}]
 
 
-def test_secreto_de_a_nunca_llega_al_prompt_de_b(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
-    _, calls_a = during(openai_fake, lambda: chat(client, user_a, f"prepara reunión con Nebula {SECRET_A}"))
-    _, calls_b = during(openai_fake, lambda: chat(client, user_b, f"prepara reunión con Nebula {MESSAGE_B}"))
+def test_continuar_conversacion_envia_el_historial(client, user_a, model, dbq):
+    model.script("Primera respuesta", "Segunda respuesta")
+    first = post(client, user_a, "primera pregunta")
 
-    assert SECRET_A in openai_fake.sent_text(calls_a)
-    assert MESSAGE_B in openai_fake.sent_text(calls_b)
-    assert SECRET_A not in openai_fake.sent_text(calls_b)
-    assert MESSAGE_B not in openai_fake.sent_text(calls_a)
+    second = post(client, user_a, "segunda pregunta", first["conversation_id"])
 
-
-def test_a_a_la_intencion_pendiente_propia_se_conserva(client, user_a, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query")
-    first = chat(client, user_a, "cuánto factura")
-    assert first == {"type": "billing_query", "content": "¿De qué cliente quieres consultar la facturación?",
-                     "metadata": None}
-
-    second, calls = during(openai_fake, lambda: chat(client, user_a, "Nebula"))
-    assert second["type"] == "billing_summary"
-    assert second["metadata"]["client_id"] == crm.nebula
-    assert calls == []  # la respuesta pendiente se resuelve sin pasar por la IA
-    assert chat_memory.get_pending_intent(user_a["id"]) is None
-    assert chat_memory.get_last_client(user_a["id"]) == crm.nebula
+    assert second["conversation_id"] == first["conversation_id"]
+    history = [(m["role"], m["content"]) for m in model.requests[1]["messages"][2:]]
+    assert history == [("user", "primera pregunta"), ("assistant", "Primera respuesta"),
+                       ("user", "segunda pregunta")]
+    assert dbq.one("SELECT COUNT(*) AS n FROM chat_messages")["n"] == 4
 
 
-def test_b_no_consume_la_intencion_pendiente_de_a(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query")
-    chat(client, user_a, "cuánto factura")
+def test_sin_conversation_id_cada_mensaje_es_una_conversacion_nueva(client, user_a, model):
+    model.script("uno", "dos")
+    first, second = post(client, user_a, "uno"), post(client, user_a, "dos")
 
-    openai_fake.router = lambda m: route("general")
-    _, calls_b = during(openai_fake, lambda: chat(client, user_b, "Nebula"))
-
-    assert len([c for c in calls_b if c["kind"] == "router"]) == 1  # B pasa por la IA: no tenía pendiente
-    assert chat_memory.get_pending_intent(user_a["id"]) == {"intent": "billing_query", "waiting_for": "client"}
-    assert chat_memory.get_pending_intent(user_b["id"]) is None
+    assert first["conversation_id"] != second["conversation_id"]
+    assert [m["role"] for m in model.requests[1]["messages"]] == ["system", "system", "user"]
 
 
-def test_el_ultimo_cliente_de_a_no_se_usa_para_b(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query", "Nebula")
-    chat(client, user_a, "facturación de Nebula")
-    assert chat_memory.get_last_client(user_a["id"]) == crm.nebula
+def test_el_historial_esta_acotado(client, user_a, model):
+    conversation_id = None
+    for i in range(12):
+        model.script(f"respuesta {i}")
+        conversation_id = post(client, user_a, f"pregunta {i}", conversation_id)["conversation_id"]
 
-    openai_fake.router = lambda m: route("billing_query")
-    body_b = chat(client, user_b, "y la facturación?")
-
-    assert body_b["type"] == "billing_query"  # B tiene que decir el cliente
-    assert body_b["metadata"] is None
-    assert chat_memory.get_last_client(user_b["id"]) is None
-
-
-def test_intercalado_a1_b1_a2_b2(client, user_a, user_b, crm, openai_fake):
-    replies = {"A1": route("billing_query"), "B1": route("prepare_meeting")}
-    openai_fake.router = lambda m: replies[m.split()[0]]
-
-    a1 = chat(client, user_a, "A1 facturación")
-    b1 = chat(client, user_b, "B1 preparar reunión")
-    assert a1["type"] == "billing_query" and b1["type"] == "prepare_meeting"
-
-    a2 = chat(client, user_a, "Nebula")
-    b2, calls_b2 = during(openai_fake, lambda: chat(client, user_b, "Orion"))
-
-    assert a2["type"] == "billing_summary" and a2["metadata"]["client_id"] == crm.nebula
-    assert b2["type"] == "prepare_meeting" and b2["metadata"]["client_id"] == crm.orion
-    summary_prompt = openai_fake.sent_text([c for c in calls_b2 if c["kind"] == "summary"])
-    assert "Orion Consultoría S.L." in summary_prompt and CRM_B in summary_prompt
-    assert CRM_A not in summary_prompt
-    assert chat_memory.get_last_client(user_a["id"]) == crm.nebula
-    assert chat_memory.get_last_client(user_b["id"]) == crm.orion
-    assert chat_memory._pending_intent_by_user == {}
-
-
-def test_memoria_sobrevive_entre_peticiones_y_no_hay_endpoint_de_reset(client, user_a, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query", "Nebula")
-    chat(client, user_a, "facturación de Nebula")
-
-    openai_fake.router = lambda m: route("billing_query")
-    later = chat(client, user_a, "y ahora la facturación")  # sin cliente: usa el último
-
-    assert later["type"] == "billing_summary" and later["metadata"]["client_id"] == crm.nebula
-    chat_paths = {r.path for r in main.app.routes if "chat" in getattr(r, "path", "")}
-    assert chat_paths == {"/chat"}
-
-
-# =====================================================================
-# D.6.3 AISLAMIENTO CRM en el contexto enviado al LLM
-# =====================================================================
-
-@pytest.mark.parametrize("intent,message", [
-    ("prepare_meeting", "prepara la reunión con Nebula"),
-    ("client_summary", "resumen del cliente Nebula"),
-])
-def test_contexto_del_llm_solo_con_actividades_del_usuario(client, user_a, user_b, crm, openai_fake,
-                                                           intent, message):
-    openai_fake.router = lambda m: route(intent, "Nebula")
-
-    _, calls_a = during(openai_fake, lambda: chat(client, user_a, message))
-    _, calls_b = during(openai_fake, lambda: chat(client, user_b, message))
-
-    prompt_a = openai_fake.sent_text([c for c in calls_a if c["kind"] == "summary"])
-    prompt_b = openai_fake.sent_text([c for c in calls_b if c["kind"] == "summary"])
-    assert "Nebula Logística S.L." in prompt_a and "Nebula Logística S.L." in prompt_b
-    assert CRM_A in prompt_a and CRM_B not in prompt_a
-    assert CRM_B in prompt_b and CRM_A not in prompt_b
-    assert "Total actividades: 5" in prompt_a or "Total actividades registradas: 5" in prompt_a
-    assert "Total actividades: 2" in prompt_b or "Total actividades registradas: 2" in prompt_b
-
-
-@pytest.mark.parametrize("confidence", [95, 10], ids=["ia", "fallback_por_palabras"])
-def test_analiza_cliente_usa_client_summary_con_contexto_aislado(client, user_a, user_b, crm, openai_fake,
-                                                                 confidence):
-    """
-    main normaliza client_analysis -> client_summary DESPUÉS del fallback, y la
-    intención pendiente client_analysis solo se crea dentro de su propia rama:
-    la rama client_analysis (generate_account_analysis) es inalcanzable hoy.
-    """
-    openai_fake.router = lambda m: route("client_analysis", "Nebula", confidence=confidence)
-
-    _, calls_a = during(openai_fake, lambda: chat(client, user_a, "analiza cliente Nebula"))
-    _, calls_b = during(openai_fake, lambda: chat(client, user_b, "analiza cliente Nebula"))
-
-    prompt_a = openai_fake.sent_text([c for c in calls_a if c["kind"] == "summary"])
-    prompt_b = openai_fake.sent_text([c for c in calls_b if c["kind"] == "summary"])
-    # Se ejecutó generate_client_summary, no generate_account_analysis
-    for prompt in (prompt_a, prompt_b):
-        assert "consultor senior especializado en análisis de clientes" in prompt
-        assert "Eres un analista CRM experto en cuentas B2B." not in prompt
-    assert CRM_A in prompt_a and CRM_B not in prompt_a
-    assert CRM_B in prompt_b and CRM_A not in prompt_b
-
-
-def test_prepare_meeting_endpoint_contexto_aislado(client, user_a, user_b, crm, openai_fake):
-    _, calls_a = during(openai_fake, lambda: client.post("/prepare-meeting", json={"client_id": crm.nebula},
-                                                         headers=user_a["headers"]))
-    _, calls_b = during(openai_fake, lambda: client.post("/prepare-meeting", json={"client_id": crm.nebula},
-                                                         headers=user_b["headers"]))
-
-    assert CRM_A in openai_fake.sent_text(calls_a) and CRM_B not in openai_fake.sent_text(calls_a)
-    assert CRM_B in openai_fake.sent_text(calls_b) and CRM_A not in openai_fake.sent_text(calls_b)
-
-
-def test_busqueda_semantica_del_chat_solo_devuelve_actividades_propias(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("semantic_search")
-
-    results_a = chat(client, user_a, "de qué hablamos con Nebula")["metadata"]["results"]
-    results_b = chat(client, user_b, "de qué hablamos con Nebula")["metadata"]["results"]
-
-    assert results_a and {r["activity_id"] for r in results_a} <= set(crm.a_ids)
-    assert results_b and {r["activity_id"] for r in results_b} <= set(crm.b_ids)
-    assert all(CRM_B not in r["comentario"] for r in results_a)
-    assert all(CRM_A not in r["comentario"] for r in results_b)
-
-
-def test_crm_insights_por_usuario_regresion_b1(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("crm_insights")
-
-    content_a = chat(client, user_a, "insights del CRM")["content"]
-    content_b = chat(client, user_b, "insights del CRM")["content"]
-
-    # A: 5 actividades en Nebula, ninguna en Orion. B: 2 en Nebula, 5 en Orion.
-    assert "Nebula Logística S.L. tiene alta actividad" in content_a
-    assert "Orion Consultoría S.L. no tiene actividad registrada" in content_a
-    assert "Orion Consultoría S.L. tiene alta actividad" in content_b
-    assert "Nebula Logística S.L. tiene alta actividad" not in content_b
-    inactive_a = content_a.split("sin actividad reciente:")[1].split("Actividad comercial")[0]
-    inactive_b = content_b.split("sin actividad reciente:")[1].split("Actividad comercial")[0]
-    assert "Orion" in inactive_a and "Nebula" not in inactive_a
-    assert "Orion" not in inactive_b and "Nebula" not in inactive_b
-    # Ningún texto de actividades (privado) aparece en los insights
-    for content in (content_a, content_b):
-        assert CRM_A not in content and CRM_B not in content
-    assert openai_fake.of_kind("summary") == []  # crm_insights no usa el LLM
-
-
-def test_facturacion_es_global_por_diseno(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query", "Nebula")
-
-    billing_a = chat(client, user_a, "facturación de Nebula")["metadata"]["billing"]
-    billing_b = chat(client, user_b, "facturación de Nebula")["metadata"]["billing"]
-
-    assert billing_a == billing_b
-    assert billing_a["total_facturado"] == 300
-
-
-# =====================================================================
-# D.6.4 CONTRATO
-# =====================================================================
-
-def test_mensaje_no_entendido(client, user_a, openai_fake):
-    assert chat(client, user_a, "qué tiempo hace") == {
-        "type": "error", "content": "No he entendido la petición. Prueba de nuevo.", "metadata": None,
-    }
+    sent = model.requests[-1]["messages"]
+    assert len(sent) == 2 + 8 + 1  # sistema + estado + 8 mensajes previos + pregunta actual
+    assert "pregunta 0" not in model.sent_text([model.requests[-1]])
 
 
 @pytest.mark.parametrize("message", ["", "   "])
-def test_mensaje_vacio_o_espacios_respuesta_controlada(client, user_a, openai_fake, message):
-    body = chat(client, user_a, message)
+def test_mensaje_vacio_respuesta_controlada_sin_bd_ni_modelo(client, user_a, user_b, model, dbq, message):
+    model.script("x")
+    foreign = post(client, user_b, "de B")["conversation_id"]
 
-    assert body == {"type": "error", "content": chat_service.EMPTY_MESSAGE, "metadata": None}
-    assert openai_fake.calls == []
+    body = post(client, user_a, message, foreign)
 
-
-def test_mensaje_con_la_longitud_maxima_se_acepta(client, user_a, openai_fake):
-    body = chat(client, user_a, "a" * CHAT_MESSAGE_MAX_LENGTH)
-
-    assert body["type"] == "error"  # no se entiende, pero entra en el flujo
-    assert len(openai_fake.of_kind("router")) == 1
+    assert body == {"type": "error", "content": chat_service.EMPTY_MESSAGE, "metadata": None,
+                    "conversation_id": None}
+    assert len(model.requests) == 1 and dbq.one("SELECT COUNT(*) AS n FROM chat_messages")["n"] == 2
 
 
-def test_mensaje_por_encima_del_maximo_422_sin_llamar_a_openai(client, user_a, openai_fake):
-    response = client.post("/chat", json={"message": "a" * (CHAT_MESSAGE_MAX_LENGTH + 1)},
+def test_mensaje_con_la_longitud_maxima_se_acepta(client, user_a, model):
+    assert post(client, user_a, "a" * CHAT_MESSAGE_MAX_LENGTH)["type"] == "answer"
+
+
+@pytest.mark.parametrize("body", [
+    {"message": "a" * (CHAT_MESSAGE_MAX_LENGTH + 1)},
+    {},
+    {"message": None},
+    {"message": "hola", "conversation_id": 0},
+    {"message": "hola", "conversation_id": -3},
+    {"message": "hola", "conversation_id": "1"},
+    {"message": "hola", "conversation_id": 1.5},
+    {"message": "hola", "conversation_id": True},
+    {"message": "hola", "conversation_id": 2**63},          # fuera del INTEGER de SQLite: 422, no 500
+    {"message": "hola", "conversation_id": 2**70},
+    {"message": "hola", "conversation_id": "9223372036854775808"},
+], ids=["demasiado_largo", "sin_message", "message_null", "id_0", "id_negativo", "id_texto", "id_decimal",
+        "id_bool", "id_2e63", "id_2e70", "id_grande_texto"])
+def test_peticion_invalida_422_sin_llamar_al_modelo(client, user_a, model, body):
+    response = client.post("/chat", json=body, headers=user_a["headers"])
+    assert response.status_code == 422 and model.requests == []
+
+
+def test_conversation_id_maximo_de_sqlite_es_un_404_controlado(client_no_raise, user_a, model):
+    response = client_no_raise.post("/chat", json={"message": "hola", "conversation_id": 2**63 - 1},
+                                    headers=user_a["headers"])
+    assert (response.status_code, response.json()) == (404, NOT_FOUND) and model.requests == []
+
+
+def test_conversation_id_null_equivale_a_omitirlo(client, user_a, model):
+    response = client.post("/chat", json={"message": "hola", "conversation_id": None}, headers=user_a["headers"])
+    assert response.status_code == 200 and response.json()["conversation_id"] > 0
+
+
+def test_solo_existe_el_endpoint_de_chat():
+    paths = {getattr(r, "path", "") for r in main.app.routes}
+    assert {p for p in paths if "chat" in p} == {"/chat"}
+    assert "/prepare-meeting" not in paths  # legado sustituido por el chat + prepare_meeting_context
+
+
+def test_prepare_meeting_ya_no_existe(client, user_a, model):
+    response = client.post("/prepare-meeting", json={"client_id": 1}, headers=user_a["headers"])
+    assert response.status_code == 404 and model.requests == []
+
+
+# =====================================================================
+# Propiedad de la conversación
+# =====================================================================
+
+def test_b_no_puede_usar_la_conversacion_de_a(client, user_a, user_b, model, dbq):
+    model.script(f"respuesta para A {SECRET_A}")
+    conversation_id = post(client, user_a, f"pregunta de A {SECRET_A}")["conversation_id"]
+    requests_before = len(model.requests)
+
+    response = client.post("/chat", json={"message": "hola", "conversation_id": conversation_id},
+                           headers=user_b["headers"])
+
+    assert response.status_code == 404 and response.json() == NOT_FOUND
+    assert len(model.requests) == requests_before  # no se llama al modelo
+    assert dbq.one("SELECT COUNT(*) AS n FROM chat_messages")["n"] == 2
+    assert SECRET_A not in response.text
+
+
+def test_misma_respuesta_para_inexistente_y_ajena(client, user_a, user_b, model):
+    model.script("x")
+    foreign = post(client, user_b, "de B")["conversation_id"]
+
+    missing = client.post("/chat", json={"message": "hola", "conversation_id": foreign + 100},
+                          headers=user_a["headers"])
+    other = client.post("/chat", json={"message": "hola", "conversation_id": foreign}, headers=user_a["headers"])
+
+    assert (missing.status_code, missing.json()) == (other.status_code, other.json()) == (404, NOT_FOUND)
+
+
+def test_historial_de_a_nunca_llega_al_modelo_de_b(client, user_a, user_b, model):
+    model.script("ok A", "ok B")
+    post(client, user_a, f"secreto {SECRET_A}")
+    post(client, user_b, "hola")
+
+    assert SECRET_A not in model.sent_text([model.requests[1]])
+
+
+# =====================================================================
+# Estado activo y seguimiento ("ellos", "ese cliente")
+# =====================================================================
+
+def test_cliente_activo_se_guarda_y_se_devuelve(client, user_a, chat_crm, model, dbq):
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera va bien.")
+
+    body = post(client, user_a, "Cuéntame cómo va Rivera")
+
+    assert body["type"] == "answer" and body["content"] == "Rivera va bien."
+    assert body["metadata"] == {"active_client": rivera_ref(chat_crm), "active_contact": None}
+    assert conversation_row(dbq, body["conversation_id"])["active_client_id"] == chat_crm.rivera
+
+
+def test_contacto_activo_implica_su_cliente(client, user_a, chat_crm, model):
+    model.script(*resolve_then("get_contact", contact_name="Pablo Gil"), "Pablo Gil es de Nebula.")
+
+    body = post(client, user_a, "¿Qué sabes de Pablo Gil?")
+
+    assert body["metadata"] == {
+        "active_client": {"id": chat_crm.nebula, "name": "Nebula Logística S.L."},
+        "active_contact": {"id": chat_crm.pablo, "name": "Pablo Gil", "client_id": chat_crm.nebula},
+    }
+
+
+def test_seguimiento_con_pronombre_usa_el_cliente_activo(client, user_a, chat_crm, model):
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera va bien.")
+    conversation_id = post(client, user_a, "Cuéntame cómo va Rivera")["conversation_id"]
+
+    # Sin find_entities: el id de Rivera ya es de confianza (estado activo)
+    model.script([("list_activities", {"client_id": chat_crm.rivera, "temporal_scope": "past", "limit": 1})],
+                 "Tu última actividad con Rivera fue el 1 de octubre.")
+    body = post(client, user_a, "¿Y cuándo fue mi última actividad con ellos?", conversation_id)
+
+    request = model.requests[-2]
+    assert '"cliente_activo": {"id": %d' % chat_crm.rivera in request["messages"][1]["content"]
+    result = last_tool(model.requests[-1])
+    assert result["ok"] and [a["datetime"] for a in result["activities"]] == ["2026-10-01T10:00:00"]
+    assert body["metadata"]["active_client"] == rivera_ref(chat_crm)
+
+
+def test_cambio_explicito_de_cliente(client, user_a, chat_crm, model):
+    model.script(*resolve_then("get_contact", contact_name="Marta López"), "Marta es de Rivera.")
+    conversation_id = post(client, user_a, "¿Qué hay de Marta López?")["conversation_id"]
+
+    model.script(*resolve_then("get_client_overview", client_name="Nebula"), "Nebula va regular.")
+    body = post(client, user_a, "¿Y Nebula?", conversation_id)
+
+    assert body["metadata"] == {"active_client": {"id": chat_crm.nebula, "name": "Nebula Logística S.L."},
+                                "active_contact": None}  # Marta no es de Nebula
+
+
+def test_comparacion_de_dos_clientes_deja_sin_cliente_activo(client, user_a, chat_crm, model):
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera ok.")
+    conversation_id = post(client, user_a, "¿Cómo va Rivera?")["conversation_id"]
+
+    model.script([("find_entities", {"client_name": "Rivera"}), ("find_entities", {"client_name": "Nebula"})],
+                 "Comparación hecha.")
+    body = post(client, user_a, "Compara Rivera y Nebula", conversation_id)
+
+    assert body["metadata"] == EMPTY_STATE
+
+
+def test_entidad_ambigua_no_cambia_el_contexto(client, user_a, chat_crm, model):
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera ok.")
+    conversation_id = post(client, user_a, "¿Cómo va Rivera?")["conversation_id"]
+
+    # El modelo intenta usar un candidato ambiguo por su id: no es de confianza
+    model.script([("find_entities", {"contact_name": "Marta"})],
+                 [("get_contact", {"contact_id": chat_crm.marta_ruiz})],
+                 "Hay dos Martas: Marta López y Marta Ruiz. ¿Cuál?")
+    body = post(client, user_a, "¿Y Marta?", conversation_id)
+
+    ambiguous = last_tool(model.requests[-2])
+    assert ambiguous["contact"]["status"] == "ambiguous" and ambiguous["contact"]["id"] is None
+    assert last_tool(model.requests[-1])["error"] == "unknown_id"
+    assert body["metadata"] == {"active_client": rivera_ref(chat_crm), "active_contact": None}
+
+
+def test_entidad_desconocida_no_cambia_el_contexto(client, user_a, chat_crm, model):
+    model.script([("find_entities", {"client_name": "Empresa Fantasma"})],
+                 "No encuentro ese cliente en el CRM.")
+
+    body = post(client, user_a, "¿Cómo va Empresa Fantasma?")
+
+    result = last_tool(model.requests[-1])
+    assert result["found"] is False and result["client"]["status"] == "unresolved"
+    assert body["metadata"] == EMPTY_STATE and body["content"] == "No encuentro ese cliente en el CRM."
+
+
+def test_sin_resultados_llega_found_false_al_modelo(client, user_a, chat_crm, model):
+    model.script([("list_activities", {"temporal_scope": "today"})], "Hoy no tienes actividades.")
+
+    body = post(client, user_a, "¿Qué tengo hoy?")
+
+    assert last_tool(model.requests[-1]) == {"ok": True, "found": False, "count": 0, "has_more": False,
+                                            "activities": []}
+    assert body["content"] == "Hoy no tienes actividades."
+
+
+def test_entidad_activa_borrada_se_limpia(client, user_a, chat_crm, model, dbq):
+    model.script(*resolve_then("get_client_overview", client_name="Sierra Norte"), "Sierra ok.")
+    conversation_id = post(client, user_a, "¿Cómo va Sierra Norte?")["conversation_id"]
+    assert conversation_row(dbq, conversation_id)["active_client_id"] == chat_crm.sierra
+
+    with db.connection() as conn:
+        conn.execute("DELETE FROM clients WHERE id = ?", (chat_crm.sierra,))
+
+    model.script([("get_client_products", {"client_id": chat_crm.sierra})], "¿De qué cliente hablas?")
+    body = post(client, user_a, "¿Y qué productos hemos tratado?", conversation_id)
+
+    assert '"cliente_activo": null' in model.requests[-2]["messages"][1]["content"]
+    assert last_tool(model.requests[-1])["error"] == "unknown_id"
+    assert body["metadata"] == EMPTY_STATE
+
+
+def test_pronombre_sin_contexto_el_id_inventado_se_rechaza(client, user_a, chat_crm, model):
+    model.script([("get_client_products", {"client_id": chat_crm.rivera})], "¿A qué cliente te refieres?")
+
+    body = post(client, user_a, "¿Qué productos hemos tratado con ellos?")
+
+    assert last_tool(model.requests[-1])["error"] == "unknown_id"
+    assert body["metadata"] == EMPTY_STATE
+
+
+# =====================================================================
+# B17 (antes xfail): "dame un resumen" → "Nebula" → seguimiento
+# =====================================================================
+
+def test_b17_resumen_pendiente_se_resuelve_al_dar_el_cliente(client, user_a, chat_crm, model, dbq):
+    # Turno 1: sin cliente, el asistente pregunta (no hay intención pendiente en ningún sitio)
+    model.script("¿De qué cliente quieres el resumen?")
+    first = post(client, user_a, "Dame un resumen")
+    conversation_id = first["conversation_id"]
+    assert first["metadata"] == EMPTY_STATE
+
+    # Turno 2: "Nebula" se entiende gracias al historial y se resuelve con las herramientas
+    model.script(*resolve_then("get_client_overview", client_name="Nebula"),
+                 lambda request: "Resumen de Nebula: " + last_tool(request)["client"]["name"])
+    second = post(client, user_a, "Nebula", conversation_id)
+
+    turn2 = model.requests[1]["messages"]
+    assert [(m["role"], m["content"]) for m in turn2[2:]] == [
+        ("user", "Dame un resumen"), ("assistant", "¿De qué cliente quieres el resumen?"), ("user", "Nebula")]
+    overview = last_tool(model.requests[-1])
+    assert overview["client"]["id"] == chat_crm.nebula
+    assert CHAT_A_ONLY in json.dumps(overview) and CHAT_B_ONLY not in json.dumps(overview)  # comercial inyectado
+    assert second == {"type": "answer", "content": "Resumen de Nebula: Nebula Logística S.L.",
+                      "metadata": {"active_client": {"id": chat_crm.nebula, "name": "Nebula Logística S.L."},
+                                   "active_contact": None},
+                      "conversation_id": conversation_id}
+    assert conversation_row(dbq, conversation_id)["active_client_id"] == chat_crm.nebula
+
+    # Turno 3: seguimiento sin nombrar al cliente; el id activo es de confianza sin volver a resolver
+    model.script([("get_client_products", {"client_id": chat_crm.nebula})], "Con Nebula no hay productos tratados.")
+    third = post(client, user_a, "¿Y qué productos hemos tratado?", conversation_id)
+
+    turn3 = model.requests[-2]
+    assert '"cliente_activo": {"id": %d, "name": "Nebula Logística S.L."}' % chat_crm.nebula in \
+        turn3["messages"][1]["content"]
+    products = last_tool(model.requests[-1])
+    assert products["ok"] and products["client"]["id"] == chat_crm.nebula
+    assert third["metadata"]["active_client"]["id"] == chat_crm.nebula
+    assert [t["name"] for t in json.loads(dbq.all(
+        "SELECT metadata FROM chat_messages WHERE role = 'assistant' ORDER BY id")[-1]["metadata"])["tools"]] == [
+        "get_client_products"]
+
+
+# =====================================================================
+# Errores de OpenAI y de las herramientas
+# =====================================================================
+
+@pytest.mark.parametrize("error", [
+    openai.AuthenticationError("Incorrect API key provided: sk-test-not-a-real-key",
+                               response=httpx.Response(401, request=_REQUEST), body=None),
+    openai.APITimeoutError(request=_REQUEST),
+    RuntimeError("Incorrect API key provided: sk-test-not-a-real-key"),
+], ids=["401", "timeout", "inesperado"])
+def test_fallo_de_openai_respuesta_controlada_y_turno_de_error(client, user_a, chat_crm, model, dbq, caplog, error):
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera ok.")
+    conversation_id = post(client, user_a, "¿Cómo va Rivera?")["conversation_id"]
+
+    model.script([("find_entities", {"client_name": "Nebula"})], error)
+    response = client.post("/chat", json={"message": "¿Y Nebula?", "conversation_id": conversation_id},
                            headers=user_a["headers"])
 
-    assert response.status_code == 422
-    assert openai_fake.calls == []
-
-
-@pytest.mark.parametrize("body", [None, {}, {"message": None}, {"message": 123}, {"mensaje": "hola"}])
-def test_body_invalido_422_sin_llamar_a_openai(client, user_a, openai_fake, body):
-    response = client.post("/chat", json=body, headers=user_a["headers"])
-
-    assert response.status_code == 422
-    assert openai_fake.calls == []
-
-
-def test_palabra_contexto_respuesta_fija(client, user_a, openai_fake):
-    assert chat(client, user_a, "dame contexto") == {
-        "type": "client_context", "content": "Buscando contexto del cliente...", "metadata": None,
-    }
-
-
-def test_respuesta_prepare_meeting_con_metadata(client, user_a, crm, openai_fake):
-    openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
-
-    body = chat(client, user_a, "prepara reunión con Nebula")
-
-    assert body["type"] == "prepare_meeting"
-    assert body["content"] == openai_fake.summary
-    assert body["metadata"] == {"client_id": crm.nebula,
-                                "suggested_actions": ["client_summary", "billing_query", "semantic_search"]}
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="B17: client_summary pendiente no se resuelve con la respuesta: vuelve a preguntar")
-def test_b17_resumen_pendiente_se_resuelve_al_dar_el_cliente(client, user_a, crm, openai_fake):
-    openai_fake.router = lambda m: route("client_summary")
-    assert chat(client, user_a, "dame un resumen")["content"] == "¿De qué cliente quieres el resumen?"
-
-    follow_up = chat(client, user_a, "Nebula")
-
-    assert follow_up["content"] == "Resumen cliente"
-
-
-# =====================================================================
-# D.6.5 ERRORES DE OPENAI
-# =====================================================================
-
-def _openai_errors():
-    import httpx
-    import openai
-    request = httpx.Request("POST", "http://127.0.0.1:9/v1/chat/completions")
-    return {
-        "conexion": openai.APIConnectionError(request=request),
-        "timeout": openai.APITimeoutError(request=request),
-        "generica": RuntimeError("Incorrect API key provided: sk-test-not-a-real-key"),
-    }
-
-
-@pytest.mark.parametrize("error", ["conexion", "timeout", "generica"])
-def test_fallo_del_router_cae_al_detector_por_palabras(client, user_a, crm, openai_fake, error):
-    openai_fake.errors["router"] = _openai_errors()[error]
-
-    body = chat(client, user_a, "facturación de Nebula")
-
-    assert body["type"] == "billing_summary"
-    assert body["metadata"]["client_id"] == crm.nebula
-    assert "sk-test" not in json.dumps(body)
-
-
-@pytest.mark.parametrize("raw", ["", "no es json", "{json roto"])
-def test_respuesta_inesperada_del_router_cae_al_detector_por_palabras(client, user_a, crm, openai_fake, raw):
-    openai_fake.router_raw = raw
-
-    body = chat(client, user_a, "facturación de Nebula")
-
-    assert body["type"] == "billing_summary"
-
-
-B20_ROUTER_OUTPUTS = {
-    "confidence_null": json.dumps(route("billing_query", "Nebula", confidence=None)),
-    "confidence_texto": json.dumps(route("billing_query", "Nebula", confidence="95")),
-    "json_lista": '["lista"]',
-}
-
-
-@pytest.mark.parametrize("output", B20_ROUTER_OUTPUTS)
-def test_b20_salida_inesperada_del_router_no_rompe_el_chat(client_no_raise, user_a, crm, openai_fake, output):
-    """Regresión B20: salida fuera de contrato -> router no fiable -> detector por palabras."""
-    openai_fake.router_raw = B20_ROUTER_OUTPUTS[output]
-
-    response = client_no_raise.post("/chat", json={"message": "facturación de Nebula"}, headers=user_a["headers"])
-
+    body = response.json()
     assert response.status_code == 200
-    assert response.json()["type"] == "billing_summary"
-
-
-@pytest.mark.parametrize("output", [
-    {"intent": "billing_query", "client_name": None, "confidence": 150},
-    {"intent": "billing_query", "client_name": None, "confidence": True},
-    {"intent": ["billing_query"], "client_name": None, "confidence": 95},
-    {"intent": "billing_query", "client_name": {"nombre": "Nebula"}, "confidence": 95},
-])
-def test_router_fuera_de_contrato_se_descarta(openai_fake, output):
-    openai_fake.router_raw = json.dumps(output)
-
-    assert ai_router.analyze_user_message("hola") == ai_router.UNRELIABLE_ANALYSIS
-
-
-def test_router_dentro_de_contrato_se_acepta(openai_fake):
-    openai_fake.router_raw = json.dumps({"intent": "billing_query", "client_name": "Nebula",
-                                         "confidence": 87.5, "extra": "ignorado"})
-
-    assert ai_router.analyze_user_message("hola") == {"intent": "billing_query", "client_name": "Nebula",
-                                                      "confidence": 87.5}
-
-
-@pytest.mark.parametrize("path", ["chat", "endpoint"])
-def test_fallo_del_resumen_de_reunion_respuesta_controlada(client, user_a, crm, openai_fake, path):
-    openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
-    openai_fake.errors["summary"] = _openai_errors()["timeout"]
-
-    if path == "chat":
-        response = client.post("/chat", json={"message": "reunión con Nebula"}, headers=user_a["headers"])
-    else:
-        response = client.post("/prepare-meeting", json={"client_id": crm.nebula}, headers=user_a["headers"])
-
-    assert response.status_code == 200
-    text = response.text
-    assert "Error generando resumen" in text
-    assert "Traceback" not in text and CRM_A not in text  # sin trazas ni el prompt interno
-
-
-@pytest.mark.parametrize("path", ["chat", "endpoint"])
-def test_b18_error_de_openai_no_se_devuelve_al_cliente(client, user_a, crm, openai_fake, path, caplog):
-    """Regresión B18: ni el body ni los logs llevan el texto de la excepción."""
-    openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
-    openai_fake.errors["summary"] = _openai_errors()["generica"]
-
-    if path == "chat":
-        response = client.post("/chat", json={"message": "reunión con Nebula"}, headers=user_a["headers"])
-    else:
-        response = client.post("/prepare-meeting", json={"client_id": crm.nebula}, headers=user_a["headers"])
-
-    assert response.status_code == 200
-    assert chat_service.MEETING_SUMMARY_ERROR in response.text
+    assert body == {"type": "error", "content": chat_service.AI_UNAVAILABLE_MESSAGE,
+                    "metadata": {"active_client": rivera_ref(chat_crm), "active_contact": None},
+                    "conversation_id": conversation_id}  # el estado no cambia aunque find_entities fuera bien
     for text in (response.text, caplog.text):
-        assert "sk-test-not-a-real-key" not in text
-        assert "Incorrect API key" not in text
+        assert "sk-test-not-a-real-key" not in text and "Incorrect API key" not in text
+    stored = json.loads(dbq.all("SELECT metadata FROM chat_messages ORDER BY id")[-1]["metadata"])
+    assert stored["error"] == chat_orchestrator.AI_UNAVAILABLE
+
+    # El turno fallido no vuelve como contexto: solo su pregunta
+    model.script("ok")
+    post(client, user_a, "otra cosa", conversation_id)
+    assert chat_service.AI_UNAVAILABLE_MESSAGE not in model.sent_text([model.requests[-1]])
+    assert "¿Y Nebula?" in model.sent_text([model.requests[-1]])
 
 
-FAILING_LLM_INTENTS = {
-    "client_summary": (route("client_summary", "Nebula"), "resumen del cliente Nebula", "summary"),
-    "semantic_search": (route("semantic_search"), "de qué hablamos con Nebula", "embedding"),
-}
+def test_presupuesto_insuficiente_respuesta_degradada(client, user_a, model, monkeypatch):
+    monkeypatch.setattr(chat_orchestrator, "CHAT_TOTAL_BUDGET_S", 1.0)
+
+    body = post(client, user_a, "hola")
+
+    assert body["type"] == "error" and body["content"] == chat_service.BUDGET_EXCEEDED_MESSAGE
+    assert model.requests == []
 
 
-@pytest.mark.parametrize("intent", FAILING_LLM_INTENTS)
-def test_fallo_de_openai_no_filtra_detalles_internos(client_no_raise, user_a, crm, openai_fake, intent):
-    """
-    Sin clave, texto de la excepción, prompt ni trazas. El status lo fija
-    el test de B19.
-    """
-    reply, message, kind = FAILING_LLM_INTENTS[intent]
-    openai_fake.router = lambda m: reply
-    openai_fake.errors[kind] = _openai_errors()["generica"]
+def test_fallo_de_una_herramienta_no_rompe_el_chat(client, user_a, chat_crm, model, monkeypatch, dbq):
+    def broken(*args, **kwargs):
+        raise RuntimeError("detalle interno /ruta/secreta")
 
-    response = client_no_raise.post("/chat", json={"message": message}, headers=user_a["headers"])
+    monkeypatch.setattr(crm_tools, "get_client_overview", broken)
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "No he podido consultar la ficha.")
 
-    assert openai_fake.of_kind(kind), "la llamada a OpenAI que falla debe haberse producido"
-    text = response.text
-    assert "sk-test-not-a-real-key" not in text      # API key
-    assert "Incorrect API key" not in text           # texto de la excepción
-    assert CRM_A not in text                         # contexto CRM del prompt
-    assert "Eres un" not in text and "FACTURACIÓN" not in text  # prompt interno
-    assert "Traceback" not in text and 'File "' not in text
+    response = client.post("/chat", json={"message": "¿Cómo va Rivera?"}, headers=user_a["headers"])
+
+    assert response.status_code == 200 and "secreta" not in response.text
+    assert last_tool(model.requests[-1])["error"] == "tool_failed"
+    stored = json.loads(dbq.all("SELECT metadata FROM chat_messages ORDER BY id")[-1]["metadata"])
+    assert [(t["name"], t["status"]) for t in stored["tools"]] == [("find_entities", "ok"),
+                                                                     ("get_client_overview", "tool_failed")]
+    # find_entities sí resolvió Rivera: es el cliente del que se habla
+    assert response.json()["metadata"]["active_client"] == rivera_ref(chat_crm)
 
 
-@pytest.mark.parametrize("intent", FAILING_LLM_INTENTS)
-def test_b19_fallo_de_openai_respuesta_controlada(client_no_raise, user_a, crm, openai_fake, intent):
-    """Regresión B19: el fallo de la IA es un ChatResponse de error estable (200), no un 500."""
-    reply, message, kind = FAILING_LLM_INTENTS[intent]
-    openai_fake.router = lambda m: reply
-    openai_fake.errors[kind] = _openai_errors()["timeout"]
+def test_metadata_guardada_es_compacta(client, user_a, chat_crm, model, dbq):
+    model.script(*resolve_then("prepare_meeting_context", client_name="Rivera"), "Briefing listo.")
+    post(client, user_a, "Prepárame la reunión con Rivera")
 
-    response = client_no_raise.post("/chat", json={"message": message}, headers=user_a["headers"])
-
-    assert response.status_code == 200
-    assert response.json() == {"type": "error", "content": chat_service.AI_UNAVAILABLE_MESSAGE, "metadata": None}
-
-
-@pytest.mark.parametrize("bad_response", [
-    SimpleNamespace(choices=[]),
-    SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None))]),
-], ids=["sin_choices", "content_none"])
-def test_respuesta_de_openai_sin_texto_es_error_controlado(client, user_a, crm, openai_fake, bad_response,
-                                                           monkeypatch):
-    openai_fake.router = lambda m: route("prepare_meeting", "Nebula")
-    completions = openai_service.client.chat.completions
-    monkeypatch.setattr(completions, "create", lambda **kwargs: bad_response)
-
-    body = chat(client, user_a, "reunión con Nebula")
-
-    assert body == {"type": "prepare_meeting", "content": chat_service.MEETING_SUMMARY_ERROR, "metadata": None}
+    stored = dbq.all("SELECT metadata FROM chat_messages WHERE role = 'assistant'")[-1]["metadata"]
+    assert CHAT_A_ONLY not in stored  # nada de datos del CRM, solo la traza
+    assert json.loads(stored) == {"error": None, "tools": [
+        {"name": "find_entities", "args": {"client_name": "Rivera"}, "status": "ok", "found": True},
+        {"name": "prepare_meeting_context", "args": {"client_id": chat_crm.rivera}, "status": "ok", "found": True},
+    ]}
 
 
 # =====================================================================
-# D.6.6 CRECIMIENTO DE LA MEMORIA
+# Aislamiento y solo lectura
 # =====================================================================
 
-def test_memoria_acotada_a_una_entrada_por_usuario(client, user_a, user_b, crm, openai_fake):
-    openai_fake.router = lambda m: route("billing_query", "Nebula" if "Nebula" in m else "Orion")
-    for i in range(30):
-        chat(client, user_a, f"facturación de {'Nebula' if i % 2 else 'Orion'} {i}")
-        chat(client, user_b, f"facturación de Orion {i}")
+def test_la_evidencia_de_cada_comercial_es_solo_suya(client, user_a, user_b, chat_crm, model, chat_embeddings):
+    session = [
+        *resolve_then("prepare_meeting_context", client_name="Rivera"),
+        [("list_activities", {"client_id": chat_crm.rivera}), ("search_activities", {"query": "visita"}),
+         ("crm_rankings", {"metric": "activity_count"})],
+        "fin",
+    ]
+    for user, own, foreign in [(user_a, CHAT_A_ONLY, CHAT_B_ONLY), (user_b, CHAT_B_ONLY, CHAT_A_ONLY)]:
+        start = len(model.requests)
+        model.script(*session)
+        post(client, user, "Prepárame la reunión con Rivera")
+        sent = model.sent_text(model.requests[start:])
+        assert own in sent and foreign not in sent
 
-    assert set(chat_memory._last_client_by_user) == {user_a["id"], user_b["id"]}
-    assert chat_memory.get_last_client(user_a["id"]) == crm.nebula  # la última (i = 29)
-    assert chat_memory.get_last_client(user_b["id"]) == crm.orion
+
+def test_el_modelo_no_puede_elegir_el_comercial(client, user_b, chat_crm, model):
+    model.script([("list_activities", {"salesperson_id": chat_crm.a}), ("list_activities", {})], "fin")
+
+    post(client, user_b, "dame las actividades del comercial A")
+
+    results = model.last_tool_results()
+    assert results[0]["error"] == "invalid_arguments"
+    assert CHAT_A_ONLY not in json.dumps(results[1]) and CHAT_B_ONLY in json.dumps(results[1])
 
 
-def test_si_openai_falla_la_memoria_de_a_queda_intacta(client, user_a, user_b, crm, openai_fake):
-    # 1. A deja estado conocido: último cliente Nebula + intención pendiente
-    openai_fake.router = lambda m: route("billing_query", "Nebula")
-    chat(client, user_a, "facturación de Nebula")
-    openai_fake.router = lambda m: route("client_summary")
-    chat(client, user_a, "dame un resumen")  # sin "cliente X": queda pendiente
-    memory_a = (chat_memory.get_last_client(user_a["id"]), chat_memory.get_pending_intent(user_a["id"]))
-    assert memory_a == (crm.nebula, {"intent": "client_summary", "waiting_for": "client"})
+def test_una_sesion_completa_no_escribe_en_el_crm(client, user_a, chat_crm, model, chat_embeddings, monkeypatch):
+    before = crm_dump()
+    model.script(*resolve_then("prepare_meeting_context", client_name="Rivera"),
+                 [("list_activities", {"client_id": chat_crm.rivera}), ("search_activities", {"query": "monitor"}),
+                  ("get_client_products", {"client_id": chat_crm.rivera})], "uno")
+    conversation_id = post(client, user_a, "Prepárame la reunión con Rivera")["conversation_id"]
+    model.script(*resolve_then("get_contact", contact_name="Pablo Gil"),
+                 [("crm_rankings", {"metric": "inactivity"}), ("search_product_catalog", {"query": "silla"})], "dos")
+    post(client, user_a, "¿Y Pablo Gil?", conversation_id)
+    model.script(RuntimeError("caída"))
+    post(client, user_a, "¿y?", conversation_id)
 
-    # 2-3. B (sin intención pendiente) llega al router y OpenAI falla de verdad
-    openai_fake.errors["router"] = RuntimeError("caída de OpenAI")
-    body_b, calls_b = during(openai_fake, lambda: chat(client, user_b, "facturación de Orion"))
+    assert crm_dump() == before
 
-    # 4. El router se llamó (y lanzó la excepción): la petición de B pasó por la IA
-    assert [c["kind"] for c in calls_b] == ["router"]
-    # El chat de B siguió por el detector por palabras y actualizó SOLO la memoria de B
-    assert body_b["type"] == "billing_summary" and body_b["metadata"]["client_id"] == crm.orion
-    assert chat_memory.get_last_client(user_b["id"]) == crm.orion
-    assert chat_memory.get_pending_intent(user_b["id"]) is None
 
-    # 5. La memoria de A sigue intacta, sin datos de B
-    assert (chat_memory.get_last_client(user_a["id"]), chat_memory.get_pending_intent(user_a["id"])) == memory_a
-    assert set(chat_memory._last_client_by_user) == {user_a["id"], user_b["id"]}
-    assert set(chat_memory._pending_intent_by_user) == {user_a["id"]}
+@pytest.fixture
+def tracked_connections(monkeypatch):
+    """Registra TODAS las conexiones abiertas (db y los módulos que importan get_connection)."""
+    import sys
+
+    real = db.get_connection
+    opened = []
+
+    class Tracked:
+        def __init__(self, conn):
+            self.conn, self.closed = conn, False
+
+        def close(self):
+            self.closed = True
+            self.conn.close()
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+    def tracked():
+        opened.append(Tracked(real()))
+        return opened[-1]
+
+    for module in list(sys.modules.values()):
+        if getattr(module, "get_connection", None) is real:
+            monkeypatch.setattr(module, "get_connection", tracked)
+    return opened
+
+
+@pytest.mark.parametrize("scenario", ["ok", "openai_falla", "herramienta_falla", "conversacion_ajena"])
+def test_todas_las_conexiones_se_cierran(client, user_a, user_b, chat_crm, model, monkeypatch, scenario,
+                                         tracked_connections):
+    model.script("x")
+    foreign = post(client, user_b, "de B")["conversation_id"]
+    tracked_connections.clear()
+    if scenario == "herramienta_falla":
+        monkeypatch.setattr(crm_tools, "list_activities", lambda *a, **k: 1 / 0)
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"),
+                 [("list_activities", {"temporal_scope": "past"})],
+                 RuntimeError("caída") if scenario == "openai_falla" else "fin")
+
+    response = client.post("/chat", json={"message": "¿Cómo va Rivera?",
+                                          **({"conversation_id": foreign} if scenario == "conversacion_ajena" else {})},
+                           headers=user_a["headers"])
+
+    assert response.status_code == (404 if scenario == "conversacion_ajena" else 200)
+    # Lectura de la conversación, entidades, herramientas y guardado del turno: todas cerradas
+    assert len(tracked_connections) >= (1 if scenario == "conversacion_ajena" else 4)
+    assert all(c.closed for c in tracked_connections)
+
+
+def test_ninguna_conexion_abierta_mientras_se_espera_al_modelo(client, user_a, chat_crm, model,
+                                                               tracked_connections):
+    open_during_model = []
+
+    def check(step):
+        def wrapped(request):
+            open_during_model.append(sum(not c.closed for c in tracked_connections))
+            return step(request) if callable(step) else step
+        return wrapped
+
+    find, overview = resolve_then("get_client_overview", client_name="Rivera")
+    model.script(check(find), check(overview), check("fin"))
+    conversation_id = post(client, user_a, "¿Cómo va Rivera?")["conversation_id"]
+    model.script(check("seguimiento"))
+    post(client, user_a, "¿y?", conversation_id)
+
+    assert open_during_model == [0, 0, 0, 0]
+
+
+# =====================================================================
+# M3 / M4 a través de /chat
+# =====================================================================
+
+def test_actividad_incoherente_no_cambia_el_cliente_activo(client, user_a, chat_crm, model, factory):
+    factory.activity(chat_crm.a, chat_crm.rivera, contact_id=chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
+    model.script([("list_activities", {"temporal_scope": "past"})],
+                 [("list_activities", {"contact_id": chat_crm.pablo})], "Tienes una actividad con Pablo.")
+
+    body = post(client, user_a, "¿Qué hice con Pablo?")
+
+    assert last_tool(model.requests[-1])["count"] == 2  # la incoherente (Rivera) y la normal (Nebula)
+    assert body["metadata"] == EMPTY_STATE  # nada deducido del cliente "vecino" en una actividad
+
+
+def test_conflicto_no_permite_usar_sus_ids(client, user_a, chat_crm, model):
+    model.script([("find_entities", {"client_name": "Rivera", "contact_name": "Pablo Gil"})],
+                 [("get_contact", {"contact_id": chat_crm.pablo}),
+                  ("get_client_overview", {"client_id": chat_crm.rivera})],
+                 "Pablo Gil no es contacto de Rivera.")
+
+    body = post(client, user_a, "¿Qué tal Pablo Gil de Rivera?")
+
+    assert [r.get("error") for r in model.last_tool_results()[-2:]] == ["unknown_id", "unknown_id"]
+    assert body["metadata"] == EMPTY_STATE
+
+
+# =====================================================================
+# Prueba real (G.3): un nombre o alias explícito se resuelve en el primer
+# turno con find_entities, sin exigir un cliente activo ni el nombre completo
+# =====================================================================
+
+@pytest.fixture
+def dev_like_crm(factory, user_a):
+    """Clientes y contactos con la forma de la BD de desarrollo (alias distinto de la razón social)."""
+    ids = {alias: factory.client(name, alias=alias) for name, alias in [
+        ("Tecnologia Rivera SL", "Rivera"), ("Grupo Sierra Norte SL", "Sierra Norte"),
+        ("Instituto San Lucas", "San Lucas"), ("Colegio Nuevo Horizonte", "Nuevo Horizonte")]}
+    contacts = {name: factory.contact(ids[client], name) for client, name in [
+        ("Rivera", "Marta Lopez"), ("Rivera", "Carlos Perez"), ("San Lucas", "Carlos Ruiz"),
+        ("Nuevo Horizonte", "Sonia Vega")]}
+    factory.activity(user_a["id"], ids["Rivera"], datetime_iso="2026-10-01T10:00:00",
+                     comentario=f"{CHAT_A_ONLY} visita a Rivera")
+    return ids, contacts
+
+
+def test_la_guia_del_modelo_pide_buscar_nombres_explicitos_sin_cliente_activo():
+    # Contrato de las instrucciones (la prueba real mostró que el modelo exigía un cliente activo)
+    prompt = chat_orchestrator.SYSTEM_PROMPT
+    assert "haya o no cliente activo" in prompt and "No pidas el nombre completo" in prompt
+    assert '"ellos"' in prompt and "si no hay ninguno, pregunta" in prompt   # pronombres: igual que antes
+    find = next(t["function"] for t in chat_orchestrator.chat_tools.TOOL_SCHEMAS
+                if t["function"]["name"] == "find_entities")
+    assert "alias" in find["description"] and "no hace falta el nombre completo" in find["description"]
+    assert "alias" in find["parameters"]["properties"]["client_name"]["description"]
+
+
+def test_cuentame_como_va_rivera_en_una_conversacion_nueva(client, user_a, dev_like_crm, model, dbq):
+    ids, _ = dev_like_crm
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"),
+                 lambda request: f"{last_tool(request)['client']['name']} va bien.")
+
+    body = post(client, user_a, "Cuéntame cómo va Rivera")
+
+    assert '"cliente_activo": null' in model.requests[0]["messages"][1]["content"]   # sin estado previo
+    found = model.tool_results(1)["call_1_0"]
+    assert (found["client"]["id"], found["client"]["status"]) == (ids["Rivera"], "exact")
+    overview = last_tool(model.requests[-1])
+    assert overview["client"]["name"] == "Tecnologia Rivera SL" and CHAT_A_ONLY in json.dumps(overview)
+    assert body["content"] == "Tecnologia Rivera SL va bien."
+    assert body["metadata"] == {"active_client": {"id": ids["Rivera"], "name": "Tecnologia Rivera SL"},
+                                "active_contact": None}
+    assert conversation_row(dbq, body["conversation_id"])["active_client_id"] == ids["Rivera"]
+
+
+@pytest.mark.parametrize("message, find, then, active_client, active_contact", [
+    ("¿Qué tengo con Sierra Norte?", {"client_name": "Sierra Norte"}, "list_activities", "Sierra Norte", None),
+    ("¿Cómo va San Lucas?", {"client_name": "San Lucas"}, "get_client_overview", "San Lucas", None),
+    ("¿Qué sabemos de Marta?", {"contact_name": "Marta"}, "get_contact", "Rivera", "Marta Lopez"),
+    ("¿Tengo algo con Sonia Vega?", {"contact_name": "Sonia Vega"}, "get_contact", "Nuevo Horizonte", "Sonia Vega"),
+])
+def test_alias_o_nombre_explicito_sin_estado_previo(client, user_a, dev_like_crm, model,
+                                                   message, find, then, active_client, active_contact):
+    ids, contacts = dev_like_crm
+    model.script(*resolve_then(then, **find), "Respuesta con los datos.")
+
+    body = post(client, user_a, message)
+
+    found = model.tool_results(1)["call_1_0"]
+    assert found["client"]["id"] == ids[active_client]                     # resuelto por la herramienta
+    assert last_tool(model.requests[-1])["ok"] is True
+    assert body["metadata"]["active_client"]["id"] == ids[active_client]
+    expected_contact = contacts[active_contact] if active_contact else None
+    assert (body["metadata"]["active_contact"] or {}).get("id") == expected_contact
+
+
+def test_nombre_realmente_ambiguo_sin_estado_no_se_adivina(client, user_a, dev_like_crm, model):
+    _, contacts = dev_like_crm
+    model.script([("find_entities", {"contact_name": "Carlos"})],
+                 [("get_contact", {"contact_id": contacts["Carlos Perez"]})],
+                 "Hay dos Carlos: Carlos Perez y Carlos Ruiz. ¿Cuál?")
+
+    body = post(client, user_a, "¿Qué tengo con Carlos?")
+
+    ambiguous = model.tool_results(1)["call_1_0"]["contact"]
+    assert ambiguous["status"] == "ambiguous" and ambiguous["id"] is None
+    assert {c["name"] for c in ambiguous["candidates"]} == {"Carlos Perez", "Carlos Ruiz"}
+    assert last_tool(model.requests[-1])["error"] == "unknown_id"         # un candidato no se usa sin resolver
+    assert body["metadata"] == EMPTY_STATE
+
+
+def test_contacto_dentro_del_cliente_activo_se_resuelve_sin_ambiguedad(client, user_a, dev_like_crm, model):
+    ids, contacts = dev_like_crm
+    model.script(*resolve_then("get_client_overview", client_name="Rivera"), "Rivera ok.")
+    conversation_id = post(client, user_a, "Cuéntame cómo va Rivera")["conversation_id"]
+
+    # Con Rivera activo, el modelo busca a Carlos dentro de ese cliente (regla 3a)
+    model.script(*resolve_then("get_contact", client_name="Tecnologia Rivera SL", contact_name="Carlos"),
+                 "Carlos Perez, de Tecnologia Rivera SL.")
+    body = post(client, user_a, "¿Qué tengo con Carlos?", conversation_id)
+
+    assert body["metadata"]["active_contact"] == {"id": contacts["Carlos Perez"], "name": "Carlos Perez",
+                                                  "client_id": ids["Rivera"]}
+
+
+def test_empresa_desconocida_sin_estado_no_inventa_datos(client, user_a, dev_like_crm, model):
+    model.script([("find_entities", {"client_name": "Construcciones Mediterráneo"})],
+                 [("get_client_overview", {"client_id": 1})],
+                 "No encuentro esa empresa en el CRM.")
+
+    body = post(client, user_a, "¿Cómo va la empresa Construcciones Mediterráneo?")
+
+    found = model.tool_results(1)["call_1_0"]
+    assert found["found"] is False and found["client"]["status"] == "unresolved"
+    assert last_tool(model.requests[-1])["error"] == "unknown_id"          # un id inventado no sirve
+    assert body["metadata"] == EMPTY_STATE

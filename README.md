@@ -19,7 +19,7 @@ Proyecto desarrollado como Trabajo de Fin de Grado (TFG).
 | SQLite (`backend/crm.db`) | Local, fichero | Datos del CRM. Se crea solo al arrancar el backend | Sí |
 | Whisper (modelo `base`) | Local, CPU | Transcripción del audio | Sí (para grabar actividades por voz) |
 | FFmpeg | Local, programa del sistema | Whisper lo usa para decodificar el audio | Sí (para grabar actividades por voz) |
-| OpenAI API | Externo, de pago | Embeddings (duplicados, búsqueda semántica), router del chat y resúmenes | La clave es obligatoria para arrancar; las funciones de IA del chat dependen de ella |
+| OpenAI API | Externo, de pago | Embeddings (duplicados, búsqueda semántica) y asistente del chat (tool calling) | La clave es obligatoria para arrancar; las funciones de IA del chat dependen de ella |
 | Google OAuth | Externo | Login con Google | Opcional (también hay registro con email y contraseña) |
 
 ---
@@ -295,7 +295,8 @@ backend/
   core/security.py     contraseñas (bcrypt) y JWT
   services/            lógica sin FastAPI: cuentas, catálogo, actividades,
                        voz (Whisper, análisis de texto, fechas, entidades),
-                       chat (OpenAI, memoria, intención, contexto, insights)
+                       herramientas CRM de solo lectura (crm_tools) y chat
+                       (chat_store, chat_tools, chat_orchestrator)
   seed_demo_data.py    catálogo de demostración (datos ficticios)
   .env.example         plantilla de configuración
   requirements*.txt    dependencias (completo / core / dev)
@@ -308,5 +309,27 @@ frontend/
 .github/workflows/ci.yml   CI (GitHub Actions)
 docs/KNOWN_ISSUES.md       deuda técnica conocida
 ```
+
+### Chat IA
+
+`POST /chat` es un asistente **de solo lectura** sobre el CRM:
+
+1. `chat_store` carga la conversación del comercial autenticado (o la crea con el
+   primer turno; una ajena o inexistente da `404`), su cliente/contacto activo
+   revalidado y los últimos mensajes. La BD se cierra antes de llamar a OpenAI.
+2. `chat_orchestrator` ejecuta un único bucle acotado con OpenAI (tool calling con
+   esquemas estrictos): como máximo 4 llamadas al modelo, 4 herramientas por ronda,
+   8 por petición y un presupuesto de unos 30 s (orientativo, no un corte exacto: se
+   comprueba antes de cada llamada y ninguna recibe más tiempo, conexión incluida, del
+   que queda), con un solo reintento.
+3. `chat_tools` es la lista blanca: valida los argumentos con Pydantic, inyecta el
+   `salesperson_id` del JWT (el modelo nunca lo elige), solo acepta ids que el backend
+   ya conoce, ejecuta las herramientas de `crm_tools` (conexión SQLite `query_only`)
+   y recorta los resultados.
+4. El cliente/contacto activo se deriva de los resultados de las herramientas (nunca
+   del texto del modelo) y el turno se guarda en `chat_conversations` / `chat_messages`.
+
+Petición: `{"message", "conversation_id"?}`. Respuesta: `{"type": "answer" | "error",
+"content" (Markdown), "metadata": {"active_client", "active_contact"}, "conversation_id"}`.
 
 Autor: Juan Marín Escolano

@@ -1,23 +1,32 @@
 import json
 import numpy as np
 from db import get_connection
-from services.openai_client import create_embedding, get_openai_client
+from services.openai_client import create_embedding, get_openai_client, split_timeout
 
 client = get_openai_client()
+
+# Con timeout (chat), la conexión tiene su propio tope dentro de ese total
+EMBEDDING_CONNECT_TIMEOUT_S = 2.0
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 
-def semantic_search_activities(query: str, salesperson_id: int, client_id: int = None, top_k: int = 5):
+def semantic_search_activities(query: str, salesperson_id: int, client_id: int = None, top_k: int = 5,
+                               timeout: float | None = None):
+    """
+    timeout: segundos totales (conexión + lectura) que el chat (G.3) puede
+    dedicar al embedding: un solo intento, sin los reintentos del cliente
+    compartido. Sin timeout, la configuración común de G.1.
+    """
+    params = {"model": "text-embedding-3-small", "input": query}
+    api = client
+    if timeout is not None:
+        api = client.with_options(max_retries=0)
+        params["timeout"] = split_timeout(timeout, EMBEDDING_CONNECT_TIMEOUT_S)
 
     # Lanza AIServiceError si OpenAI falla
-    query_embedding = np.array(create_embedding(
-        client,
-        "semantic_search_activities",
-        model="text-embedding-3-small",
-        input=query
-    ))
+    query_embedding = np.array(create_embedding(api, "semantic_search_activities", **params))
 
     conn = get_connection()
     cursor = conn.cursor()

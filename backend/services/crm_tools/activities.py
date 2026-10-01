@@ -81,11 +81,13 @@ def list_activities(salesperson_id: int, *, client_id: int | None = None, contac
 
 
 def search_activities(query: str, salesperson_id: int, *, client_id: int | None = None,
-                      limit: int | None = None, now: datetime | None = None) -> dict:
+                      limit: int | None = None, now: datetime | None = None,
+                      timeout: float | None = None) -> dict:
     """
     Búsqueda semántica (text-embedding-3-small) entre las actividades del
     comercial, opcionalmente de un cliente. Lanza AIServiceError si falla OpenAI.
     score: similitud coseno con la consulta (mayor = más parecida).
+    timeout: segundos para el embedding en un solo intento (presupuesto del chat).
     """
     if not isinstance(query, str) or not query.strip():
         raise ToolArgumentError("query no puede estar vacía")
@@ -96,7 +98,7 @@ def search_activities(query: str, salesperson_id: int, *, client_id: int | None 
     now = resolve_now(now)
 
     matches = semantic_search_service.semantic_search_activities(
-        query, salesperson_id, client_id=client_id, top_k=limit
+        query, salesperson_id, client_id=client_id, top_k=limit, timeout=timeout
     )
     # Un embedding de norma cero da NaN en el coseno: no es un resultado
     scores = {m["activity_id"]: round(float(m["score"]), 4) for m in matches if math.isfinite(m["score"])}

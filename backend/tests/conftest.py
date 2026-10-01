@@ -15,8 +15,9 @@ Durante cada test:
   - los clientes OpenAI de los módulos se sustituyen por uno que falla y
     registra cualquier uso (los tests mockean las funciones donde se usan);
   - cualquier intento de red externa o de uso de OpenAI hace fallar el test,
-    aunque el código de producción capture la excepción;
-  - la memoria del chat (chat_memory) empieza vacía.
+    aunque el código de producción capture la excepción.
+El chat (G.3) guarda sus conversaciones en la SQLite del test: no hay estado
+en memoria que limpiar entre tests.
 """
 import hashlib
 import importlib.abc
@@ -28,6 +29,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,7 +175,7 @@ assert Path(db.DB_PATH).resolve() != REAL_DB.resolve(), "CRMVOICE_DB_PATH apunta
 
 import main  # noqa: E402
 from services import activities as activities_service  # noqa: E402
-from services import ai_router, chat_memory, openai_service, semantic_search_service  # noqa: E402
+from services import chat_orchestrator, openai_service, semantic_search_service  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from jose import jwt  # noqa: E402
 from core.security import create_access_token, hash_password  # noqa: E402
@@ -220,25 +222,21 @@ class _ForbiddenOpenAIClient:
 
 @pytest.fixture(autouse=True)
 def isolated_backend(tmp_path, monkeypatch):
-    """SQLite nueva por test, OpenAI prohibido, chat_memory vacía y cero red."""
+    """SQLite nueva por test, OpenAI prohibido y cero red."""
     test_db = tmp_path / "test.db"
     assert test_db.resolve() != REAL_DB.resolve()
     monkeypatch.setattr(db, "DB_PATH", test_db)
     monkeypatch.setenv("CRMVOICE_DB_PATH", str(test_db))
     db.init_db()
 
-    for module in (openai_service, ai_router, semantic_search_service):
+    for module in (openai_service, semantic_search_service, chat_orchestrator):
         monkeypatch.setattr(module, "client", _ForbiddenOpenAIClient(f"{module.__name__}.client"))
 
-    chat_memory._last_client_by_user.clear()
-    chat_memory._pending_intent_by_user.clear()
     BLOCKED_NETWORK.clear()
     BLOCKED_OPENAI.clear()
 
     yield test_db
 
-    chat_memory._last_client_by_user.clear()
-    chat_memory._pending_intent_by_user.clear()
     # Aunque producción capture la excepción (p. ej. el embedding en
     # create/update), el intento hace fallar el test.
     assert not BLOCKED_NETWORK, f"Intentos de red externa: {BLOCKED_NETWORK}"
@@ -456,3 +454,132 @@ def failing_embedding(monkeypatch):
     fake = FakeEmbedding(error=RuntimeError("OpenAI no disponible (simulado)"))
     monkeypatch.setattr(activities_service, "generate_embedding", fake)
     return fake
+
+
+# =====================================================================
+# Doble del modelo del chat (G.3): respuestas programadas, sin OpenAI
+# =====================================================================
+
+class ScriptedModel:
+    """
+    Sustituye a chat_orchestrator.client. Cada llamada consume un paso de
+    `steps` (si no quedan, responde `default`):
+      - str: respuesta final de texto;
+      - list[(nombre, args)]: tool calls (args: dict, o str en bruto);
+      - Exception: la lanza la API;
+      - callable(request) -> uno de los anteriores (o SimpleNamespace como mensaje).
+    Registra cada petición con una copia de sus mensajes.
+    """
+
+    def __init__(self):
+        self.steps = []
+        self.requests = []
+        self.default = "Respuesta simulada."
+        self.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=self._create)))
+
+    def script(self, *steps):
+        self.steps.extend(steps)
+        return self
+
+    def _create(self, **kwargs):
+        request = dict(kwargs, messages=[dict(m) for m in kwargs["messages"]])
+        self.requests.append(request)
+        step = self.steps.pop(0) if self.steps else self.default
+        if callable(step):
+            step = step(request)
+        if isinstance(step, BaseException):
+            raise step
+        if isinstance(step, SimpleNamespace):
+            message = step
+        elif isinstance(step, str):
+            message = SimpleNamespace(content=step, tool_calls=None, refusal=None)
+        else:
+            n = len(self.requests)
+            message = SimpleNamespace(content=None, refusal=None, tool_calls=[
+                SimpleNamespace(id=f"call_{n}_{i}", type="function", function=SimpleNamespace(
+                    name=name, arguments=args if isinstance(args, str) else json.dumps(args)))
+                for i, (name, args) in enumerate(step)
+            ])
+        return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+    # --- inspección ---
+    def tool_results(self, request_index):
+        """{tool_call_id: resultado} de los mensajes "tool" enviados en esa petición."""
+        return {m["tool_call_id"]: json.loads(m["content"])
+                for m in self.requests[request_index]["messages"] if m["role"] == "tool"}
+
+    def last_tool_results(self):
+        return list(self.tool_results(len(self.requests) - 1).values())
+
+    def sent_text(self, requests=None):
+        return "\n".join(str(m.get("content")) for r in (requests or self.requests) for m in r["messages"])
+
+
+@pytest.fixture
+def model(monkeypatch):
+    fake = ScriptedModel()
+    monkeypatch.setattr(chat_orchestrator, "client", fake.client)
+    return fake
+
+
+@pytest.fixture
+def chat_embeddings(monkeypatch):
+    """Embedding de la búsqueda semántica del chat (un solo intento, con timeout)."""
+    fake = SimpleNamespace(calls=[], options=[], vector=[1.0, 0.0, 0.0], error=None)
+
+    def create(**kwargs):
+        fake.calls.append(kwargs)
+        if fake.error:
+            raise fake.error
+        return SimpleNamespace(data=[SimpleNamespace(embedding=list(fake.vector))])
+
+    api = SimpleNamespace(embeddings=SimpleNamespace(create=create))
+
+    def with_options(**kwargs):
+        fake.options.append(kwargs)
+        return api
+
+    monkeypatch.setattr(semantic_search_service, "client",
+                        SimpleNamespace(embeddings=api.embeddings, with_options=with_options))
+    return fake
+
+
+CHAT_NOW = datetime(2026, 10, 7, 12, 0)   # miércoles
+CHAT_A_ONLY = "CHAT_A_ONLY_3D9E"
+CHAT_B_ONLY = "CHAT_B_ONLY_6F1A"
+
+
+@pytest.fixture
+def chat_crm(factory, user_a, user_b):
+    """Catálogo global + actividades marcadas de A y B (para el chat)."""
+    rivera = factory.client("Rivera Industrial S.L.", alias="Rivera")
+    sierra = factory.client("Sierra Norte S.A.", alias="Sierra Norte")
+    nebula = factory.client("Nebula Logística S.L.", alias="Nebula")
+    marta_lopez = factory.contact(rivera, "Marta López")
+    marta_ruiz = factory.contact(sierra, "Marta Ruiz")
+    pablo = factory.contact(nebula, "Pablo Gil")
+    monitor = factory.product("Monitor Vela 27", 300)
+    silla = factory.product("Silla Ergonómica", 150)
+    a, b = user_a["id"], user_b["id"]
+
+    def act(owner, client, when, *, contact=None, products=()):
+        tag = CHAT_A_ONLY if owner == a else CHAT_B_ONLY
+        return factory.activity(owner, client, contact_id=contact, datetime_iso=when,
+                                comentario=f"{tag} {when}", products=[(p, "raw") for p in products],
+                                embedding=[1.0, 0.0, 0.0])
+
+    act(a, rivera, "2026-10-01T10:00:00", products=[monitor])
+    act(a, rivera, "2026-10-08T09:30:00", contact=marta_lopez)
+    act(a, nebula, "2026-09-20T10:00:00", contact=pablo)
+    act(b, rivera, "2026-10-02T10:00:00", contact=marta_lopez, products=[silla])
+    act(b, nebula, "2026-10-03T10:00:00")
+
+    conn = db.get_connection()
+    invoice = conn.execute("INSERT INTO invoices (fecha, client_id) VALUES ('2026-08-01', ?)", (rivera,)).lastrowid
+    conn.execute("INSERT INTO invoice_lines (invoice_id, product_id, cantidad, precio, total) VALUES (?, ?, 2, 300, 600)",
+                 (invoice, monitor))
+    conn.commit()
+    conn.close()
+
+    return SimpleNamespace(a=a, b=b, rivera=rivera, sierra=sierra, nebula=nebula, marta_lopez=marta_lopez,
+                           marta_ruiz=marta_ruiz, pablo=pablo, monitor=monitor, silla=silla)

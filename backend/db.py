@@ -256,5 +256,47 @@ def init_db():
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_lines_invoice ON invoice_lines(invoice_id);")
 
+    # =====================================================
+    # CHAT (G.3): conversaciones persistentes por comercial
+    # =====================================================
+
+    # El cliente/contacto activo es estado de confianza que fija el backend
+    # a partir de resultados de herramientas; si se borra, queda en NULL.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            salesperson_id INTEGER NOT NULL,
+            active_client_id INTEGER,
+            active_contact_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (salesperson_id) REFERENCES salespeople(id) ON DELETE CASCADE,
+            FOREIGN KEY (active_client_id) REFERENCES clients(id) ON DELETE SET NULL,
+            FOREIGN KEY (active_contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_conversations_salesperson
+        ON chat_conversations(salesperson_id);
+    """)
+
+    # Solo turnos user/assistant. metadata (JSON, assistant): herramientas
+    # usadas y error; nunca copias de los resultados del CRM.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            metadata TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation
+        ON chat_messages(conversation_id, id);
+    """)
+
     conn.commit()
     conn.close()

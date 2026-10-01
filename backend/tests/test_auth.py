@@ -201,7 +201,6 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/activity-types"),
     ("POST", "/semantic-search"),
     ("GET", "/client-context/1"),
-    ("POST", "/prepare-meeting"),
     ("POST", "/chat"),
 ]
 

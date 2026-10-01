@@ -8,6 +8,7 @@ y facturación son globales por diseño.
 """
 import hashlib
 import json
+import sqlite3
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -491,3 +492,50 @@ def test_resultados_json_serializables_y_bd_intacta(world, embeddings, isolated_
 
     json.dumps(results, allow_nan=False)  # sin sqlite3.Row, numpy ni NaN
     assert hashlib.sha256(isolated_backend.read_bytes()).hexdigest() == before
+
+
+# =====================================================================
+# G.3: solo lectura a nivel de BD y timeout del embedding para el chat
+# =====================================================================
+
+def test_la_conexion_de_las_herramientas_rechaza_escrituras(world):
+    from services.crm_tools._common import open_connection
+
+    with open_connection() as conn:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("INSERT INTO clients (razon_social) VALUES ('Escritura prohibida')")
+        assert conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 5  # leer sí
+
+    # Solo esa conexión: el resto de la aplicación sigue pudiendo escribir
+    conn = db.get_connection()
+    try:
+        assert conn.execute("PRAGMA query_only").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_busqueda_semantica_con_timeout_un_solo_intento(world, monkeypatch):
+    calls, options = [], []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(embedding=[1.0, 0.0, 0.0])])
+
+    single_attempt = SimpleNamespace(embeddings=SimpleNamespace(create=create))
+
+    def with_options(**kwargs):
+        options.append(kwargs)
+        return single_attempt
+
+    monkeypatch.setattr(semantic_search_service, "client", SimpleNamespace(with_options=with_options))
+
+    result = crm_tools.search_activities("visita", world.a, timeout=4.5, now=NOW)
+
+    assert result["found"] is True
+    assert options == [{"max_retries": 0}]
+    assert [{k: v for k, v in c.items() if k != "timeout"} for c in calls] == [
+        {"model": "text-embedding-3-small", "input": "visita"}]
+    timeout = calls[0]["timeout"]
+    # 4.5 s en total: conexión acotada (min(2, total/3)) y el resto para leer, sin sumarse
+    assert (timeout.connect, timeout.read) == (1.5, 3.0)
+    assert timeout.connect + timeout.read == 4.5

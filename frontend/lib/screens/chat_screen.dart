@@ -98,6 +98,9 @@ class _ChatContentState extends State<ChatContent> {
 
   bool _loading = false;
 
+  // Conversación del backend (G.3): solo en memoria, dura lo que esta pantalla
+  int? _conversationId;
+
   String? _activeClient;
   String? _pendingIntent;
 
@@ -117,6 +120,8 @@ class _ChatContentState extends State<ChatContent> {
   }
 
  Future<void> _sendMessage() async {
+    // Sin doble envío: dos peticiones a la vez crearían dos conversaciones
+    if (_loading) return;
 
     String text = _controller.text.trim();
 
@@ -151,13 +156,18 @@ class _ChatContentState extends State<ChatContent> {
         Uri.parse("$baseUrl/chat"),
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "Bearer $token"
+          if (token != null) "Authorization": "Bearer $token",
         },
-        body: jsonEncode({"message": text}),
+        body: jsonEncode({
+          "message": text,
+          if (_conversationId != null) "conversation_id": _conversationId,
+        }),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        final conversationId = data["conversation_id"];
+        if (conversationId is int) _conversationId = conversationId;
 
         setState(() {
           _messages.add(
@@ -171,6 +181,17 @@ class _ChatContentState extends State<ChatContent> {
               results: data["metadata"]?["results"],
               billing: data["metadata"]?["billing"],
               summary: data["metadata"]?["summary"],
+            ),
+          );
+        });
+      } else if (response.statusCode == 404) {
+        // La conversación ya no existe (o no es de este usuario): se empieza una nueva
+        _conversationId = null;
+        setState(() {
+          _messages.add(
+            ChatMessage(
+              content: "La conversación ya no está disponible. Vuelve a escribir tu pregunta.",
+              isUser: false,
             ),
           );
         });

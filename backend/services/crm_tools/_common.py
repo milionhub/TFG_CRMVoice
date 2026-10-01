@@ -50,8 +50,14 @@ def parse_date(value, name: str) -> date | None:
 
 
 def open_connection():
-    """Conexión de solo consulta que se cierra siempre (with open_connection() as conn)."""
-    return closing(get_connection())
+    """
+    Conexión de solo consulta que se cierra siempre (with open_connection() as conn).
+    PRAGMA query_only: SQLite rechaza cualquier escritura por esta conexión,
+    así que las herramientas son de solo lectura también a nivel de BD.
+    """
+    conn = get_connection()
+    conn.execute("PRAGMA query_only = ON")
+    return closing(conn)
 
 
 # --- Fechas -----------------------------------------------------------
