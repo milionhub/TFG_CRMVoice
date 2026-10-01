@@ -13,6 +13,11 @@ ciegas el cliente/contacto activo como filtro:
 - contextual: se refiere al contexto ("ellos", "él", "sus", "¿y mañana?") o
               nombra la entidad activa.
 
+Además, mentions_period() detecta un periodo relativo ("hoy", "ayer", "mañana",
+"la semana pasada"...): sin contexto activo, el orquestador exige consultar una
+herramienta antes de responder (G.6: el modelo contestaba "no tienes nada
+mañana" deduciéndolo de respuestas anteriores, o preguntaba sin necesidad).
+
 Con contexto activo y sin ninguna de estas señales, una consulta de
 actividades acotada SOLO con el id del estado es ambigua: chat_tools no la
 ejecuta y pide aclarar (ver chat_tools.dispatch).
@@ -37,6 +42,12 @@ _CONTEXTUAL = re.compile(
     r"\b(?:ellos|ellas|ella|él|su|sus|les|ese cliente|este cliente|esa empresa|esta empresa"
     r"|ese contacto|esa persona)\b")
 
+# Periodos relativos de agenda, sobre el texto normalizado ("mañana" -> "manana")
+_PERIOD = re.compile(
+    r"\b(?:hoy|ayer|anteayer|manana|pasado manana|esta semana|semana pasada|semana anterior"
+    r"|semana que viene|proxima semana|semana proxima|semana siguiente|este mes|mes pasado"
+    r"|mes que viene|proximo mes)\b")
+
 _MIN_NAME_WORD = 3
 
 
@@ -58,6 +69,11 @@ class TurnScope:
 
 def wants_clear(message: str) -> bool:
     return bool(_CLEAR.search(normalize_text(message)))
+
+
+def mentions_period(message: str) -> bool:
+    """El mensaje nombra un periodo relativo de agenda ("¿qué hice ayer?", "¿qué tengo mañana?")."""
+    return bool(_PERIOD.search(normalize_text(message)))
 
 
 def _names_active_entity(words: set[str], state: ChatState) -> bool:

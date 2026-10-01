@@ -575,3 +575,20 @@ def test_herramientas_de_un_cliente_no_llevan_guarda(chat_crm):
     ctx = scoped_ctx(chat_crm, None)
     assert call("get_client_products", {"client_id": chat_crm.rivera}, ctx).status == "ok"
     assert call("get_client_overview", {"client_id": chat_crm.rivera}, ctx).status == "ok"
+
+
+# =====================================================================
+# G.6: find_entities solo identifica (el modelo leía "candidates" vacío como
+# "el cliente no tiene contactos" y negaba actividades y facturación)
+# =====================================================================
+
+def test_find_entities_solo_identifica(chat_crm):
+    ctx = make_ctx(chat_crm.a)
+
+    found = call("find_entities", {"client_name": "Rivera"}, ctx)
+
+    assert found.result["client"]["id"] == chat_crm.rivera
+    assert found.result["note"] == chat_tools.FIND_ENTITIES_NOTE
+    assert "contact.candidates vacío NO significa que no tenga contactos" in found.result["note"]
+    schema = next(s for s in chat_tools.TOOL_SCHEMAS if s["function"]["name"] == "find_entities")
+    assert "Solo identifica" in schema["function"]["description"]

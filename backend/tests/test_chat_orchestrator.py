@@ -430,3 +430,40 @@ def test_politica_de_respuesta_en_el_prompt():
     ]:
         assert fragment in prompt, fragment
     assert len(prompt) < 6500                               # sigue siendo un prompt acotado (~1,5k tokens)
+
+
+# =====================================================================
+# G.6: una pregunta de periodo sin contexto activo no se responde de memoria
+# =====================================================================
+
+def test_periodo_sin_contexto_exige_herramienta_en_la_primera_llamada(chat_crm, model, clock):
+    model.script([("crm_rankings", {"metric": "billing", "limit": 1})], "fin")
+
+    result = run(chat_crm.a, clock, "¿Qué tengo mañana?",
+                 history=[{"role": "user", "content": "¿Qué tengo hoy?"},
+                          {"role": "assistant", "content": "Hoy no tienes actividades."}])
+
+    assert [r["tool_choice"] for r in model.requests] == ["required", "auto"]
+    assert result.answer == "fin"
+
+
+def test_periodo_con_contexto_activo_deja_preguntar_el_alcance(chat_crm, model, clock):
+    model.script("¿Te refieres a Rivera o a todas tus actividades?")
+
+    result = run(chat_crm.a, clock, "¿Qué hice la semana pasada?", state=rivera_state(chat_crm))
+
+    assert [r["tool_choice"] for r in model.requests] == ["auto"]
+    assert result.answer.startswith("¿Te refieres")
+
+
+def test_sin_periodo_la_herramienta_no_es_obligatoria(chat_crm, model, clock):
+    model.script("Hola")
+
+    run(chat_crm.a, clock, "hola")
+
+    assert model.requests[0]["tool_choice"] == "auto"
+
+
+def test_el_prompt_prohibe_atribuir_actividades_a_otro_comercial():
+    assert "No puedes ver las actividades de otros comerciales" in orch.SYSTEM_PROMPT
+    assert "nunca presentes las actividades del usuario como si fueran de otra persona" in orch.SYSTEM_PROMPT

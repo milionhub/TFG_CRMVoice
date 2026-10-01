@@ -5,7 +5,7 @@ clasificar intenciones: lo demás lo entiende el modelo.
 """
 import pytest
 
-from services.chat_scope import analyze, wants_clear
+from services.chat_scope import analyze, mentions_period, wants_clear
 from services.chat_store import ChatState
 
 COSTA = ChatState(client={"id": 4, "name": "Diputacion Costa Verde"})
@@ -60,3 +60,31 @@ def test_sin_senal_de_alcance(message):
 
 def test_sin_contexto_activo_el_nombre_no_cuenta():
     assert analyze("¿Qué hice con Costa?", ChatState()).kind is None
+
+
+# =====================================================================
+# G.6: periodo relativo (sin contexto activo, el orquestador exige consultar)
+# =====================================================================
+
+@pytest.mark.parametrize("message", [
+    "¿Qué hice ayer?",
+    "¿Qué tengo hoy?",
+    "¿Qué tengo mañana?",
+    "¿Qué hice la semana pasada?",
+    "¿Qué tengo la semana que viene?",
+    "¿Y la próxima semana?",
+    "Olvida Costa. ¿Qué hice ayer?",
+    "¿Qué debería priorizar mañana y por qué?",
+])
+def test_periodo_relativo(message):
+    assert mentions_period(message)
+
+
+@pytest.mark.parametrize("message", [
+    "¿Cómo va Rivera?",
+    "¿Con qué clientes he hablado del Ratón Faro?",
+    "¿Qué hice el 22 de mayo?",
+    "Olvida ese cliente",
+])
+def test_sin_periodo_relativo(message):
+    assert not mentions_period(message)

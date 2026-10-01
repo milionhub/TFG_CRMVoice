@@ -45,6 +45,14 @@ activo: s he hablado…"), la conversación sobrevive al cambio escritorio ↔ m
 usa un tema claro propio del chat (sin texto ilegible sobre el tema oscuro) y se eliminaron
 la intención pendiente, las tarjetas antiguas y los botones de acciones sugeridas.
 
+G.6 (aceptación final con OpenAI real sobre una copia de la base) cerró tres fallos
+reproducibles: tras identificar un cliente con `find_entities` el modelo negaba que tuviera
+contactos, actividades o facturación (el resultado ahora dice que solo identifica); una pregunta
+de periodo sin contexto activo ("¿qué tengo mañana?") se respondía sin consultar o con una
+aclaración innecesaria (ahora la primera llamada exige una herramienta); y "las actividades del
+comercial con id 2" mostraba las del propio usuario atribuyéndoselas a otro (nunca hubo acceso a
+datos ajenos; el prompt lo prohíbe ahora de forma explícita).
+
 | ID | Resumen | Severidad |
 |---|---|---|
 | B4 | `build_context` (solo `GET /client-context`) siempre devuelve un dict: un cliente inexistente responde 200 con `client_name=None` en vez de 404 | MINOR |
@@ -58,6 +66,8 @@ la intención pendiente, las tarjetas antiguas y los botones de acciones sugerid
 | — | Chat (frontend, tras G.5): el `conversation_id` y el contexto solo viven en memoria (no hay historial ni se recupera la conversación al recargar); el chat gestiona su propio 401 con "Iniciar sesión", pero el resto de la app sigue sin manejo global (FE-02); el tema claro es local al chat (la app sigue con `ThemeData.dark()`); `flutter_markdown` 0.6.x figura como descontinuado en pub.dev (sustituto: `flutter_markdown_plus`) | MINOR |
 | — | Chat: el timeout de 45 s del frontend (o un corte de red) no cancela la petición; si el backend acaba y guarda el turno, "Reintentar" con el mismo `conversation_id` lo repite y el historial queda [P, R1, P, R2] (R1 y su metadata nunca se mostraron; la siguiente respuesta trae el contexto bueno). Solo lectura, sin efectos laterales y requiere > 45 s. Arreglarlo exige idempotencia o cancelación en el backend (fuera de G.5) | MINOR |
 | — | Chat (Markdown): las imágenes nunca se cargan (se muestra su texto alternativo), pero `flutter_markdown` 0.6.x hace `Uri.parse` del src antes de llamar al `imageBuilder`: una URL de imagen mal formada (p. ej. `http://[::1`) hace fallar el render de ESE mensaje (sin petición de red). Evitarlo exige un builder propio para `img` con `package:markdown` como dependencia directa; revisarlo al migrar a `flutter_markdown_plus` | MINOR |
+| — | Chat (G.6): con un periodo relativo y sin contexto activo la primera llamada exige una herramienta, también en una charla ("¿qué tal estás hoy?" consulta la agenda de hoy y la menciona). La detección de periodos es una lista fija (hoy, ayer, mañana, semanas y meses relativos) | MINOR |
+| — | Chat (G.6, variación del modelo): a veces responde una continuación con datos de la respuesta anterior sin volver a consultar ("¿y con quién debería hablar allí?" tras preparar la reunión: datos correctos, pero sin herramienta en ese turno), usa alguna valoración prohibida por el prompt ("alto potencial") o termina con una frase de relleno | MINOR |
 
 ## H — Voz / actividades V2
 

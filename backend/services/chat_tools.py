@@ -272,6 +272,11 @@ def _not_found(result):
     return {"found": False}
 
 
+FIND_ENTITIES_NOTE = ("Solo identifica a quién se refiere el usuario: no contiene actividades, contactos del "
+                      "cliente ni facturación (contact.candidates vacío NO significa que no tenga contactos). "
+                      "Para hablar del cliente o contacto, consulta después la herramienta de datos que corresponda.")
+
+
 def shape_find_entities(r):
     client, contact = r["client"], r["contact"]
     # Con un conflicto (contacto que no es de ese cliente) no sale ningún id:
@@ -283,6 +288,8 @@ def shape_find_entities(r):
 
     return {
         "found": r["found"],
+        # G.6: el modelo leía contact.candidates vacío como "el cliente no tiene contactos"
+        "note": FIND_ENTITIES_NOTE,
         # id solo si está resuelto; los candidatos van SIN id (no son de confianza)
         "client": {"id": trusted(client["id"]), "name": client["name"], "said": client["mention"],
                    "status": client["status"], "candidates": [c["name"] for c in client["candidates"]]},
@@ -495,7 +502,8 @@ _TOOLS = (
         "cliente o contacto, haya o no cliente activo, y antes de cualquier herramienta que necesite un id. "
         "status: exact/fuzzy/inherited = resuelto; partial = resuelto por coincidencia parcial de palabras "
         "(di cómo lo has entendido); ambiguous = varios candidatos (pregunta al usuario); unresolved = no existe; "
-        "conflict = el contacto no es de ese cliente.",
+        "conflict = el contacto no es de ese cliente. Solo identifica: no devuelve actividades, contactos del "
+        "cliente ni facturación.",
         FindEntitiesArgs,
         lambda a, ctx: crm_tools.find_entities(None, ctx.salesperson_id, client_name=a.client_name,
                                                contact_name=a.contact_name),

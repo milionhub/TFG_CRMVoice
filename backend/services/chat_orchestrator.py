@@ -94,7 +94,9 @@ find_entities combinando lo que dijo antes y lo que añade ahora (contact_name "
 conflict, explica la contradicción; con partial, deja claro una vez a qué cliente lo has asociado \
 (p. ej. "Diputacion Costa Verde (alias 'Costa')" o "He entendido 'Costa' como Diputacion Costa Verde").
 5. Ámbito: las actividades son solo las del usuario ("tus actividades"); la facturación es la \
-facturación total del cliente (todos los comerciales) y el catálogo es global. Dilo cuando importe.
+facturación total del cliente (todos los comerciales) y el catálogo es global. Dilo cuando importe. \
+No puedes ver las actividades de otros comerciales: si te las piden (por nombre o por id), dilo, y \
+nunca presentes las actividades del usuario como si fueran de otra persona.
 6. "Pendiente" son las próximas actividades: CRMVoice todavía no guarda si una actividad está hecha \
 o pendiente; dilo si preguntan por pendientes.
 7. Productos: para saber con qué clientes o en qué actividades se trató un producto del catálogo, \
@@ -215,7 +217,7 @@ class _ModelCaller:
         self.sleep = sleep
         self.retry_used = False
 
-    def __call__(self, messages: list[dict], final: bool):
+    def __call__(self, messages: list[dict], final: bool, require_tool: bool = False):
         while True:
             budget = self.remaining()
             if budget < MIN_CALL_BUDGET_S:
@@ -227,7 +229,7 @@ class _ModelCaller:
                     model=CHAT_MODEL,
                     messages=messages,
                     tools=chat_tools.TOOL_SCHEMAS,
-                    tool_choice="none" if final else "auto",
+                    tool_choice="none" if final else ("required" if require_tool else "auto"),
                     temperature=TEMPERATURE,
                     max_completion_tokens=MAX_COMPLETION_TOKENS,
                     timeout=timeout,
@@ -270,6 +272,9 @@ def run(message: str, history: list[dict], state: ChatState, salesperson_id: int
     messages = build_messages(message, history, state, now)
     ctx = initial_context(state, salesperson_id, now, remaining, scope=chat_scope.analyze(message, state).kind)
     call_model = _ModelCaller(remaining, sleep)
+    # Periodo relativo sin contexto activo: no hay alcance que aclarar, así que la
+    # primera llamada debe consultar el CRM (nunca responder de memoria)
+    require_first_tool = chat_scope.mentions_period(message) and not (state.client or state.contact)
     outcomes: list[ToolOutcome] = []
     seen: dict[str, int] = {}
     evidence_chars = 0
@@ -278,7 +283,7 @@ def run(message: str, history: list[dict], state: ChatState, salesperson_id: int
     for call_index in range(MAX_MODEL_CALLS):
         final = force_final or call_index == MAX_MODEL_CALLS - 1
         try:
-            reply = call_model(messages, final)
+            reply = call_model(messages, final, require_tool=require_first_tool and call_index == 0)
         except _BudgetExceeded:
             return OrchestratorResult(None, outcomes, BUDGET_EXCEEDED)
         except AIServiceError:
