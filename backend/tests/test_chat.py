@@ -601,7 +601,7 @@ def test_ninguna_conexion_abierta_mientras_se_espera_al_modelo(client, user_a, c
 # =====================================================================
 
 def test_actividad_incoherente_no_cambia_el_cliente_activo(client, user_a, chat_crm, model, factory):
-    factory.activity(chat_crm.a, chat_crm.rivera, contact_id=chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
+    factory.legacy_incoherent_activity(chat_crm.a, chat_crm.rivera, chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
     model.script([("list_activities", {"temporal_scope": "past"})],
                  [("list_activities", {"contact_id": chat_crm.pablo})], "Tienes una actividad con Pablo.")
 

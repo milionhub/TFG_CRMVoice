@@ -176,6 +176,7 @@ assert Path(db.DB_PATH).resolve() != REAL_DB.resolve(), "CRMVOICE_DB_PATH apunta
 import main  # noqa: E402
 from services import activities as activities_service  # noqa: E402
 from services import chat_orchestrator, openai_service, semantic_search_service  # noqa: E402
+from services.actions import interpreter as action_interpreter  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from jose import jwt  # noqa: E402
 from core.security import create_access_token, hash_password  # noqa: E402
@@ -229,7 +230,7 @@ def isolated_backend(tmp_path, monkeypatch):
     monkeypatch.setenv("CRMVOICE_DB_PATH", str(test_db))
     db.init_db()
 
-    for module in (openai_service, semantic_search_service, chat_orchestrator):
+    for module in (openai_service, semantic_search_service, chat_orchestrator, action_interpreter):
         monkeypatch.setattr(module, "client", _ForbiddenOpenAIClient(f"{module.__name__}.client"))
 
     BLOCKED_NETWORK.clear()
@@ -376,6 +377,24 @@ class Factory:
             )
         return activity_id
 
+    def legacy_incoherent_activity(self, owner_id, client_id, contact_id, **kwargs):
+        """
+        Actividad con un contacto de OTRO cliente, como las que permitía el alta
+        anterior a H.2. Los triggers de m005 ya no dejan crearla directamente:
+        se mueve el contacto al cliente, se inserta y se devuelve a su cliente.
+        """
+        conn = db.get_connection()
+        original = conn.execute("SELECT client_id FROM contacts WHERE id = ?", (contact_id,)).fetchone()[0]
+        conn.execute("UPDATE contacts SET client_id = ? WHERE id = ?", (client_id, contact_id))
+        conn.commit()
+        conn.close()
+        activity_id = self.activity(owner_id, client_id, contact_id=contact_id, **kwargs)
+        conn = db.get_connection()
+        conn.execute("UPDATE contacts SET client_id = ? WHERE id = ?", (original, contact_id))
+        conn.commit()
+        conn.close()
+        return activity_id
+
 
 @pytest.fixture
 def factory():
@@ -440,12 +459,9 @@ class FakeEmbedding:
 
 @pytest.fixture
 def fake_embedding(monkeypatch):
-    """Embedding que funciona. Desactiva además la comprobación de duplicados (B2)."""
+    """Embedding que funciona (se genera después de guardar, best-effort)."""
     fake = FakeEmbedding()
     monkeypatch.setattr(activities_service, "generate_embedding", fake)
-    # main importa is_duplicate_activity de openai_service dentro de la función:
-    # se parchea en openai_service para que estos tests no dependan de B2.
-    monkeypatch.setattr(openai_service, "is_duplicate_activity", lambda *args, **kwargs: (False, 0))
     return fake
 
 
@@ -583,3 +599,101 @@ def chat_crm(factory, user_a, user_b):
 
     return SimpleNamespace(a=a, b=b, rivera=rivera, sierra=sierra, nebula=nebula, marta_lopez=marta_lopez,
                            marta_ruiz=marta_ruiz, pablo=pablo, monitor=monitor, silla=silla)
+
+
+# =====================================================================
+# H.2: servicios de escritura y Action Engine
+# =====================================================================
+
+H2_NOW = datetime(2026, 10, 1, 9, 0, 0)   # jueves
+
+
+@pytest.fixture
+def frozen_now(monkeypatch):
+    """Hora fija en todos los módulos que leen el reloj de H.2 (writes, actions y la ruta de actividades)."""
+    import api.routers.activities as activities_router
+    import services.actions as actions_package
+    import services.writes as writes_package
+    from services.actions import drafts, executor
+    from services.writes import activities, clients, contacts, sales
+
+    for module in (writes_package, activities, clients, contacts, sales, actions_package, drafts, executor,
+                   activities_router):
+        monkeypatch.setattr(module, "current_time", lambda: H2_NOW)
+    return H2_NOW
+
+
+@pytest.fixture
+def h2_crm(factory, user_a, user_b):
+    """Catálogo compartido parecido al real (nombres, alias, dos "Marta", dos "Carlos")."""
+    conn = db.get_connection()
+    group = conn.execute("INSERT INTO client_groups (name) VALUES ('Empresa privada')").lastrowid
+    conn.commit()
+    conn.close()
+    rivera = factory.client("Tecnologia Rivera SL", alias="Rivera")
+    costa = factory.client("Diputacion Costa Verde", alias="Costa Verde")
+    sanlucas = factory.client("Instituto San Lucas", alias="San Lucas")
+    return SimpleNamespace(
+        a=user_a["id"], b=user_b["id"], group=group,
+        rivera=rivera, costa=costa, sanlucas=sanlucas,
+        marta=factory.contact(rivera, "Marta Lopez"),
+        carlos_p=factory.contact(rivera, "Carlos Perez"),
+        marta_r=factory.contact(costa, "Marta Ruiz"),
+        laura=factory.contact(costa, "Laura Diaz"),
+        carlos_r=factory.contact(sanlucas, "Carlos Ruiz"),
+        luna=factory.product("Portatil Luna 13", 790.0, aliases=["Luna 13"]),
+        prado=factory.product("Portatil Prado 14", 980.0),
+        monitor=factory.product("Monitor Mar 24", 175.0),
+        raton=factory.product("Raton Faro", 22.0),
+        llamada=factory.activity_type_id("Realizar llamada de seguimiento"),
+        reunion=factory.activity_type_id("Concertar reunión"),
+        presupuesto=factory.activity_type_id("Enviar presupuesto"),
+    )
+
+
+BUSINESS_TABLES = ("clients", "contacts", "activities", "activity_products", "sales")
+
+
+@pytest.fixture
+def business_counts(dbq):
+    """Recuento de las tablas de negocio: para comprobar que nada se escribe antes de confirmar."""
+    return lambda: {t: dbq.one(f"SELECT COUNT(*) AS n FROM {t}")["n"] for t in BUSINESS_TABLES}
+
+
+def make_interpretation(**fields):
+    """Interpretation válida con todo vacío salvo lo indicado (lo que devolvería el modelo)."""
+    from schemas.actions import Interpretation
+
+    base = dict(action_type="create_activity", client_name=None, contact_name=None, activity_type=None, date=None,
+                time=None, status=None, products=[], comment=None, new_client=None, new_contact=None,
+                sale_lines=[], sale_date=None, unsupported_reason=None)
+    base.update(fields)
+    return Interpretation.model_validate(base)
+
+
+class ScriptedInterpreter:
+    """Sustituye a services.actions.interpreter.interpret: devuelve (o lanza) lo programado."""
+
+    def __init__(self):
+        self.results = []
+        self.calls = []
+
+    def script(self, *results):
+        self.results.extend(results)
+        return self
+
+    def __call__(self, text, now, **kwargs):
+        self.calls.append((text, now))
+        result = self.results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+@pytest.fixture
+def interpreter(monkeypatch):
+    from services.actions import interpreter as interpreter_module
+
+    fake = ScriptedInterpreter()
+    monkeypatch.setattr(interpreter_module, "interpret", fake)
+    return fake

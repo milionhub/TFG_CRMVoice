@@ -289,14 +289,17 @@ backend/
   config.py            lectura de la configuración (.env)
   env_check.py         validación de la configuración al arrancar
   db.py                SQLite: conexión, tablas y tipos de actividad
+  migrations.py        migraciones versionadas (PRAGMA user_version)
   api/                 capa HTTP: routers por dominio (auth, crm, activities,
-                       voice, chat, system) y dependencias (usuario del JWT)
+                       sales, actions, voice, chat, system), dependencias
+                       (usuario del JWT) y errores de dominio -> HTTP
   schemas/             modelos Pydantic de peticiones y respuestas
-  core/security.py     contraseñas (bcrypt) y JWT
+  core/                contraseñas (bcrypt), JWT y formatos (importes, fechas)
   services/            lógica sin FastAPI: cuentas, catálogo, actividades,
                        voz (Whisper, análisis de texto, fechas, entidades),
-                       herramientas CRM de solo lectura (crm_tools) y chat
-                       (chat_store, chat_tools, chat_orchestrator)
+                       herramientas CRM de solo lectura (crm_tools), chat
+                       (chat_store, chat_tools, chat_orchestrator), escrituras
+                       del CRM (writes) y Action Engine (actions)
   seed_demo_data.py    catálogo de demostración (datos ficticios)
   .env.example         plantilla de configuración
   requirements*.txt    dependencias (completo / core / dev)
@@ -355,5 +358,28 @@ Qué entiende (G.4), siempre con datos de las herramientas y sin escribir nada e
 
 Petición: `{"message", "conversation_id"?}`. Respuesta: `{"type": "answer" | "error",
 "content" (Markdown), "metadata": {"active_client", "active_contact"}, "conversation_id"}`.
+
+### Escrituras y Action Engine (H.2)
+
+Todas las escrituras del CRM pasan por `services/writes` (clientes, contactos,
+actividades y ventas): validación de negocio, duplicados y coherencia cliente↔contacto
+en un solo sitio, que usan igual los formularios (`POST/PUT /clients`, `/contacts`,
+`/activities`, `/sales`, `PATCH /activities/{id}` para el estado) y el Action Engine.
+Clientes y contactos son compartidos; actividades y ventas, de cada comercial.
+
+El Action Engine (`/actions`) convierte un texto o un audio en una acción que el usuario
+confirma (crear actividad, cliente, contacto o venta):
+
+1. `POST /actions/interpret` (texto) o `/actions/interpret-audio` (Whisper): el
+   intérprete (`gpt-4o-mini`, Structured Outputs con esquema estricto) solo extrae
+   **menciones**; nunca ids ni escrituras. Lo que no es una de las cuatro acciones
+   (consultas, borrar, completar...) se rechaza sin crear nada.
+2. El resolvedor determinista (el mismo de la voz y el chat) pone los ids y marca lo
+   dudoso: parecidos visibles, ambigüedades con candidatos, conflictos sin corregir solos.
+3. Se guarda un **borrador** del comercial (id aleatorio, revisión, caduca en 30 min) que
+   se puede editar (`PATCH`, revalidado) o cancelar.
+4. `POST /actions/{id}/confirm {"revision"}` revalida contra la BD actual y escribe con
+   los servicios de escritura en la misma transacción que marca el borrador como
+   ejecutado. No acepta datos: solo la revisión vista. Confirmar dos veces no duplica.
 
 Autor: Juan Marín Escolano

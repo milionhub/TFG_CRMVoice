@@ -1,9 +1,12 @@
 """
-ACTIVITIES (P0): create / read / update / delete y aislamiento entre usuarios.
+ACTIVITIES (P0): create / read / update / delete y aislamiento entre usuarios,
+con el formato ANTERIOR de la app Flutter (api/legacy_activity_adapter.py).
+El contrato V2 (ActivityIn, estado, PATCH) está en test_writes_activities.py.
 
-OpenAI nunca se llama: services.activities.generate_embedding se sustituye (fake_embedding /
-failing_embedding) y la comprobación de duplicados (B2) se desactiva en los
-tests de creación para que no dependan de ella. B2 queda pendiente (D.x).
+OpenAI nunca se llama: services.activities.generate_embedding se sustituye
+(fake_embedding / failing_embedding); el embedding se genera después de
+guardar. H.2: los errores 422/409 traen "detail" + "issues"; los duplicados
+son deterministas (B2) y el tipo de actividad es obligatorio.
 """
 import json
 
@@ -167,14 +170,15 @@ def test_create_el_propietario_sale_del_token_no_del_body(client, user_a, user_b
 # referencia inexistente (FK) se detecta al insertar y se deshace todo.
 # ---------------------------------------------------------------------
 
+# H.2: (overrides, campo del issue, código). El tipo de actividad es obligatorio
+# (antes valía "contacto o tipo") y una referencia inexistente se nombra.
 INVALID_CREATE_CASES = {
-    "sin_cliente": ({"cliente_id": None}, "Cliente obligatorio"),
-    "sin_contacto_ni_tipo": ({"contacto_id": None, "activity_type_id": None},
-                             "Debe existir contacto o tipo de actividad"),
+    "sin_cliente": ({"cliente_id": None}, "client", "missing"),
+    "sin_tipo": ({"activity_type_id": None}, "activity_type", "missing"),
+    "sin_contacto_ni_tipo": ({"contacto_id": None, "activity_type_id": None}, "activity_type", "missing"),
     "producto_sin_product_id": ({"products_detected": [{"product_raw": "Monitor", "confidence": 90}]},
-                                "Cada producto debe indicar su product_id"),
-    "cliente_inexistente": ({"cliente_id": 99999},
-                            "Cliente, contacto, tipo de actividad o producto inexistente"),
+                                "products", "invalid"),
+    "cliente_inexistente": ({"cliente_id": 99999}, "client", "not_found"),
 }
 
 
@@ -187,19 +191,21 @@ def assert_nothing_written(dbq):
 @pytest.mark.parametrize("case", INVALID_CREATE_CASES)
 def test_b3_create_invalido_responde_422_con_detail_y_no_escribe_nada(client_no_raise, user_a, catalog,
                                                                       fake_embedding, dbq, case):
-    overrides, detail = INVALID_CREATE_CASES[case]
+    overrides, field, code = INVALID_CREATE_CASES[case]
     payload = create_payload(catalog, **overrides)
 
     response = client_no_raise.post("/activities", json=payload, headers=user_a["headers"])
 
     assert response.status_code == 422
-    assert response.json() == {"detail": detail}
+    body = response.json()
+    assert isinstance(body["detail"], str) and body["detail"]
+    assert [(i["field"], i["code"], i["blocking"]) for i in body["issues"]] == [(field, code, True)]
     assert_nothing_written(dbq)
 
 
 @pytest.mark.parametrize("case", ["sin_cliente", "sin_contacto_ni_tipo", "producto_sin_product_id"])
 def test_create_invalido_no_llama_a_openai(client, user_a, catalog, fake_embedding, case):
-    payload = create_payload(catalog, **INVALID_CREATE_CASES[case][0])
+    payload = create_payload(catalog, **INVALID_CREATE_CASES[case][0])  # el embedding va tras guardar
 
     assert client.post("/activities", json=payload, headers=user_a["headers"]).status_code == 422
     assert fake_embedding.calls == []
@@ -226,19 +232,23 @@ def test_create_producto_inexistente_422_y_deshace_la_actividad(client, user_a, 
     response = client.post("/activities", json=payload, headers=user_a["headers"])
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "Cliente, contacto, tipo de actividad o producto inexistente"}
+    assert [(i["field"], i["code"]) for i in response.json()["issues"]] == [("products[1]", "not_found")]
     assert_nothing_written(dbq)
 
 
-def test_create_duplicada_409_sin_escribir(client, user_a, catalog, fake_embedding, monkeypatch, dbq):
-    from services import openai_service
-    monkeypatch.setattr(openai_service, "is_duplicate_activity", lambda *args, **kwargs: (True, 0.998))
+def test_create_duplicada_409_sin_escribir(client, user_a, catalog, fake_embedding, dbq):
+    """B2 (H.2): duplicado exacto determinista (mismo cliente, contacto, tipo y minuto), sin embeddings."""
+    first = client.post("/activities", json=create_payload(catalog), headers=user_a["headers"])
+    assert first.status_code == 200
+    calls_before = len(fake_embedding.calls)
 
     response = client.post("/activities", json=create_payload(catalog), headers=user_a["headers"])
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Actividad duplicada detectada"}
-    assert_nothing_written(dbq)
+    body = response.json()
+    assert body["code"] == "duplicate_activity" and body["existing_id"] == first.json()["activity_id"]
+    assert dbq.one("SELECT COUNT(*) AS n FROM activities")["n"] == 1
+    assert len(fake_embedding.calls) == calls_before        # no se generó nada para el duplicado
 
 
 def test_create_producto_sin_product_raw_ni_confidence_se_guarda(client, user_a, catalog, fake_embedding, dbq):
@@ -397,19 +407,19 @@ def test_update_acepta_formato_product_id_product_raw(client, user_a, catalog, a
     ]
 
 
-def test_update_ignora_productos_sin_id(client, user_a, catalog, a_activity, fake_embedding, dbq):
+def test_update_rechaza_productos_sin_id(client, user_a, catalog, a_activity, fake_embedding, dbq):
+    """H.2: un producto sin id ya no se descarta en silencio (antes se ignoraba): 422 y nada cambia."""
+    before = activity_state(dbq, a_activity)
     payload = update_payload(catalog, [
         {"name": "Producto sin id"},
-        {"product_raw": "Otro sin id"},
         {"id": catalog["portatil"], "name": "Portátil Test 14"},
     ])
 
     response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
 
-    assert response.json() == {"success": True}
-    assert dbq.activity_products(a_activity) == [
-        {"product_id": catalog["portatil"], "product_raw": "Portátil Test 14"},
-    ]
+    assert response.status_code == 422
+    assert response.json()["issues"][0]["field"] == "products"
+    assert activity_state(dbq, a_activity) == before
 
 
 def test_update_lista_vacia_elimina_los_productos(client, user_a, catalog, a_activity, fake_embedding, dbq):
@@ -455,7 +465,8 @@ def test_b7_update_sin_un_campo_obligatorio_422_sin_cambios(client, user_a, cata
     response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
 
     assert response.status_code == 422
-    assert response.json() == {"detail": f"Faltan campos obligatorios: {missing}"}
+    assert response.json()["detail"] == f"Faltan campos obligatorios: {missing}"
+    assert response.json()["issues"][0]["code"] == "missing"
     assert activity_state(dbq, a_activity) == before
     assert fake_embedding.calls == []
 
@@ -475,19 +486,27 @@ def test_b7_update_con_valor_obligatorio_nulo_o_invalido_422(client, user_a, cat
     response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
 
     assert response.status_code == 422
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
     assert activity_state(dbq, a_activity) == before
 
 
-def test_b7_update_contacto_y_tipo_null_explicito_se_aceptan(client, user_a, catalog, a_activity,
-                                                            fake_embedding, dbq):
-    payload = {**update_payload(catalog, []), "contact_id": None, "activity_type_id": None}
+def test_b7_update_contacto_null_se_acepta_y_tipo_null_no(client, user_a, catalog, a_activity,
+                                                          fake_embedding, dbq):
+    """H.2: el contacto es opcional; el tipo de actividad es obligatorio (antes se aceptaba null)."""
+    no_contact = {**update_payload(catalog, []), "contact_id": None}
+    assert client.put(f"/activities/{a_activity}", json=no_contact,
+                      headers=user_a["headers"]).json() == {"success": True}
+    assert dbq.activity(a_activity)["contact_id"] is None
 
-    response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
+    before = activity_state(dbq, a_activity)
+    no_type = {**no_contact, "activity_type_id": None}
+    response = client.put(f"/activities/{a_activity}", json=no_type, headers=user_a["headers"])
 
-    assert response.json() == {"success": True}
-    stored = dbq.activity(a_activity)
-    assert stored["contact_id"] is None and stored["activity_type_id"] is None
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Tipo de actividad obligatorio"
+    assert response.json()["issues"][0] == {**response.json()["issues"][0], "field": "activity_type",
+                                             "code": "missing"}
+    assert activity_state(dbq, a_activity) == before
 
 
 def test_b7_update_incompleto_de_otro_usuario_es_404_no_422(client, user_b, catalog, a_activity,
@@ -511,7 +530,7 @@ def test_update_referencia_inexistente_422_sin_cambios(client, user_a, catalog, 
     response = client.put(f"/activities/{a_activity}", json=payload, headers=user_a["headers"])
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "Cliente, contacto, tipo de actividad o producto inexistente"}
+    assert [(i["field"], i["code"]) for i in response.json()["issues"]] == [("products[0]", "not_found")]
     assert activity_state(dbq, a_activity) == before
 
 
@@ -560,7 +579,9 @@ def test_b10_las_conexiones_se_cierran_siempre(client, user_a, catalog, a_activi
                                                opened_connections, scenario):
     headers = user_a["headers"]
     requests = {
-        "create_ok": lambda: client.post("/activities", json=create_payload(catalog), headers=headers),
+        # Otra hora: la misma que a_activity sería un duplicado exacto (409, H.2)
+        "create_ok": lambda: client.post("/activities", json=create_payload(
+            catalog, fecha_detectada="2026-10-01T12:00:00"), headers=headers),
         "create_fk": lambda: client.post("/activities", json=create_payload(catalog, cliente_id=99999),
                                          headers=headers),
         "update_ok": lambda: client.put(f"/activities/{a_activity}", json=update_payload(catalog, []),

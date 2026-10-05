@@ -11,11 +11,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import init_db
+from api import errors as api_errors
 from api.routers import (
+    actions as actions_router,
     activities as activities_router,
     auth as auth_router,
     chat as chat_router,
     crm as crm_router,
+    sales as sales_router,
     system as system_router,
     voice as voice_router,
 )
@@ -50,5 +53,10 @@ app.include_router(system_router.router)
 app.include_router(auth_router.router)
 app.include_router(crm_router.router)
 app.include_router(activities_router.router)
+app.include_router(sales_router.router)
+app.include_router(actions_router.router)
 app.include_router(voice_router.router)
 app.include_router(chat_router.router)
+
+# Errores de dominio (services/writes) -> HTTP, en un solo sitio
+api_errors.install(app)

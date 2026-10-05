@@ -1,9 +1,13 @@
-"""Voz y texto: análisis de un dictado (/process-text) y de un audio (/process-audio)."""
+"""
+Voz y texto (formato anterior a H.2, lo usa la app actual hasta Voice V2): análisis de un
+dictado (/process-text) y de un audio (/process-audio). El Action Engine usa /actions.
+"""
 import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
+from api.audio import read_audio_upload
 from api.deps import get_current_user
 from schemas.voice import ProcessTextRequest
 from services import text_analysis, voice_pipeline
@@ -20,25 +24,7 @@ def process_text(body: ProcessTextRequest, current_user: dict = Depends(get_curr
 
 @router.post("/process-audio")
 async def process_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-
-    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
-
-    if not (content_type.startswith("audio/") or content_type in voice_pipeline.ALLOWED_AUDIO_CONTENT_TYPES):
-        raise HTTPException(status_code=415, detail="Formato de audio no soportado")
-
-    # Lectura acotada: nunca más de MAX_AUDIO_BYTES + 1 en memoria
-    content = await file.read(voice_pipeline.MAX_AUDIO_BYTES + 1)
-
-    if len(content) > voice_pipeline.MAX_AUDIO_BYTES:
-        raise HTTPException(status_code=413, detail="El audio supera el tamaño máximo (10 MB)")
-
-    if not content:
-        raise HTTPException(status_code=400, detail="Audio vacío")
-
-    suffix = voice_pipeline.detect_audio_suffix(content[:16])
-
-    if suffix is None:
-        raise HTTPException(status_code=415, detail="Formato de audio no soportado")
+    content, suffix = await read_audio_upload(file)
 
     try:
         # Whisper es CPU-bound: fuera del event loop

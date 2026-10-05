@@ -312,9 +312,9 @@ def test_foco_de_find_entities(chat_crm):
 # =====================================================================
 
 def test_actividad_incoherente_no_establece_el_cliente_del_contacto(chat_crm, factory):
-    # Dato incoherente (el alta de actividades no lo impide): Pablo es de Nebula,
+    # Dato incoherente heredado (anterior a H.2): Pablo es de Nebula,
     # pero esta actividad de Rivera lo lleva como contacto
-    factory.activity(chat_crm.a, chat_crm.rivera, contact_id=chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
+    factory.legacy_incoherent_activity(chat_crm.a, chat_crm.rivera, chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
     ctx = make_ctx(chat_crm.a)
 
     listed = call("list_activities", {"temporal_scope": "past"}, ctx)
@@ -335,7 +335,7 @@ def test_actividad_incoherente_no_establece_el_cliente_del_contacto(chat_crm, fa
 
 
 def test_una_actividad_no_sobrescribe_una_relacion_ya_establecida(chat_crm, factory):
-    factory.activity(chat_crm.a, chat_crm.rivera, contact_id=chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
+    factory.legacy_incoherent_activity(chat_crm.a, chat_crm.rivera, chat_crm.pablo, datetime_iso="2026-10-05T10:00:00")
     ctx = make_ctx(chat_crm.a)
 
     call("find_entities", {"contact_name": "Pablo Gil"}, ctx)          # Pablo → Nebula

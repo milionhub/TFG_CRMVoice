@@ -101,6 +101,11 @@ def _strip_legal_suffix(name_norm: str) -> str:
     return name_norm
 
 
+def normalize_client_name(name: str | None) -> str:
+    """Clave para comparar nombres de cliente: normalizado y sin forma jurídica ("Rivera S.L." -> "rivera")."""
+    return _strip_legal_suffix(normalize_text(name or ""))
+
+
 def _client_names(row) -> dict:
     """Formas normalizadas con las que se puede nombrar al cliente -> texto original."""
     razon = normalize_text(row["razon_social"])

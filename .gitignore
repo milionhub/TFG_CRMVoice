@@ -23,3 +23,5 @@ Thumbs.db
 # SQLite DB (y sus ficheros temporales -journal/-wal/-shm)
 backend/crm.db
 backend/crm.db-*
+# Copias de seguridad automáticas antes de migrar (migrations.py)
+backend/crm.db.bak-*

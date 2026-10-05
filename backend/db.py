@@ -4,6 +4,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+import migrations
+
 # Por defecto backend/crm.db. CRMVOICE_DB_PATH permite usar otra base de
 # datos (los tests la apuntan a una SQLite temporal).
 DB_PATH = Path(os.getenv("CRMVOICE_DB_PATH") or Path(__file__).parent / "crm.db")
@@ -53,7 +55,16 @@ def connection():
         conn.close()
 
 
-def init_db():
+def init_db(now=None):
+    """
+    Esquema base (versión 0: CREATE ... IF NOT EXISTS, como antes de H.2) y
+    después las migraciones versionadas pendientes (migrations.py). Seguro de
+    llamar varias veces. `now` fija la fecha de referencia de las migraciones
+    que la necesitan (tests); por defecto, la hora local actual.
+    """
+    # Antes de tocar nada: ¿es una base existente con datos? (solo esas se copian)
+    backup = migrations.needs_backup(Path(DB_PATH))
+
     conn = get_connection()
     cur = conn.cursor()
 
@@ -300,3 +311,5 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+    migrations.apply_migrations(Path(DB_PATH), backup=backup, now=now)

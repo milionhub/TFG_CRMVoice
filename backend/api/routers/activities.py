@@ -1,13 +1,40 @@
-"""Actividades del comercial autenticado y búsqueda semántica sobre ellas."""
-from typing import Optional
+"""
+Actividades del comercial autenticado (H.2: Activity V2) y búsqueda semántica.
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+Las rutas son finas: la validación y la escritura están en
+services/writes/activities.py. El embedding se genera DESPUÉS de guardar
+(best-effort: si OpenAI falla la actividad ya está guardada).
 
+POST y PUT aceptan el cuerpo V2 (ActivityIn) y, temporalmente, el formato
+anterior de la app Flutter (api/legacy_activity_adapter.py, que se borra con
+Voice V2). Por eso reciben un dict y lo validan dentro: así la propiedad de
+la actividad se comprueba antes que el cuerpo (otro comercial recibe 404,
+nunca un 422 que delate que existe).
+"""
+from typing import Literal, Optional
+
+from fastapi import APIRouter, Body, Depends, Query
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+
+from api import legacy_activity_adapter as legacy
 from api.deps import get_current_user
+from db import connection
 from schemas.activities import SemanticSearchRequest
+from schemas.crm import ActivityIn, ActivityStatusPatch
 from services import activities
+from services.writes import current_time, validation_failed
+from services.writes import activities as activity_writes
 
 router = APIRouter(tags=["activities"])
+
+
+def _activity_in(data: dict) -> ActivityIn:
+    try:
+        return ActivityIn.model_validate(data)
+    except ValidationError as error:
+        raise validation_failed(error) from None
 
 
 @router.get("/activities")
@@ -16,6 +43,7 @@ def get_activities(
     action_id: Optional[int] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    status: Optional[Literal["pending", "completed", "cancelled"]] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
     return activities.list_activities(
@@ -24,19 +52,24 @@ def get_activities(
         action_id=action_id,
         date_from=date_from,
         date_to=date_to,
+        status=status,
     )
 
 
 @router.post("/activities")
-def create_activity(data: dict, current_user: dict = Depends(get_current_user)):
-    # def (no async): FastAPI lo ejecuta en threadpool y la llamada
-    # síncrona a OpenAI (embedding) no bloquea el event loop
-    try:
-        return activities.create_activity(data, current_user["user_id"])
-    except activities.InvalidActivity as error:
-        raise HTTPException(status_code=422, detail=str(error))
-    except activities.DuplicateActivity as error:
-        raise HTTPException(status_code=409, detail=str(error))
+async def create_activity(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
+    user_id, now = current_user["user_id"], current_time()
+    if legacy.is_legacy_create(data):
+        activity, provenance = legacy.translate_create(data, now)
+    else:
+        activity, provenance = _activity_in(data), None
+    created = await run_in_threadpool(activity_writes.create_activity, activity, user_id, now=now,
+                                      provenance=provenance)
+    # Después del commit: red fuera de la transacción, sin poder deshacer la actividad
+    await run_in_threadpool(activities.ensure_embedding, created["id"])
+    if provenance is not None:
+        return {"success": True, "activity_id": created["id"]}   # respuesta del formato anterior
+    return JSONResponse(status_code=201, content=created)
 
 
 @router.post("/semantic-search")
@@ -46,19 +79,34 @@ def semantic_search(request: SemanticSearchRequest, current_user: dict = Depends
 
 @router.delete("/activities/{activity_id}")
 def delete_activity(activity_id: int, current_user: dict = Depends(get_current_user)):
-    try:
-        activities.delete_activity(activity_id, current_user["user_id"])
-    except activities.ActivityNotFound:
-        raise HTTPException(status_code=404, detail="Actividad no encontrada")
-
+    activity_writes.delete_activity(activity_id, current_user["user_id"])
     return {"success": True}
 
 
 @router.put("/activities/{activity_id}")
-def update_activity(activity_id: int, data: dict, current_user: dict = Depends(get_current_user)):
-    try:
-        return activities.update_activity(activity_id, data, current_user["user_id"])
-    except activities.ActivityNotFound:
-        raise HTTPException(status_code=404, detail="Actividad no encontrada")
-    except activities.InvalidActivity as error:
-        raise HTTPException(status_code=422, detail=str(error))
+async def update_activity(activity_id: int, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
+    user_id, now = current_user["user_id"], current_time()
+
+    def current():
+        with connection() as conn:
+            return dict(activity_writes.owned_activity(conn, activity_id, user_id))   # 404 antes que 422
+
+    row = await run_in_threadpool(current)
+    if legacy.is_legacy_update(data):
+        activity, provenance = legacy.translate_update(data, row["status"], row["comentario"], now)
+    else:
+        activity, provenance = _activity_in(data), None
+    updated = await run_in_threadpool(activity_writes.update_activity, activity_id, activity, user_id, now=now,
+                                      provenance=provenance)
+    if activity.comment != row["comentario"]:
+        # El servicio ha borrado el embedding obsoleto: se regenera tras el commit
+        await run_in_threadpool(activities.ensure_embedding, activity_id)
+    if provenance is not None:
+        return {"success": True}
+    return updated
+
+
+@router.patch("/activities/{activity_id}")
+def patch_activity_status(activity_id: int, body: ActivityStatusPatch,
+                          current_user: dict = Depends(get_current_user)):
+    return activity_writes.set_activity_status(activity_id, body.status, current_user["user_id"])

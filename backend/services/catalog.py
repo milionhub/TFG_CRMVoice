@@ -5,6 +5,7 @@ Es GLOBAL, compartido por todos los comerciales: estas consultas no se
 filtran por usuario. Lo privado son las actividades.
 """
 from db import get_connection
+from services.entity_resolver import normalize_text
 
 
 def list_products() -> list[dict]:
@@ -30,25 +31,30 @@ def list_products() -> list[dict]:
     ]
 
 
-def list_clients() -> list[dict]:
+def list_clients(q: str | None = None) -> list[dict]:
+    """
+    Todos los clientes, o los que contienen `q` en la razón social o el alias
+    (sin tildes ni mayúsculas). Mismos campos de siempre (id, name): el detalle
+    está en GET /clients/{id}.
+    """
     conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        rows = conn.execute("""
+            SELECT id, razon_social, alias
+            FROM clients
+            ORDER BY razon_social ASC
+        """).fetchall()
+    finally:
+        conn.close()
 
-    cursor.execute("""
-        SELECT id, razon_social
-        FROM clients
-        ORDER BY razon_social ASC
-    """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
+    needle = normalize_text(q) if q else ""
     return [
         {
             "id": r["id"],
-            "name": r["razon_social"]
+            "name": r["razon_social"],
         }
         for r in rows
+        if not needle or needle in normalize_text(r["razon_social"]) or needle in normalize_text(r["alias"] or "")
     ]
 
 
