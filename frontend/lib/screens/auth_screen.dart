@@ -6,17 +6,25 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/google_web_button_stub.dart'
     if (dart.library.js_interop) '../widgets/google_web_button.dart';
-import '../widgets/app_logo.dart';
-import '../core/app_colors.dart';
+import '../core/design/cv_theme.dart';
+import '../core/design/cv_tokens.dart';
 import '../services/google_auth_service.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import '../widgets/auth/auth_components.dart';
+import '../widgets/brand/crm_voice_brand.dart';
+import '../widgets/brand/crm_voice_wave_background.dart';
 
+/// Login / Register (I.1.1). Composición centrada: marca + eslogan, panel
+/// con el formulario y enlace para cambiar de modo. En móvil el formulario
+/// va directamente sobre el fondo (sin tarjeta).
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
 }
+
+/// Separación entre bloques label+input (el label queda a 8 px de su input)
+const double _fieldGap = CvSpace.xl + 2;
 
 class _AuthScreenState extends State<AuthScreen>
     with SingleTickerProviderStateMixin {
@@ -26,7 +34,8 @@ class _AuthScreenState extends State<AuthScreen>
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
 
-  final _formKey = GlobalKey<FormState>();
+  /// Error de autenticación mostrado en línea sobre el CTA
+  String? _authError;
 
   final _nombreController = TextEditingController();
   final _emailController = TextEditingController();
@@ -35,6 +44,7 @@ class _AuthScreenState extends State<AuthScreen>
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
 
   /// Cuenta Google autenticada (botón oficial, One Tap o signIn en móvil)
   StreamSubscription<GoogleSignInAccount?>? _googleUserSubscription;
@@ -47,15 +57,24 @@ class _AuthScreenState extends State<AuthScreen>
     _googleUserSubscription =
         GoogleAuthService().onCurrentUserChanged.listen(_onGoogleAccount);
 
+    // Aparición suave del contenido
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 360),
     );
 
     _fadeAnimation = CurvedAnimation(
       parent: _animationController,
-      curve: Curves.easeInOut,
+      curve: Curves.easeOut,
     );
+
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0, 0.015),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeOutCubic,
+    ));
 
     _animationController.forward();
 
@@ -87,11 +106,7 @@ class _AuthScreenState extends State<AuthScreen>
           );
 
       if (!success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Error con Google Login"),
-          ),
-        );
+        setState(() => _authError = "No se pudo iniciar sesión con Google.");
       }
     } finally {
       _googleLoginInProgress = false;
@@ -115,19 +130,62 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   void _switchMode(bool login) {
-    _animationController.reverse().then((_) {
-      setState(() {
-        isLogin = login;
-        _formKey.currentState?.reset();
+    // Cada modo monta su propio Form (estado de validación nuevo)
+    setState(() {
+      isLogin = login;
+      _authError = null;
+      _obscurePassword = true;
+      _obscureConfirmPassword = true;
 
-        _nombreController.clear();
-        _emailController.clear();
-        _passwordController.clear();
-        _confirmPasswordController.clear();
-      });
-
-      _animationController.forward();
+      _nombreController.clear();
+      _emailController.clear();
+      _passwordController.clear();
+      _confirmPasswordController.clear();
     });
+  }
+
+  void _clearAuthError(String _) {
+    if (_authError != null) setState(() => _authError = null);
+  }
+
+  Future<void> _submit(BuildContext formContext) async {
+    final auth = context.read<AuthProvider>();
+    if (auth.isLoading) return;
+
+    FocusScope.of(context).unfocus();
+
+    if (!Form.of(formContext).validate()) return;
+
+    setState(() => _authError = null);
+
+    bool success;
+
+    if (isLogin) {
+
+      success = await auth.login(
+        _emailController.text.trim(),
+        _passwordController.text.trim(),
+        rememberMe,
+      );
+
+    } else {
+
+      success = await auth.register(
+        _nombreController.text.trim(),
+        _emailController.text.trim(),
+        _passwordController.text.trim(),
+        rememberMe,
+      );
+
+    }
+
+    if (!success && mounted) {
+      setState(() {
+        _authError = isLogin
+            ? "Credenciales incorrectas"
+            : "No se pudo crear la cuenta. Revisa los datos e inténtalo de nuevo.";
+      });
+    }
   }
 
   @override
@@ -135,376 +193,352 @@ class _AuthScreenState extends State<AuthScreen>
 
     final auth = context.watch<AuthProvider>();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F6F8),
+    return Theme(
+      data: CvTheme.light(),
+      child: Scaffold(
+        backgroundColor: CvColors.background,
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final isMobile = width < CvBreakpoints.tablet;
+            final isDesktop = width >= CvBreakpoints.desktop;
 
-      body: Center(
-        child: FadeTransition(
-          opacity: _fadeAnimation,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
+            final pagePadding = EdgeInsets.symmetric(
+              horizontal: isMobile ? CvSpace.lg : CvSpace.xxl,
+              vertical: isMobile ? CvSpace.xxl : CvSpace.xxxl,
+            );
 
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-
-              child: Container(
-                padding: const EdgeInsets.all(36),
-
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
-                      blurRadius: 30,
-                      offset: const Offset(0, 10),
-                    )
-                  ],
-                ),
-
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-
-                    const AppLogo(size: 140),
-
-                    const SizedBox(height: 24),
-
-                    /// LOGIN / SIGNUP SWITCH
-                    Row(
-                      children: [
-
-                        Expanded(
-                          child: _authTab(
-                            title: "Login",
-                            selected: isLogin,
-                            onTap: () => _switchMode(true),
-                          ),
-                        ),
-
-                        Expanded(
-                          child: _authTab(
-                            title: "Sign Up",
-                            selected: !isLogin,
-                            onTap: () => _switchMode(false),
-                          ),
-                        ),
-
-                      ],
-                    ),
-
-                    const SizedBox(height: 30),
-
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 250),
-                      transitionBuilder: (child, animation) {
-                        return FadeTransition(
-                          opacity: animation,
-                          child: SlideTransition(
-                            position: Tween<Offset>(
-                              begin: const Offset(0.05, 0),
-                              end: Offset.zero,
-                            ).animate(animation),
-                            child: child,
-                          ),
-                        );
-                      },
-                      child: _buildForm(auth),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildForm(AuthProvider auth) {
-
-    return Form(
-      key: _formKey,
-
-      child: Column(
-        key: ValueKey(isLogin),
-        mainAxisSize: MainAxisSize.min,
-
-        children: [
-
-          if (!isLogin)
-            _inputField(
-              controller: _nombreController,
-              label: "Nombre",
-              validator: (v) =>
-                  v == null || v.isEmpty ? "Introduce tu nombre" : null,
-            ),
-
-          _inputField(
-            controller: _emailController,
-            label: "Email",
-            validator: (v) {
-              if (v == null || v.isEmpty) return "Introduce tu email";
-              if (!_isValidEmail(v)) return "Email no válido";
-              return null;
-            },
-          ),
-
-          _inputField(
-            controller: _passwordController,
-            label: "Password",
-            obscure: _obscurePassword,
-            validator: (v) {
-              if (v == null || v.isEmpty) return "Introduce tu contraseña";
-              if (v.length < 6) return "Mínimo 6 caracteres";
-              return null;
-            },
-          ),
-
-          if (!isLogin)
-            _inputField(
-              controller: _confirmPasswordController,
-              label: "Confirmar password",
-              obscure: _obscureConfirmPassword,
-              validator: (v) {
-                if (v != _passwordController.text) {
-                  return "Las contraseñas no coinciden";
-                }
-                return null;
-              },
-            ),
-
-          if (isLogin)
-            Row(
+            return Stack(
               children: [
-                Checkbox(
-                  value: rememberMe,
-                  activeColor: AppColors.primary,
-                  onChanged: (value) {
-                    setState(() {
-                      rememberMe = value ?? true;
-                    });
-                  },
+                Positioned.fill(
+                  child: CrmVoiceWaveBackground(
+                    density: CrmVoiceWaveBackground.densityFor(width),
+                    clearWidth: 440 + CvSpace.xl * 2,
+                  ),
                 ),
-                const Text(
-                  "Recuérdame",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
+                SafeArea(
+                  child: LayoutBuilder(
+                    builder: (context, safe) => SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: pagePadding,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: (safe.maxHeight - pagePadding.vertical)
+                              .clamp(0.0, double.infinity),
+                        ),
+                        child: Center(
+                          child: FadeTransition(
+                            opacity: _fadeAnimation,
+                            child: SlideTransition(
+                              position: _slideAnimation,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 440),
+                                child: _buildContent(
+                                  auth,
+                                  isMobile: isMobile,
+                                  isDesktop: isDesktop,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent(
+    AuthProvider auth, {
+    required bool isMobile,
+    required bool isDesktop,
+  }) {
+    final form = AnimatedSize(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topCenter,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        layoutBuilder: (current, previous) => Stack(
+          alignment: Alignment.topCenter,
+          children: [...previous, ?current],
+        ),
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.02),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        ),
+        child: KeyedSubtree(
+          key: ValueKey(isLogin),
+          child: _buildForm(auth, isMobile: isMobile),
+        ),
+      ),
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+
+        /// MARCA + ESLOGAN
+        Center(child: CrmVoiceWordmark(markSize: isMobile ? 32 : 36)),
+        const SizedBox(height: CvSpace.sm),
+        Text(
+          "Tu CRM. Ahora también te escucha.",
+          textAlign: TextAlign.center,
+          style: CvText.body.copyWith(fontSize: 14),
+        ),
+
+        SizedBox(height: isMobile ? CvSpace.xxl : CvSpace.xxl + 4),
+
+        /// PANEL DEL FORMULARIO (en móvil, sin tarjeta)
+        if (isMobile)
+          form
+        else
+          Container(
+            padding: EdgeInsets.all(isDesktop ? 40 : CvSpace.xxl),
+            decoration: BoxDecoration(
+              color: CvColors.surface,
+              borderRadius: BorderRadius.circular(CvRadius.card),
+              border: Border.all(color: CvColors.border),
+              boxShadow: CvShadows.panel,
             ),
+            child: form,
+          ),
 
-          const SizedBox(height: 24),
+        const SizedBox(height: CvSpace.lg),
 
-          /// LOGIN BUTTON
-          SizedBox(
-            width: double.infinity,
+        /// CAMBIO DE MODO
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: Wrap(
+            key: ValueKey(isLogin),
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                isLogin ? "¿Aún no tienes cuenta?" : "¿Ya tienes cuenta?",
+                style: CvText.body.copyWith(fontSize: 14),
+              ),
+              AuthLinkButton(
+                key: const ValueKey('auth-switch-mode'),
+                label: isLogin ? "Crear cuenta" : "Inicia sesión",
+                onPressed: () => _switchMode(!isLogin),
+              ),
+            ],
+          ),
+        ),
 
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+        if (!isMobile) ...[
+          const SizedBox(height: CvSpace.xl),
+          Text(
+            "Gestiona clientes, actividades y ventas hablando de forma natural.",
+            textAlign: TextAlign.center,
+            style: CvText.helper,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildForm(AuthProvider auth, {required bool isMobile}) {
+
+    return Form(
+      child: AutofillGroup(
+        child: Builder(
+          builder: (formContext) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+
+              /// CABECERA
+              Text(
+                isLogin ? "Bienvenido de nuevo" : "Crea tu cuenta",
+                style: CvText.heading.copyWith(fontSize: isMobile ? 22 : 24),
+              ),
+              const SizedBox(height: CvSpace.xs - 2),
+              Text(
+                isLogin
+                    ? "Accede a tu CRM y continúa donde lo dejaste."
+                    : "Empieza a gestionar tu CRM de una forma más natural.",
+                style: CvText.body,
               ),
 
-              onPressed: auth.isLoading
-                  ? null
-                  : () async {
+              const SizedBox(height: CvSpace.xl + 4),
 
-                      FocusScope.of(context).unfocus();
+              if (!isLogin) ...[
+                AuthTextField(
+                  fieldKey: const ValueKey('auth-name'),
+                  label: "Nombre",
+                  hint: "Tu nombre",
+                  icon: Icons.person_outline,
+                  controller: _nombreController,
+                  keyboardType: TextInputType.name,
+                  textInputAction: TextInputAction.next,
+                  autofillHints: const [AutofillHints.name],
+                  onChanged: _clearAuthError,
+                  validator: (v) =>
+                      v == null || v.isEmpty ? "Introduce tu nombre" : null,
+                ),
+                const SizedBox(height: _fieldGap),
+              ],
 
-                      if (!_formKey.currentState!.validate()) return;
+              AuthTextField(
+                fieldKey: const ValueKey('auth-email'),
+                label: "Correo electrónico",
+                hint: "nombre@empresa.com",
+                icon: Icons.mail_outline,
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                textInputAction: TextInputAction.next,
+                autofillHints: const [AutofillHints.email],
+                onChanged: _clearAuthError,
+                validator: (v) {
+                  if (v == null || v.isEmpty) return "Introduce tu email";
+                  if (!_isValidEmail(v)) return "Email no válido";
+                  return null;
+                },
+              ),
 
-                      bool success;
+              const SizedBox(height: _fieldGap),
 
-                      if (isLogin) {
+              AuthTextField(
+                fieldKey: const ValueKey('auth-password'),
+                label: "Contraseña",
+                hint: isLogin ? "Tu contraseña" : "Al menos 6 caracteres",
+                icon: Icons.lock_outline,
+                controller: _passwordController,
+                obscure: _obscurePassword,
+                textInputAction:
+                    isLogin ? TextInputAction.done : TextInputAction.next,
+                autofillHints: [
+                  isLogin ? AutofillHints.password : AutofillHints.newPassword,
+                ],
+                onChanged: _clearAuthError,
+                onSubmitted: isLogin ? (_) => _submit(formContext) : null,
+                suffix: PasswordVisibilityToggle(
+                  obscured: _obscurePassword,
+                  onPressed: () =>
+                      setState(() => _obscurePassword = !_obscurePassword),
+                ),
+                validator: (v) {
+                  if (v == null || v.isEmpty) return "Introduce tu contraseña";
+                  if (v.length < 6) return "Mínimo 6 caracteres";
+                  return null;
+                },
+              ),
 
-                        success = await auth.login(
-                          _emailController.text.trim(),
-                          _passwordController.text.trim(),
-                          rememberMe,
-                        );
+              if (!isLogin) ...[
+                const SizedBox(height: _fieldGap),
+                AuthTextField(
+                  fieldKey: const ValueKey('auth-confirm-password'),
+                  label: "Confirmar contraseña",
+                  hint: "Repite la contraseña",
+                  icon: Icons.lock_outline,
+                  controller: _confirmPasswordController,
+                  obscure: _obscureConfirmPassword,
+                  textInputAction: TextInputAction.done,
+                  autofillHints: const [AutofillHints.newPassword],
+                  onChanged: _clearAuthError,
+                  onSubmitted: (_) => _submit(formContext),
+                  suffix: PasswordVisibilityToggle(
+                    obscured: _obscureConfirmPassword,
+                    onPressed: () => setState(() =>
+                        _obscureConfirmPassword = !_obscureConfirmPassword),
+                  ),
+                  validator: (v) {
+                    if (v != _passwordController.text) {
+                      return "Las contraseñas no coinciden";
+                    }
+                    return null;
+                  },
+                ),
+              ],
 
-                      } else {
-
-                        success = await auth.register(
-                          _nombreController.text.trim(),
-                          _emailController.text.trim(),
-                          _passwordController.text.trim(),
-                          rememberMe,
-                        );
-
-                      }
-
-                      if (!success && mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text("Credenciales incorrectas"),
-                            backgroundColor: Colors.red,
+              /// RECUÉRDAME
+              if (isLogin) ...[
+                const SizedBox(height: CvSpace.md),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(CvRadius.sm),
+                    onTap: () => setState(() => rememberMe = !rememberMe),
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: CvSpace.xs),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Checkbox(
+                            value: rememberMe,
+                            activeColor: CvColors.primaryDark,
+                            onChanged: (value) {
+                              setState(() {
+                                rememberMe = value ?? true;
+                              });
+                            },
                           ),
-                        );
-                      }
-                    },
-
-              child: auth.isLoading
-                  ? const SizedBox(
-                      height: 22,
-                      width: 22,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : Text(
-                      isLogin ? "Entrar" : "Crear cuenta",
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
+                          Text(
+                            "Recuérdame",
+                            style: CvText.label.copyWith(
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                 ),
-          ),
-
-          const SizedBox(height: 20),
-
-          /// GOOGLE LOGIN
-          /// Web: botón oficial de Google (ID token). Resto: signIn del plugin.
-          /// En ambos casos el resultado llega por _onGoogleAccount.
-          /// En web sin GOOGLE_CLIENT_ID no se muestra el botón.
-          if (kIsWeb && GoogleAuthService.isConfigured)
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: Center(child: buildGoogleWebButton()),
-            )
-          else if (!kIsWeb)
-          GestureDetector(
-            onTap: () => GoogleAuthService().signIn(),
-
-            child: Container(
-              width: double.infinity,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Colors.white,
-              ),
-              alignment: Alignment.center,
-              child: SvgPicture.asset(
-                "assets/images/google-logo.svg",
-                height: 78, // 👈 más grande para que se vea bien
-              ),
-            ),
-          )
-       ],
-      ),
-    );
-  }
-
-  Widget _inputField({
-    required TextEditingController controller,
-    required String label,
-    bool obscure = false,
-    required String? Function(String?) validator,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-
-      child: TextFormField(
-        controller: controller,
-        obscureText: obscure,
-
-        decoration: InputDecoration(
-          labelText: label,
-
-          /// 👁 ICONO MOSTRAR / OCULTAR PASSWORD
-          suffixIcon: label == "Password"
-              ? IconButton(
-                  icon: Icon(
-                    _obscurePassword
-                        ? Icons.visibility_off
-                        : Icons.visibility,
-                    color: Colors.grey,
                   ),
-                  onPressed: () {
-                    setState(() {
-                      _obscurePassword = !_obscurePassword;
-                    });
-                  },
-                )
-              : label == "Confirmar password"
-                  ? IconButton(
-                      icon: Icon(
-                        _obscureConfirmPassword
-                            ? Icons.visibility_off
-                            : Icons.visibility,
-                        color: Colors.grey,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _obscureConfirmPassword =
-                              !_obscureConfirmPassword;
-                        });
-                      },
-                    )
-                  : null,
+                ),
+              ] else
+                const SizedBox(height: CvSpace.xl),
 
-          filled: true,
-          fillColor: const Color(0xFFF4F6F8),
+              const SizedBox(height: CvSpace.md),
 
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-        ),
+              if (_authError != null) ...[
+                AuthErrorBanner(message: _authError!),
+                const SizedBox(height: CvSpace.md),
+              ],
 
-        validator: validator,
-      ),
-    );
-  }
+              /// CTA
+              AuthPrimaryButton(
+                label: isLogin ? "Entrar" : "Crear cuenta",
+                loading: auth.isLoading,
+                onPressed: () => _submit(formContext),
+              ),
 
-  Widget _authTab({
-    required String title,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-
-        decoration: BoxDecoration(
-          color: selected
-              ? AppColors.primary.withOpacity(0.08)
-              : Colors.transparent,
-
-          borderRadius: BorderRadius.circular(10),
-
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: AppColors.primary.withOpacity(0.15),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+              /// GOOGLE LOGIN
+              /// Web: botón oficial de Google (ID token). Resto: signIn del plugin.
+              /// En ambos casos el resultado llega por _onGoogleAccount.
+              /// En web sin GOOGLE_CLIENT_ID no se muestra el botón.
+              if (!kIsWeb || GoogleAuthService.isConfigured) ...[
+                const SizedBox(height: CvSpace.xl),
+                const AuthDivider(),
+                const SizedBox(height: CvSpace.xl),
+                if (kIsWeb)
+                  SizedBox(
+                    height: 44,
+                    child: Center(child: buildGoogleWebButton()),
                   )
-                ]
-              : [],
-        ),
-
-        child: Center(
-          child: Text(
-            title,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: selected
-                  ? AppColors.primary
-                  : Colors.black54,
-            ),
+                else
+                  GoogleAuthButton(
+                    key: const ValueKey('auth-google-button'),
+                    onPressed: () => GoogleAuthService().signIn(),
+                  ),
+              ],
+            ],
           ),
         ),
       ),

@@ -29,8 +29,7 @@ void main() {
       expect(find.byType(AuthScreen), findsOneWidget);
       expect(google.calls, contains('signInSilently')); // One Tap / inicio silencioso
 
-      final googleButton = find.byWidgetPredicate(
-          (w) => w is GestureDetector && w.onTap != null && w.child is Container);
+      final googleButton = find.byKey(const ValueKey('auth-google-button'));
       expect(googleButton, findsOneWidget);
       await tester.ensureVisible(googleButton);
       await tester.tap(googleButton);

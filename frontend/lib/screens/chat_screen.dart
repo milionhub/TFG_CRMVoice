@@ -44,41 +44,24 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.sizeOf(context).width < 800;
+    final isMobile = AppShell.isMobile(context);
 
-    return Scaffold(
+    // Shell común (I.2): barra lateral en escritorio, cabecera + menú en móvil
+    return AppShell(
+      currentIndex: 4,
+      title: _title,
       backgroundColor: ChatColors.background,
-      drawer: isMobile ? const MobileDrawer(currentIndex: 4) : null,
-      appBar: isMobile
-          ? AppBar(
-              backgroundColor: ChatColors.surface,
-              foregroundColor: ChatColors.textPrimary,
-              surfaceTintColor: Colors.transparent,
-              elevation: 0,
-              shape: const Border(bottom: BorderSide(color: ChatColors.border)),
-              title: const Text(_title, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
-              actions: [
-                ValueListenableBuilder<bool>(
-                  valueListenable: _canReset,
-                  builder: (context, canReset, _) => IconButton(
-                    tooltip: _newConversationLabel,
-                    icon: const Icon(Icons.add_comment_outlined),
-                    onPressed: canReset ? () => _chatKey.currentState?.newConversation() : null,
-                  ),
-                ),
-              ],
-            )
-          : null,
-      body: Row(
-        children: [
-          if (!isMobile) const Sidebar(currentIndex: 4),
-          Expanded(
-            child: SafeArea(
-              child: ChatView(key: _chatKey, showHeader: !isMobile, canReset: _canReset),
-            ),
+      mobileActions: [
+        ValueListenableBuilder<bool>(
+          valueListenable: _canReset,
+          builder: (context, canReset, _) => IconButton(
+            tooltip: _newConversationLabel,
+            icon: const Icon(Icons.add_comment_outlined),
+            onPressed: canReset ? () => _chatKey.currentState?.newConversation() : null,
           ),
-        ],
-      ),
+        ),
+      ],
+      body: ChatView(key: _chatKey, showHeader: !isMobile, canReset: _canReset),
     );
   }
 }

@@ -2,16 +2,20 @@
 // próximas y ventas registradas este mes, más las próximas actividades.
 // Se recarga al volver a Home (cualquier ruta o diálogo que se cierre encima,
 // p. ej. tras confirmar una acción por voz o editar algo en otra pantalla).
+// I.2: secciones «Tu resumen» (métricas con acento semántico) y «Próximas
+// actividades» (filas compactas).
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/app_colors.dart';
+import '../../core/design/cv_theme.dart';
+import '../../core/design/cv_tokens.dart';
 import '../../core/money.dart';
 import '../../core/navigation.dart';
 import '../../models/crm.dart';
 import '../../screens/client_detail_screen.dart';
 import '../../services/api_service.dart';
 import '../crm/crm_ui.dart';
+import '../ui/cv_components.dart';
 
 class DashboardPanel extends StatefulWidget {
   const DashboardPanel({super.key});
@@ -101,152 +105,165 @@ class _DashboardPanelState extends State<DashboardPanel> with RouteAware {
   Widget build(BuildContext context) {
     final data = _data;
     return CrmTheme(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Tu resumen',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Actualizar resumen',
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _loading ? null : _load,
-                ),
-              ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          CvSectionHeading(
+            title: 'Tu resumen',
+            trailing: IconButton(
+              tooltip: 'Actualizar resumen',
+              icon: const Icon(Icons.refresh_rounded, size: 20),
+              color: CvColors.textSecondary,
+              onPressed: _loading ? null : _load,
             ),
-            if (_loading && data != null)
-              const LinearProgressIndicator(minHeight: 2),
-            if (data == null && _loading)
-              const SizedBox(height: 96, child: LoadingView())
-            else if (data == null && _error != null)
-              FormErrorBanner(
-                message: 'No se pudo cargar el resumen: $_error',
-                action: TextButton.icon(
-                  onPressed: _load,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Reintentar'),
-                ),
-              )
-            else if (data != null) ...[
-              if (_error != null)
-                FormErrorBanner(
-                  message: 'No se pudo actualizar el resumen: $_error',
-                ),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  // Dos por fila en móvil; hasta cuatro en escritorio
-                  final width = constraints.maxWidth < 440
-                      ? (constraints.maxWidth - 12) / 2
-                      : 200.0;
-                  return Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      _Metric(
-                        key: const Key('metric-pending'),
-                        icon: Icons.schedule,
-                        color: const Color(0xFFB45309),
-                        value: '${data.pending}',
-                        label: 'Pendientes',
-                      ),
-                      _Metric(
-                        key: const Key('metric-overdue'),
-                        icon: Icons.warning_amber_rounded,
-                        color: data.overdue > 0
-                            ? const Color(0xFFB91C1C)
-                            : AppColors.textSecondary,
-                        value: '${data.overdue}',
-                        label: 'Vencidas',
-                      ),
-                      _Metric(
-                        key: const Key('metric-upcoming'),
-                        icon: Icons.event_outlined,
-                        color: AppColors.primary,
-                        value: '${data.upcoming7d}',
-                        label: 'Próximos 7 días',
-                      ),
-                      _Metric(
-                        key: const Key('metric-sales'),
-                        icon: Icons.point_of_sale_outlined,
-                        color: const Color(0xFF15803D),
-                        value: formatEuros(data.salesMonthCents),
-                        label:
-                            'Tus ventas de ${_monthLabel(data.salesMonth)}'
-                            '${data.salesMonthLines > 0 ? ' (${data.salesMonthLines})' : ''}',
-                      ),
-                    ].map((m) => SizedBox(width: width, child: m)).toList(),
-                  );
-                },
+          ),
+          const SizedBox(height: CvSpace.sm),
+          if (_loading && data != null)
+            const Padding(
+              padding: EdgeInsets.only(bottom: CvSpace.xs),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+          if (data == null && _loading)
+            const SizedBox(height: 96, child: LoadingView())
+          else if (data == null && _error != null)
+            FormErrorBanner(
+              message: 'No se pudo cargar el resumen: $_error',
+              action: TextButton.icon(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reintentar'),
               ),
-              const SizedBox(height: 12),
-              if (data.isEmpty)
-                const Text(
-                  'Aún no tienes actividades pendientes ni ventas este mes.',
-                  style: TextStyle(color: AppColors.textSecondary),
-                )
-              else if (data.nextActivities.isNotEmpty)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-                          child: Text(
-                            'Próximas actividades',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
-                            ),
-                          ),
-                        ),
-                        for (final a in data.nextActivities.take(3))
-                          ListTile(
-                            dense: true,
-                            leading: Icon(
-                              Icons.circle,
-                              size: 10,
-                              color: getActivityColor(a.activityType ?? ''),
-                            ),
-                            title: Text(a.activityType ?? 'Actividad'),
-                            subtitle: Text(
-                              [
-                                formatDateTime(a.datetime),
-                                if (a.clientName != null) a.clientName!,
-                              ].join(' · '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            trailing: a.clientId == null
-                                ? null
-                                : const Icon(Icons.chevron_right),
-                            onTap: a.clientId == null
-                                ? null
-                                : () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => ClientDetailScreen(
-                                        clientId: a.clientId!,
-                                      ),
-                                    ),
-                                  ),
-                          ),
-                      ],
-                    ),
-                  ),
+            )
+          else if (data != null) ...[
+            if (_error != null)
+              FormErrorBanner(
+                message: 'No se pudo actualizar el resumen: $_error',
+              ),
+            _metrics(data),
+            const SizedBox(height: 40),
+            const CvSectionHeading(title: 'Próximas actividades'),
+            const SizedBox(height: CvSpace.sm),
+            if (data.isEmpty)
+              const _EmptyNote('Aún no tienes actividades pendientes ni ventas este mes.')
+            else if (data.nextActivities.isEmpty)
+              const _EmptyNote('No tienes actividades próximas.')
+            else
+              _UpcomingList(activities: data.nextActivities.take(3).toList()),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _metrics(DashboardData data) {
+    final tiles = [
+      CvMetricTile(
+        key: const Key('metric-pending'),
+        icon: Icons.schedule_rounded,
+        tone: CvTone.warning,
+        value: '${data.pending}',
+        label: 'Pendientes',
+      ),
+      CvMetricTile(
+        key: const Key('metric-overdue'),
+        icon: Icons.warning_amber_rounded,
+        tone: data.overdue > 0 ? CvTone.danger : CvTone.muted,
+        emphasize: data.overdue > 0,
+        value: '${data.overdue}',
+        label: 'Vencidas',
+      ),
+      CvMetricTile(
+        key: const Key('metric-upcoming'),
+        icon: Icons.event_outlined,
+        tone: CvTone.neutral,
+        value: '${data.upcoming7d}',
+        label: 'Próximos 7 días',
+      ),
+      CvMetricTile(
+        key: const Key('metric-sales'),
+        icon: Icons.trending_up_rounded,
+        tone: CvTone.success,
+        value: formatEuros(data.salesMonthCents),
+        label: 'Tus ventas de ${_monthLabel(data.salesMonth)}'
+            '${data.salesMonthLines > 0 ? ' (${data.salesMonthLines})' : ''}',
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Cuatro en fila si caben con holgura; si no, 2x2. Cada fila iguala
+        // la altura de sus métricas (etiquetas de una o dos líneas).
+        const gap = CvSpace.md;
+        final columns = constraints.maxWidth >= 800 ? 4 : 2;
+        return Column(
+          children: [
+            for (var r = 0; r < tiles.length; r += columns) ...[
+              if (r > 0) const SizedBox(height: gap),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var i = r; i < r + columns; i++) ...[
+                      if (i > r) const SizedBox(width: gap),
+                      Expanded(child: tiles[i]),
+                    ],
+                  ],
                 ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _EmptyNote extends StatelessWidget {
+  final String text;
+
+  const _EmptyNote(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: CvSpace.md + 2, vertical: CvSpace.md),
+      decoration: BoxDecoration(
+        color: CvColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: CvColors.border),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.event_available_outlined, size: 20, color: CvColors.textSecondary),
+          const SizedBox(width: CvSpace.sm),
+          Expanded(child: Text(text, style: CvText.body.copyWith(fontSize: 14))),
+        ],
+      ),
+    );
+  }
+}
+
+/// Lista compacta de próximas actividades: fecha, tipo, hora y cliente.
+class _UpcomingList extends StatelessWidget {
+  final List<CrmActivity> activities;
+
+  const _UpcomingList({required this.activities});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: CvColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: CvColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: Column(
+          children: [
+            for (var i = 0; i < activities.length; i++) ...[
+              if (i > 0) const Divider(height: 1, color: CvColors.border),
+              _UpcomingRow(activity: activities[i]),
             ],
           ],
         ),
@@ -255,55 +272,102 @@ class _DashboardPanelState extends State<DashboardPanel> with RouteAware {
   }
 }
 
-class _Metric extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String value;
-  final String label;
+class _UpcomingRow extends StatelessWidget {
+  final CrmActivity activity;
 
-  const _Metric({
-    super.key,
-    required this.icon,
-    required this.color,
-    required this.value,
-    required this.label,
-  });
+  const _UpcomingRow({required this.activity});
+
+  static const _monthsShort = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    final a = activity;
+    final d = a.datetime;
+    final typeColor = getActivityColor(a.activityType ?? '');
+    final overdue = d != null && a.status == ActivityStatus.pending && d.isBefore(DateTime.now());
+    final details = [
+      d == null ? 'Sin fecha' : formatTime(d),
+      if (a.clientName != null) a.clientName!,
+      if (a.contactName != null) a.contactName!,
+    ].join(' · ');
+
+    return InkWell(
+      hoverColor: CvColors.background,
+      onTap: a.clientId == null
+          ? null
+          : () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ClientDetailScreen(clientId: a.clientId!),
+                ),
+              ),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.symmetric(horizontal: CvSpace.md, vertical: CvSpace.sm),
         child: Row(
           children: [
-            Icon(icon, color: color),
-            const SizedBox(width: 10),
-            Expanded(
+            // Fecha: día y mes
+            Container(
+              width: 46,
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              decoration: BoxDecoration(
+                color: CvColors.background,
+                borderRadius: BorderRadius.circular(CvRadius.control),
+                border: Border.all(color: CvColors.border),
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      color: color,
-                    ),
+                    d == null ? '–' : '${d.day}',
+                    style: CvText.label.copyWith(fontSize: 16, height: 1.1),
                   ),
                   Text(
-                    label,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      color: AppColors.textSecondary,
-                    ),
+                    d == null ? '' : _monthsShort[d.month - 1],
+                    style: CvText.helper.copyWith(fontSize: 11, height: 1.2),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: CvSpace.md - 2),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(color: typeColor, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: CvSpace.xs),
+                      Flexible(
+                        child: Text(
+                          a.activityType ?? 'Actividad',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: CvText.label.copyWith(fontSize: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    details,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: CvText.helper.copyWith(fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            if (overdue) ...[
+              const SizedBox(width: CvSpace.xs),
+              StatusBadge(status: a.status, overdue: true),
+            ],
+            if (a.clientId != null) ...[
+              const SizedBox(width: CvSpace.xs),
+              const Icon(Icons.chevron_right_rounded, color: CvColors.textSecondary),
+            ],
           ],
         ),
       ),

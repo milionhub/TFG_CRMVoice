@@ -18,23 +18,12 @@ class ClientsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 800;
-    if (isMobile) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        drawer: const MobileDrawer(currentIndex: 1),
-        appBar: AppBar(backgroundColor: Colors.white, elevation: 1, title: const Text("Clientes")),
-        body: const SafeArea(child: CrmTheme(child: ClientsContent())),
-      );
-    }
-    return const Scaffold(
+    // Shell común (I.2): barra lateral en escritorio, cabecera + menú en móvil
+    return const AppShell(
+      currentIndex: 1,
+      title: "Clientes",
       backgroundColor: AppColors.background,
-      body: Row(
-        children: [
-          Sidebar(currentIndex: 1),
-          Expanded(child: SafeArea(child: CrmTheme(child: ClientsContent()))),
-        ],
-      ),
+      body: CrmTheme(child: ClientsContent()),
     );
   }
 }

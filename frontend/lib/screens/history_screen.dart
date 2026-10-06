@@ -13,53 +13,12 @@ class HistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 800;
-
-    if (isMobile) {
-      return const _MobileLayoutHistory();
-    } else {
-      return const _DesktopLayoutHistory();
-    }
-  }
-}
-
-class _DesktopLayoutHistory extends StatelessWidget {
-  const _DesktopLayoutHistory();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
+    // Shell común (I.2): barra lateral en escritorio, cabecera + menú en móvil
+    return const AppShell(
+      currentIndex: 3,
+      title: "Histórico",
       backgroundColor: AppColors.background,
-      body: Row(
-        children: [
-          const Sidebar(currentIndex: 3),
-          const Expanded(
-            child: SafeArea(
-              child: HistoryContent(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MobileLayoutHistory extends StatelessWidget {
-  const _MobileLayoutHistory();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      drawer: const MobileDrawer(currentIndex: 3),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        title: const Text("Histórico"),
-      ),
-      body: const SafeArea(
-        child: HistoryContent(),
-      ),
+      body: HistoryContent(),
     );
   }
 }

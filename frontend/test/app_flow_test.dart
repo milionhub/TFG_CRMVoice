@@ -51,7 +51,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Finder field(String label) => find.widgetWithText(TextFormField, label);
+  // Los campos de AuthScreen llevan la etiqueta fuera del TextFormField (I.1.1)
+  const fieldKeys = {
+    'Nombre': 'auth-name',
+    'Email': 'auth-email',
+    'Password': 'auth-password',
+    'Confirmar password': 'auth-confirm-password',
+  };
+  Finder field(String label) => find.byKey(ValueKey(fieldKeys[label]!));
 
   Future<void> fillLogin(WidgetTester tester, String email, String password) async {
     await tester.enterText(field('Email'), email);
@@ -72,8 +79,8 @@ void main() {
         await pumpApp(tester);
 
         expect(find.byType(AuthScreen), findsOneWidget);
-        expect(find.text('Login'), findsOneWidget);
-        expect(find.text('Sign Up'), findsOneWidget);
+        expect(find.text('Bienvenido de nuevo'), findsOneWidget);
+        expect(find.text('Crear cuenta'), findsOneWidget); // enlace a registro
         expect(field('Email'), findsOneWidget);
         expect(field('Password'), findsOneWidget);
         expect(field('Nombre'), findsNothing);
@@ -101,7 +108,7 @@ void main() {
       (tester) => backend.run(() async {
             await pumpApp(tester);
 
-            await tester.tap(find.text('Sign Up'));
+            await tester.tap(find.text('Crear cuenta'));
             await tester.pumpAndSettle();
 
             expect(field('Nombre'), findsOneWidget);
@@ -183,7 +190,7 @@ void main() {
         stubSession(backend, nombre: 'Nueva Usuaria', email: 'nueva@crmvoice.test');
         await pumpApp(tester);
 
-        await tester.tap(find.text('Sign Up'));
+        await tester.tap(find.text('Crear cuenta'));
         await tester.pumpAndSettle();
         await tester.enterText(field('Nombre'), 'Nueva Usuaria');
         await fillLogin(tester, 'nueva@crmvoice.test', 'secreta1');
@@ -220,7 +227,7 @@ void main() {
         backend.json('GET', '/products', {"products": []});
         await pumpApp(tester);
 
-        await tester.tap(find.byIcon(Icons.menu_book_rounded));
+        await tester.tap(find.descendant(of: find.byType(Sidebar), matching: find.text('Histórico')));
         await tester.pumpAndSettle();
 
         expect(find.byType(HistoryScreen), findsOneWidget);

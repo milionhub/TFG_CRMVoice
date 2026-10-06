@@ -13,53 +13,12 @@ class CalendarScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 800;
-
-    if (isMobile) {
-      return const _MobileLayoutCalendar();
-    } else {
-      return const _DesktopLayoutCalendar();
-    }
-  }
-}
-
-class _DesktopLayoutCalendar extends StatelessWidget {
-  const _DesktopLayoutCalendar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
+    // Shell común (I.2): barra lateral en escritorio, cabecera + menú en móvil
+    return const AppShell(
+      currentIndex: 2,
+      title: "Calendario",
       backgroundColor: AppColors.background,
-      body: Row(
-        children: [
-          const Sidebar(currentIndex: 2),   // reutilizamos el sidebar del home
-          const Expanded(
-            child: SafeArea(
-              child: CalendarContent(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MobileLayoutCalendar extends StatelessWidget {
-  const _MobileLayoutCalendar();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      drawer: const MobileDrawer(currentIndex: 2),  // mismo drawer del home
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        title: const Text("Calendario"),
-      ),
-      body: const SafeArea(
-        child: CalendarContent(),
-      ),
+      body: CalendarContent(),
     );
   }
 }

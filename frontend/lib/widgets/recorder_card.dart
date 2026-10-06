@@ -4,6 +4,7 @@
 //           -> borrador del servidor -> revisión -> confirmación explícita.
 // Nada se guarda en el CRM sin confirmar. También se puede escribir la acción
 // (POST /actions/interpret), útil si no hay micrófono o Whisper se equivoca.
+// I.2: presentación como «Voice Hero» del Inicio (solo UI; la lógica no cambia).
 import 'dart:async';
 import 'dart:io';
 
@@ -14,11 +15,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
 
-import '../core/app_colors.dart';
+import '../core/design/cv_theme.dart';
+import '../core/design/cv_tokens.dart';
 import '../models/action_draft.dart';
 import '../screens/client_detail_screen.dart';
 import '../screens/history_screen.dart';
 import '../services/api_service.dart';
+import 'brand/crm_voice_brand.dart';
 import 'crm/crm_ui.dart';
 import 'voice/draft_review.dart';
 
@@ -274,114 +277,374 @@ class _RecorderCardState extends State<RecorderCard> {
 
   @override
   Widget build(BuildContext context) {
-    const primary = AppColors.primary;
     final recording = _state == VoiceState.recording;
     final busy = _state == VoiceState.uploading || _state == VoiceState.requestingPermission;
-    final color = recording ? Colors.red.shade600 : primary;
+    final failed = _state == VoiceState.error;
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 28),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 40, offset: const Offset(0, 20)),
-          ],
-        ),
-        child: CrmTheme(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Semantics(
-                button: true,
-                label: recording ? 'Terminar grabación' : 'Hablar: grabar una acción por voz',
-                child: Tooltip(
-                  message: recording ? 'Terminar grabación' : 'Grabar una acción por voz',
-                  child: Material(
-                    key: const Key('voice-mic'),
-                    color: color,
-                    shape: const CircleBorder(),
-                    elevation: recording ? 8 : 3,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: busy ? null : _onMicPressed,
-                      child: SizedBox(
-                        width: 100,
-                        height: 100,
-                        child: Center(
-                          child: busy
-                              ? const SizedBox(
-                                  width: 36,
-                                  height: 36,
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
-                              : Icon(recording ? Icons.stop_rounded : Icons.mic_rounded, color: Colors.white, size: 44),
-                        ),
-                      ),
-                    ),
+    final (Color statusColor, Color dotColor) = switch (_state) {
+      VoiceState.recording => (CvColors.danger, CvColors.danger),
+      VoiceState.error => (CvColors.danger, CvColors.danger),
+      VoiceState.uploading || VoiceState.requestingPermission => (CvColors.primaryDark, CvColors.primary),
+      VoiceState.idle => (CvColors.textSecondary, CvColors.primary),
+    };
+
+    final mic = _MicButton(
+      recording: recording,
+      busy: busy,
+      pulse: _elapsed.inSeconds,
+      onPressed: _onMicPressed,
+    );
+
+    Widget texts(bool center) => Column(
+          crossAxisAlignment: center ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CrmVoiceMark(size: 16, plain: true, color: CvColors.primaryDark),
+                const SizedBox(width: CvSpace.xs - 2),
+                Flexible(
+                  child: Text(
+                    'Habla con tu CRM',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: CvText.label.copyWith(fontSize: 12.5, color: CvColors.primaryDark),
                   ),
                 ),
+              ],
+            ),
+            const SizedBox(height: CvSpace.xs - 2),
+            Semantics(
+              header: true,
+              child: Text(
+                '¿Qué quieres registrar?',
+                textAlign: center ? TextAlign.center : TextAlign.start,
+                style: CvText.heading.copyWith(fontSize: 21, letterSpacing: -0.4),
               ),
-              const SizedBox(height: 24),
-              Text(
-                _statusText,
-                key: const Key('voice-status'),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: recording ? Colors.red.shade700 : AppColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              if (_state == VoiceState.error && _error != null) ...[
-                FormErrorBanner(message: _error!),
-                if (_errorTranscript != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text('Se ha entendido: «$_errorTranscript»',
-                        textAlign: TextAlign.center, style: const TextStyle(fontStyle: FontStyle.italic)),
-                  ),
-              ] else
-                const Text(
-                  'Di qué quieres registrar: una actividad, un cliente, un contacto o una venta. '
-                  'Revisarás todo antes de guardar.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: Colors.black54),
-                ),
-              const SizedBox(height: 12),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
+            ),
+            const SizedBox(height: CvSpace.xxs),
+            Text(
+              'Dicta una actividad, un cliente, un contacto o una venta. Revisarás todo antes de guardar.',
+              textAlign: center ? TextAlign.center : TextAlign.start,
+              style: CvText.body.copyWith(fontSize: 14),
+            ),
+            const SizedBox(height: CvSpace.sm),
+            Semantics(
+              liveRegion: true,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (recording)
-                    TextButton.icon(
-                      onPressed: _cancelRecording,
-                      icon: const Icon(Icons.close),
-                      label: const Text('Cancelar grabación'),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: CvSpace.xs),
+                  Flexible(
+                    child: AnimatedDefaultTextStyle(
+                      duration: const Duration(milliseconds: 200),
+                      style: CvText.label.copyWith(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w500,
+                        color: statusColor,
+                      ),
+                      child: Text(_statusText, key: const Key('voice-status')),
                     ),
-                  if (_state == VoiceState.error && _canRetryUpload)
-                    FilledButton.icon(
-                      onPressed: _upload,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Reintentar envío'),
-                    ),
-                  if (!recording && !busy)
-                    OutlinedButton.icon(
-                      onPressed: _writeAction,
-                      icon: const Icon(Icons.keyboard_outlined),
-                      label: Text(_errorTranscript != null ? 'Corregir el texto' : 'Escribir la acción'),
-                    ),
+                  ),
                 ],
               ),
-            ],
+            ),
+          ],
+        );
+
+    final actions = Wrap(
+      alignment: WrapAlignment.center,
+      spacing: CvSpace.xs,
+      runSpacing: CvSpace.xs,
+      children: [
+        if (recording)
+          TextButton.icon(
+            onPressed: _cancelRecording,
+            style: TextButton.styleFrom(
+              foregroundColor: CvColors.textSecondary,
+              minimumSize: const Size(0, 44),
+            ),
+            icon: const Icon(Icons.close, size: 18),
+            label: const Text('Cancelar grabación'),
           ),
-        ),
+        if (failed && _canRetryUpload)
+          FilledButton.icon(
+            onPressed: _upload,
+            style: FilledButton.styleFrom(
+              backgroundColor: CvColors.primaryDark,
+              minimumSize: const Size(0, 44),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.control)),
+            ),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Reintentar envío'),
+          ),
+        if (!recording && !busy)
+          OutlinedButton.icon(
+            onPressed: _writeAction,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: CvColors.textPrimary,
+              backgroundColor: CvColors.surface,
+              minimumSize: const Size(0, 44),
+              padding: const EdgeInsets.symmetric(horizontal: CvSpace.md),
+              side: const BorderSide(color: CvColors.borderStrong),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.control)),
+              textStyle: CvText.button.copyWith(fontSize: 14),
+            ),
+            icon: const Icon(Icons.keyboard_outlined, size: 18),
+            label: Text(_errorTranscript != null ? 'Corregir el texto' : 'Escribir la acción'),
+          ),
+      ],
+    );
+
+    final errorDetails = failed && _error != null
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: CvSpace.md),
+              FormErrorBanner(message: _error!),
+              if (_errorTranscript != null)
+                Text('Se ha entendido: «$_errorTranscript»',
+                    textAlign: TextAlign.center,
+                    style: CvText.body.copyWith(fontSize: 13.5, fontStyle: FontStyle.italic)),
+            ],
+          )
+        : null;
+
+    return CrmTheme(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 800;
+          return AnimatedContainer(
+            key: const Key('voice-hero'),
+            duration: const Duration(milliseconds: 200),
+            decoration: BoxDecoration(
+              color: CvColors.surface,
+              borderRadius: BorderRadius.circular(CvRadius.card),
+              border: Border.all(
+                color: recording ? CvColors.danger.withValues(alpha: 0.35) : CvColors.border,
+              ),
+              boxShadow: CvShadows.panel,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              children: [
+                // Señal CRMVoice muy tenue a la derecha (estática)
+                if (wide)
+                  const Positioned(
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    width: 360,
+                    child: ExcludeSemantics(child: CustomPaint(painter: _HeroWavePainter())),
+                  ),
+                Padding(
+                  padding: EdgeInsets.all(wide ? 28 : CvSpace.lg),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (wide)
+                        Row(
+                          children: [
+                            mic,
+                            const SizedBox(width: CvSpace.xl),
+                            Expanded(child: texts(false)),
+                            const SizedBox(width: CvSpace.xl),
+                            actions,
+                          ],
+                        )
+                      else ...[
+                        Center(child: mic),
+                        const SizedBox(height: CvSpace.md),
+                        texts(true),
+                        const SizedBox(height: CvSpace.md),
+                        actions,
+                      ],
+                      ?errorDetails,
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
+}
+
+/// Botón del micrófono: sólido primaryDark (rojo mientras graba) sobre un
+/// halo suave. Mientras graba, una onda corta (650 ms) se expande una vez
+/// por segundo ([pulse] cambia con el contador) y se detiene entre pulsos;
+/// sin animación permanente en reposo.
+class _MicButton extends StatefulWidget {
+  final bool recording;
+  final bool busy;
+  final int pulse;
+  final VoidCallback onPressed;
+
+  const _MicButton({
+    required this.recording,
+    required this.busy,
+    required this.pulse,
+    required this.onPressed,
+  });
+
+  static const double size = 72;
+  static const double halo = 96;
+
+  @override
+  State<_MicButton> createState() => _MicButtonState();
+}
+
+class _MicButtonState extends State<_MicButton> with SingleTickerProviderStateMixin {
+  late final _ripple = AnimationController(vsync: this, duration: const Duration(milliseconds: 650));
+
+  @override
+  void didUpdateWidget(_MicButton old) {
+    super.didUpdateWidget(old);
+    final started = widget.recording && !old.recording;
+    final tick = widget.recording && widget.pulse != old.pulse;
+    if (started || tick) {
+      _ripple.forward(from: 0);
+    } else if (!widget.recording && old.recording) {
+      _ripple.stop();
+      _ripple.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ripple.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recording = widget.recording;
+    final color = recording ? CvColors.danger : CvColors.primaryDark;
+
+    return SizedBox.square(
+      dimension: _MicButton.halo,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Halo
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: _MicButton.halo,
+            height: _MicButton.halo,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: recording ? CvColors.dangerSoft : CvColors.primarySoft,
+            ),
+          ),
+          // Onda de escucha
+          AnimatedBuilder(
+            animation: _ripple,
+            builder: (context, _) {
+              final t = _ripple.value;
+              if (!recording || t == 0 || t == 1) return const SizedBox.shrink();
+              final d = _MicButton.size + (_MicButton.halo - _MicButton.size) * t;
+              return Container(
+                width: d,
+                height: d,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: CvColors.danger.withValues(alpha: 0.45 * (1 - t)),
+                    width: 2,
+                  ),
+                ),
+              );
+            },
+          ),
+          Semantics(
+            button: true,
+            label: recording ? 'Terminar grabación' : 'Hablar: grabar una acción por voz',
+            child: Tooltip(
+              message: recording ? 'Terminar grabación' : 'Grabar una acción por voz',
+              child: Material(
+                key: const Key('voice-mic'),
+                color: color,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  hoverColor: Colors.white.withValues(alpha: 0.10),
+                  splashColor: Colors.white.withValues(alpha: 0.16),
+                  onTap: widget.busy ? null : widget.onPressed,
+                  child: SizedBox.square(
+                    dimension: _MicButton.size,
+                    child: Center(
+                      child: widget.busy
+                          ? const SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+                          : Icon(recording ? Icons.stop_rounded : Icons.mic_rounded,
+                              color: Colors.white, size: 32),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Señal decorativa del hero: ondas finas derivadas del símbolo CRMVoice,
+/// que se desvanecen hacia el contenido.
+class _HeroWavePainter extends CustomPainter {
+  const _HeroWavePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bounds = Offset.zero & size;
+    canvas.saveLayer(bounds, Paint());
+    final waves = [
+      (cycles: 1.6, phase: 0.6, scale: 1.0, alpha: 0.20),
+      (cycles: 2.1, phase: 1.7, scale: 0.7, alpha: 0.14),
+      (cycles: 1.2, phase: 2.6, scale: 0.45, alpha: 0.10),
+    ];
+    for (final w in waves) {
+      final rect = Rect.fromCenter(
+        center: Offset(size.width * 0.62, size.height * 0.5),
+        width: size.width * 1.0,
+        height: size.height * 0.62 * w.scale,
+      );
+      canvas.drawPath(
+        crmVoiceWavePath(rect, cycles: w.cycles, phase: w.phase),
+        Paint()
+          ..color = CvColors.primary.withValues(alpha: w.alpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+    // Se desvanece hacia la izquierda (zona del texto)
+    canvas.drawRect(
+      bounds,
+      Paint()
+        ..blendMode = BlendMode.dstIn
+        ..shader = const LinearGradient(
+          colors: [Color(0x00000000), Color(0xFF000000)],
+          stops: [0.0, 0.7],
+        ).createShader(bounds),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_HeroWavePainter old) => false;
 }
 
 /// Acción escrita (o transcripción corregida) -> POST /actions/interpret.
