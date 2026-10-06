@@ -302,7 +302,7 @@ void main() {
   });
 
   // -------------------------------------------------------------------
-  // FE-02: manejo global de 401 (pendiente)
+  // FE-02: manejo global de 401 (H.6)
   // -------------------------------------------------------------------
 
   // -------------------------------------------------------------------
@@ -460,5 +460,32 @@ void main() {
     } catch (_) {}
 
     expect(api.auth.isAuthenticated, isFalse);
-  }, skip: 'FE-02 pendiente: no hay manejo global de 401; la sesión sigue activa con un token rechazado');
+  });
+
+  test('FE-02: también por las vías tipadas (CRM V2, voz y chat), y un 404/500 no cierra la sesión', () async {
+    for (final call in <Future<void> Function(ApiService)>[
+      (api) => api.getDashboard(),
+      (api) => api.interpretAudio(bytes: [1], filename: 'a.webm'),
+      (api) => api.sendChatMessage('hola'),
+    ]) {
+      backend = FakeBackend();
+      final api = await authedApi();
+      backend.json('GET', '/dashboard', {"detail": "x"}, status: 401);
+      backend.json('POST', '/actions/interpret-audio', {"detail": "x"}, status: 401);
+      backend.json('POST', '/chat', {"detail": "x"}, status: 401);
+      try {
+        await backend.run(() => call(api));
+      } catch (_) {}
+      await Future<void>.delayed(Duration.zero);
+      expect(api.auth.isAuthenticated, isFalse);
+    }
+
+    backend = FakeBackend();
+    final api = await authedApi();
+    backend.json('GET', '/clients/9', {"detail": "Cliente no encontrado"}, status: 404);
+    backend.json('GET', '/dashboard', {"detail": "boom"}, status: 500);
+    await expectLater(backend.run(() => api.getClientDetail(9)), throwsA(isA<ApiException>()));
+    await expectLater(backend.run(() => api.getDashboard()), throwsA(isA<ApiException>()));
+    expect(api.auth.isAuthenticated, isTrue);
+  });
 }

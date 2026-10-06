@@ -31,6 +31,13 @@ class ApiService {
       };
     }
 
+  /// FE-02 (H.6): un 401 en una petición autenticada significa que el token
+  /// ha caducado o se ha revocado. Se cierra la sesión en toda la app (vuelve
+  /// a la pantalla de acceso), igual desde el CRM, la voz o el chat.
+  Future<void> _checkSession(int statusCode) async {
+    if (statusCode == 401 && auth.isAuthenticated) await auth.expireSession();
+  }
+
   /// Llama al endpoint GET /ping
   Future<String> ping() async {
     final url = Uri.parse("$baseUrl/ping");
@@ -79,6 +86,7 @@ class ApiService {
 
   final response = await http.get(uri, headers: _headers());
 
+  await _checkSession(response.statusCode);
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
     return data["activities"];
@@ -96,6 +104,7 @@ Future<List<dynamic>> getClients() async {
     headers: _headers(),
   );
 
+  await _checkSession(response.statusCode);
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
     return data["clients"];
@@ -116,6 +125,7 @@ Future<List<dynamic>> getContacts({int? clientId}) async {
 
   final response = await http.get(uri, headers: _headers());
 
+  await _checkSession(response.statusCode);
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
     return data["contacts"];
@@ -130,6 +140,7 @@ Future<List<dynamic>> getActivityTypes() async {
     headers: _headers(),
   );
 
+  await _checkSession(response.statusCode);
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
     return data["activity_types"];
@@ -204,6 +215,7 @@ Future<List<dynamic>> getProducts() async {
     headers: _headers(),
   );
 
+  await _checkSession(response.statusCode);
   if (response.statusCode == 200) {
     final data = jsonDecode(response.body);
     return data["products"];
@@ -248,6 +260,7 @@ Future<void> deleteActivity(int id) async {
       throw const ApiException.network();
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      await _checkSession(response.statusCode);
       throw ApiException.fromResponse(response.statusCode, response.bodyBytes);
     }
     if (response.bodyBytes.isEmpty) return null;
@@ -387,6 +400,7 @@ Future<void> deleteActivity(int id) async {
       throw const ApiException.network();
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      await _checkSession(response.statusCode);
       throw ApiException.fromResponse(response.statusCode, response.bodyBytes);
     }
     try {
@@ -456,6 +470,7 @@ Future<void> deleteActivity(int id) async {
       case 200:
         return ChatReply.parse(response.bodyBytes);
       case 401:
+        await _checkSession(401);
         throw const ChatException(ChatErrorKind.unauthorized);
       case 404:
         throw const ChatException(ChatErrorKind.notFound);

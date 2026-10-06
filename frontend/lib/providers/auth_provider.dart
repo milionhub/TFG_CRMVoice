@@ -195,6 +195,19 @@ class AuthProvider extends ChangeNotifier {
   /// ==========================
   /// LOGOUT
   /// ==========================
+  /// FE-02 (H.6): el backend ha rechazado el token (caducado o revocado).
+  /// La sesión se cierra en memoria al instante (la app vuelve a la pantalla
+  /// de acceso) y se borra el token guardado. No es un "cerrar sesión" del
+  /// usuario: no se toca la sesión de Google ni el inicio automático.
+  Future<void> expireSession() async {
+    if (_token == null) return;
+    _clearSession();
+    _isLoading = false;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove("auth_token");
+  }
+
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove("auth_token");

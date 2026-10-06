@@ -534,6 +534,7 @@ void main() {
         expect(find.text('Reintentar'), findsNothing);
         expect(find.widgetWithText(OutlinedButton, 'Iniciar sesión'), findsOneWidget);
         expect(shows('Token inválido'), isFalse);
+        expect(auth.isAuthenticated, isFalse); // FE-02 (H.6): la sesión se cierra en toda la app
       }));
 
   testWidgets('sin token no envía "Bearer null"', (tester) => backend.run(() async {

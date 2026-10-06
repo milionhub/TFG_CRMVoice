@@ -18,7 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'support/test_support.dart';
 
 void main() {
-  testWidgets('401 en el chat: "Iniciar sesión" cierra la sesión y el chat vuelve a empezar vacío', (tester) async {
+  testWidgets('401 en el chat: la sesión se cierra (FE-02) y el chat vuelve a empezar vacío', (tester) async {
     cleanPreferences({'auth_token': fakeJwt()});
     final backend = FakeBackend();
     stubSession(backend);
@@ -66,20 +66,17 @@ void main() {
       await send('¿Cómo va Rivera?');
       expect(find.text('Rivera'), findsOneWidget); // chip de contexto
 
+      // FE-02 (H.6): un 401 cierra la sesión en toda la app, sin pasos extra
       await send('¿Y sus actividades?');
-      expect(find.text('Tu sesión ha caducado. Vuelve a iniciar sesión.'), findsOneWidget);
-      expect(find.text('Reintentar'), findsNothing);
-
-      await tester.tap(find.text('Iniciar sesión'));
-      await tester.pumpAndSettle();
 
       expect(auth.isAuthenticated, isFalse);
       expect(find.byType(AuthScreen), findsOneWidget);
       expect(find.byType(ChatView), findsNothing);
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('auth_token'), isNull);
-      expect(prefs.getBool('google_auto_login_disabled'), isTrue);
-      expect(google.calls, contains('signOut'));
+      // Token caducado no es "cerrar sesión": no se cierra Google ni se bloquea su inicio automático
+      expect(prefs.getBool('google_auto_login_disabled'), isNot(isTrue));
+      expect(google.calls, isNot(contains('signOut')));
 
       // Nueva sesión: el estado del chat anterior no sobrevive
       await auth.login('ana@crmvoice.test', 'secreta', false);

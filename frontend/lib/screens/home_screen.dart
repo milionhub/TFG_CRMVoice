@@ -185,9 +185,13 @@ class SidebarState extends State<Sidebar> {
       selectedIndex = index;
     });
 
-    Navigator.pushReplacement(
+    // La sección sustituye TODA la pila (como el menú móvil): si había algo
+    // apilado sobre Home (p. ej. Histórico abierto desde Voice V2), no queda
+    // una Home antigua debajo
+    Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => sectionScreen(index)),
+      (_) => false,
     );
   }
 
