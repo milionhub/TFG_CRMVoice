@@ -46,6 +46,10 @@ class CrmFormShell extends StatelessWidget {
   /// responda el backend, para que quien abrió el formulario se entere.
   final bool busy;
 
+  /// Si se indica, cerrar (X o "atrás") llama a esto en vez de cerrar
+  /// directamente (p. ej. para confirmar que se descartan cambios).
+  final VoidCallback? onClose;
+
   const CrmFormShell({
     super.key,
     required this.title,
@@ -53,6 +57,7 @@ class CrmFormShell extends StatelessWidget {
     this.actions = const [],
     this.maxWidth = 620,
     this.busy = false,
+    this.onClose,
   });
 
   @override
@@ -70,11 +75,15 @@ class CrmFormShell extends StatelessWidget {
           );
     final scrollBody = SingleChildScrollView(padding: const EdgeInsets.fromLTRB(20, 16, 20, 20), child: body);
 
-    final close = busy ? null : () => Navigator.maybePop(context);
+    final close = busy ? null : (onClose ?? () => Navigator.maybePop(context));
+    void onPopInvoked(bool didPop, Object? result) {
+      if (!didPop && !busy) onClose?.call();
+    }
 
     if (fullScreen) {
       return PopScope(
-        canPop: !busy,
+        canPop: !busy && onClose == null,
+        onPopInvokedWithResult: onPopInvoked,
         child: Scaffold(
           backgroundColor: Colors.white,
           appBar: AppBar(
@@ -90,7 +99,8 @@ class CrmFormShell extends StatelessWidget {
 
     final height = MediaQuery.sizeOf(context).height;
     return PopScope(
-      canPop: !busy,
+      canPop: !busy && onClose == null,
+        onPopInvokedWithResult: onPopInvoked,
       child: Dialog(
         clipBehavior: Clip.antiAlias,
         insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),

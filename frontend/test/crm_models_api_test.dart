@@ -89,6 +89,18 @@ void main() {
       expect(CrmActivity.fromJson({"sin": "id"}), isNull);
     });
 
+    test('H4-01: el listado usa el nombre oficial; lo dicho (product_raw) nunca lo sustituye', () {
+      final a = CrmActivity.fromJson({
+        "id": 1,
+        "products": [
+          {"product_id": 1, "name": "Portátil Luna 13", "product_raw": null}, // elegido a mano
+          {"product_id": 2, "name": "Ratón Faro", "product_raw": "raton faro inalambrico"}, // aproximado
+        ],
+      })!;
+      expect(a.products.map((p) => p.name), ['Portátil Luna 13', 'Ratón Faro']);
+      expect(a.products.any((p) => p.name.startsWith('Producto #')), isFalse);
+    });
+
     test('transiciones de estado: una futura no se puede completar', () {
       final future = CrmActivity(
           id: 1, datetime: DateTime.now().add(const Duration(days: 2)), status: ActivityStatus.pending);

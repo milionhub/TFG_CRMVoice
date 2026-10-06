@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import '../models/chat_message.dart';
+import '../models/action_draft.dart';
 import '../models/crm.dart';
 import '../providers/auth_provider.dart';
 import 'api_errors.dart';
@@ -41,55 +42,6 @@ class ApiService {
       return data["message"] ?? "ok";
     } else {
       throw Exception("Error conexión backend");
-    }
-  }
-
-  /// Llama al endpoint POST /process-text
-  Future<Map<String, dynamic>> analyzeText(String text) async {
-    final url = Uri.parse("$baseUrl/process-text");
-
-    final response = await http.post(
-      url,
-      headers: _headers(),
-      body: jsonEncode({
-        "text": text,
-      }),
-    );
-
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception("Error al procesar el texto");
-    }
-  }
-
-   /// 🔴 NUEVO: POST /process-audio (multipart/form-data)
-  Future<Map<String, dynamic>> uploadAudio({
-    required List<int> bytes,
-    required String filename,
-  }) async {
-    final url = Uri.parse("$baseUrl/process-audio");
-
-    final request = http.MultipartRequest("POST", url);
-    if (auth.token != null) {
-      request.headers['Authorization'] = 'Bearer ${auth.token}';
-    }
-    request.files.add(
-      http.MultipartFile.fromBytes(
-        'file', // nombre del campo en FastAPI
-        bytes,
-        filename: filename,
-      ),
-    );
-
-    final streamedResponse = await request.send();
-    final body = await streamedResponse.stream.bytesToString();
-
-    if (streamedResponse.statusCode == 200) {
-      return jsonDecode(body) as Map<String, dynamic>;
-    } else {
-      throw Exception(
-          "Error al enviar audio (${streamedResponse.statusCode}): $body");
     }
   }
 
@@ -315,7 +267,7 @@ Future<void> deleteActivity(int id) async {
   /// Petición JSON al backend. Devuelve el cuerpo decodificado (UTF-8) o
   /// lanza [ApiException] con un mensaje apto para el usuario.
   Future<dynamic> _send(String method, String path,
-      {Map<String, String>? query, Object? body}) async {
+      {Map<String, String>? query, Object? body, Duration timeout = crmTimeout}) async {
     final uri = Uri.parse("$baseUrl$path")
         .replace(queryParameters: query == null || query.isEmpty ? null : query);
     final http.Response response;
@@ -330,7 +282,7 @@ Future<void> deleteActivity(int id) async {
         'DELETE' => http.delete(uri, headers: headers),
         _ => throw ArgumentError.value(method, 'method'),
       };
-      response = await future.timeout(crmTimeout);
+      response = await future.timeout(timeout);
     } on TimeoutException {
       throw const ApiException(ApiErrorKind.network,
           'El servidor ha tardado demasiado en responder. Inténtalo de nuevo.');
@@ -445,6 +397,69 @@ Future<void> deleteActivity(int id) async {
   Future<void> deleteSale(int saleId) async {
     await _send('DELETE', '/sales/$saleId');
   }
+
+  // ===================================================================
+  // Voice V2 (H.4): Action Engine de H.2 (borradores confirmables)
+  // ===================================================================
+
+  /// Whisper local + interpretación: puede tardar bastante más que un CRUD.
+  static const Duration actionTimeout = Duration(seconds: 120);
+
+  /// Límite del backend (voice_pipeline.MAX_AUDIO_BYTES).
+  static const int maxAudioBytes = 10 * 1024 * 1024;
+
+  /// POST /actions/interpret-audio (multipart, campo "file").
+  Future<VoiceInterpretation> interpretAudio({required List<int> bytes, required String filename}) async {
+    final request = http.MultipartRequest("POST", Uri.parse("$baseUrl/actions/interpret-audio"));
+    if (auth.token != null) request.headers['Authorization'] = 'Bearer ${auth.token}';
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final http.Response response;
+    try {
+      response = await http.Response.fromStream(await request.send().timeout(actionTimeout))
+          .timeout(actionTimeout);
+    } on TimeoutException {
+      throw const ApiException(ApiErrorKind.network,
+          'El servidor ha tardado demasiado en procesar el audio. Inténtalo de nuevo.');
+    } catch (_) {
+      throw const ApiException.network();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException.fromResponse(response.statusCode, response.bodyBytes);
+    }
+    try {
+      final data = _object(jsonDecode(utf8.decode(response.bodyBytes)));
+      final draft = ActionDraft.tryParse(data['draft']);
+      if (draft == null) throw const FormatException('sin borrador');
+      return VoiceInterpretation(data['transcript'] is String ? data['transcript'] as String : '', draft);
+    } catch (_) {
+      throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.');
+    }
+  }
+
+  /// POST /actions/interpret (texto escrito o transcripción corregida).
+  Future<ActionDraft> interpretText(String text) async =>
+      _draft(await _send('POST', '/actions/interpret', body: {'text': text}, timeout: actionTimeout));
+
+  Future<ActionDraft> getDraft(String id) async =>
+      _draft(await _send('GET', '/actions/${Uri.encodeComponent(id)}'));
+
+  /// PATCH /actions/{id}: ediciones tipadas por acción, con la revisión vista.
+  Future<ActionDraft> patchDraft(String id, int revision, Map<String, dynamic> edits) async => _draft(
+      await _send('PATCH', '/actions/${Uri.encodeComponent(id)}', body: {'revision': revision, 'edits': edits}));
+
+  /// POST /actions/{id}/confirm: SOLO la revisión (nunca datos de negocio).
+  Future<ConfirmOutcome> confirmDraft(String id, int revision) async {
+    final data = _object(await _send('POST', '/actions/${Uri.encodeComponent(id)}/confirm',
+        body: {'revision': revision}, timeout: actionTimeout));
+    return ConfirmOutcome(ActionResult.fromJson(data['result']), ActionDraft.tryParse(data['draft']));
+  }
+
+  Future<ActionDraft> cancelDraft(String id) async =>
+      _draft(await _send('POST', '/actions/${Uri.encodeComponent(id)}/cancel'));
+
+  ActionDraft _draft(Object? data) =>
+      ActionDraft.tryParse(data) ??
+      (throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.'));
 
   // ===================================================================
   // Chat IA (G.5)

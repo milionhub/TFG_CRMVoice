@@ -87,10 +87,15 @@ def list_activities(
         for r in rows:
 
             # 🔹 Obtener productos de la actividad
+            # Nombre oficial (name) además de lo dicho (product_raw): un producto
+            # elegido a mano en un borrador no tiene product_raw, y uno
+            # resuelto por aproximación tiene el texto mal transcrito (H4-01)
             cursor.execute("""
-                SELECT product_id, product_raw
-                FROM activity_products
-                WHERE activity_id = ?
+                SELECT ap.product_id, ap.product_raw, p.nombre AS name
+                FROM activity_products ap
+                LEFT JOIN products p ON p.id = ap.product_id
+                WHERE ap.activity_id = ?
+                ORDER BY ap.id
             """, (r["id"],))
 
             product_rows = cursor.fetchall()
@@ -99,6 +104,7 @@ def list_activities(
             products = [
                 {
                     "product_id": p["product_id"],
+                    "name": p["name"],
                     "product_raw": p["product_raw"]
                 }
                 for p in product_rows

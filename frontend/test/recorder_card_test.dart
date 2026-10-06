@@ -1,263 +1,243 @@
-// RecorderCard (P0): caracterización del flujo de grabación "mantener pulsado".
-// Sin micrófono ni permisos reales: el plugin `record` y path_provider se
-// simulan en sus MethodChannel oficiales (FakeRecorderPlatform). La subida
-// del audio usa una subclase de ApiService que registra lo recibido.
+// RecorderCard (H.4, Voice V2): estados de grabación, permiso, subida a
+// POST /actions/interpret-audio, errores recuperables (sin voz, servicio no
+// disponible, sesión caducada), acción escrita y navegación tras confirmar.
+// Sin micrófono real (FakeRecorderPlatform) ni Whisper/OpenAI (FakeBackend).
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/gestures.dart' show kLongPressTimeout;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:frontend/providers/auth_provider.dart';
-import 'package:frontend/screens/new_activity_screen.dart';
-import 'package:frontend/services/api_service.dart';
+import 'package:frontend/screens/client_detail_screen.dart';
 import 'package:frontend/widgets/recorder_card.dart';
-import 'package:provider/provider.dart';
+import 'package:frontend/widgets/voice/draft_review.dart';
+import 'package:http/http.dart' as http;
 
+import 'support/crm_fixtures.dart';
 import 'support/test_support.dart';
+import 'support/voice_fixtures.dart';
 
-class UploadingApi extends ApiService {
-  UploadingApi() : super(AuthProvider());
-
-  final uploads = <({List<int> bytes, String filename})>[];
-  Object? error;
-  Map<String, dynamic> result = {
-    "texto": "Concertar reunión con Nora",
-    "accion_detectada": "Concertar reunión",
-    "cliente_nombre": "Nebula Logística S.L.",
-    "contacto_nombre": "Nora Quintana",
-    "products_detected": [],
-  };
-
-  @override
-  Future<Map<String, dynamic>> uploadAudio({required List<int> bytes, required String filename}) async {
-    uploads.add((bytes: bytes, filename: filename));
-    if (error != null) throw error!;
-    return result;
-  }
-}
-
-const _idle = 'Mantén pulsado para grabar';
-const _recording = 'Grabando...';
-const _processing = 'Procesando audio...';
-const _deniedMessage = 'Permiso de micrófono denegado';
-const _startFailed = 'No se ha podido iniciar la grabación';
-const _nothingRecorded = 'No se ha grabado audio';
+const _idle = 'Pulsa para hablar';
+const _processing = 'Transcribiendo e interpretando...';
 
 void main() {
   late Directory tempDir;
   late FakeRecorderPlatform recorder;
-  late UploadingApi api;
+  late FakeBackend backend;
   late File recording;
 
   setUp(() {
     cleanPreferences();
+    backend = FakeBackend();
     tempDir = Directory.systemTemp.createTempSync('crmvoice_recorder_test');
     recording = File('${tempDir.path}/grabacion.m4a')..writeAsBytesSync([7, 7, 7, 7]);
     recorder = FakeRecorderPlatform(tempDir)..stopPath = (_) => recording.path;
-    api = UploadingApi();
   });
 
   tearDown(() {
+    backend.expectNoUnexpectedRequests();
     if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
   });
 
   Future<void> pumpRecorder(WidgetTester tester) async {
+    useDesktopSurface(tester);
     recorder.install();
-    await tester.pumpWidget(Provider<ApiService>.value(
-      value: api,
-      child: const MaterialApp(home: Scaffold(body: Center(child: RecorderCard()))),
-    ));
+    final auth = await loggedInAuth(backend);
+    await tester.pumpWidget(appFor(auth, const Scaffold(body: Center(child: SingleChildScrollView(child: RecorderCard())))));
   }
 
-  Future<TestGesture> pressAndHold(WidgetTester tester) async {
-    final gesture = await tester.startGesture(tester.getCenter(find.byIcon(Icons.mic_rounded)));
-    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
-    await tester.pump();
-    await tester.pump();
-    return gesture;
+  Finder mic() => find.byKey(const Key('voice-mic'));
+
+  String status(WidgetTester tester) => tester.widget<Text>(find.byKey(const Key('voice-status'))).data!;
+
+  Future<void> tapMic(WidgetTester tester) async {
+    await tester.tap(mic());
+    for (var i = 0; i < 5; i++) {
+      await tester.pump();
+    }
   }
 
-  /// Suelta y deja que termine el procesado: la lectura REAL del fichero
-  /// (abrir/leer/cerrar) alterna E/S real y microtareas de la zona del test.
-  Future<void> releaseAndProcess(WidgetTester tester, TestGesture gesture) async {
-    await gesture.up();
+  /// Deja avanzar la lectura REAL del fichero grabado (E/S fuera de la zona falsa).
+  Future<void> settleIo(WidgetTester tester) async {
     for (var i = 0; i < 50; i++) {
       await tester.pump();
-      if (find.text(_processing).evaluate().isEmpty && find.text(_recording).evaluate().isEmpty) break;
+      if (find.text(_processing).evaluate().isEmpty) break;
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
     }
-    await tester.pump(const Duration(milliseconds: 500));
-  }
-
-  bool snackBarContains(WidgetTester tester, String text) =>
-      find.descendant(of: find.byType(SnackBar), matching: find.textContaining(text)).evaluate().isNotEmpty;
-
-  testWidgets('estado inicial: invita a mantener pulsado y no toca el micrófono', (tester) async {
-    await pumpRecorder(tester);
-
-    expect(find.text(_idle), findsOneWidget);
-    expect(find.byIcon(Icons.mic_rounded), findsOneWidget);
-    expect(recorder.calls, isEmpty);
-  });
-
-  testWidgets('pulsación larga con permiso: arranca y muestra "Grabando..."', (tester) async {
-    await pumpRecorder(tester);
-
-    final gesture = await pressAndHold(tester);
-
-    expect(find.text(_recording), findsOneWidget);
-    expect(recorder.calls, containsAllInOrder(['create', 'hasPermission', 'start', 'isRecording']));
-    expect(recorder.startedPath, endsWith('.m4a'));
-    expect(recorder.startedPath, startsWith(tempDir.path));
-
-    await releaseAndProcess(tester, gesture);
-  });
-
-  testWidgets('soltar: para, sube los bytes grabados y abre la nueva actividad', (tester) async {
-    await pumpRecorder(tester);
-    final gesture = await pressAndHold(tester);
-
-    await releaseAndProcess(tester, gesture);
     await tester.pumpAndSettle();
-
-    expect(recorder.count('stop'), 1);
-    expect(api.uploads.single.bytes, [7, 7, 7, 7]);
-    expect(api.uploads.single.filename, 'grabacion.m4a');
-    expect(find.byType(NewActivityScreen), findsOneWidget);
-    expect(find.text('Nebula Logística S.L.'), findsOneWidget);
-  });
-
-  testWidgets('permiso denegado: aviso, no graba ni queda cargando; se puede reintentar', (tester) async {
-    recorder.permission = false;
-    await pumpRecorder(tester);
-
-    final denied = await pressAndHold(tester);
-    await denied.up();
-    await tester.pump();
-
-    expect(snackBarContains(tester, _deniedMessage), isTrue);
-    expect(recorder.count('start'), 0);
-    expect(find.text(_idle), findsOneWidget);
-    expect(find.text(_processing), findsNothing);
-
-    // Segundo intento, ya con permiso
-    recorder.permission = true;
-    final retry = await pressAndHold(tester);
-    expect(find.text(_recording), findsOneWidget);
-    await releaseAndProcess(tester, retry);
-  });
-
-  testWidgets('soltar antes de conceder el permiso: no graba y pide volver a pulsar', (tester) async {
-    recorder.permissionCompleter = Completer<bool>();
-    await pumpRecorder(tester);
-
-    final gesture = await pressAndHold(tester);
-    await gesture.up();
-    await tester.pump();
-    recorder.permissionCompleter!.complete(true); // el usuario acepta el diálogo tras soltar
-    await tester.pump();
-    await tester.pump();
-
-    expect(recorder.count('start'), 0);
-    expect(snackBarContains(tester, 'Micrófono activado'), isTrue);
-    expect(find.text(_idle), findsOneWidget);
-  });
-
-  testWidgets('soltar mientras start() está pendiente: cancela y no deja grabación huérfana', (tester) async {
-    recorder.startCompleter = Completer<void>();
-    await pumpRecorder(tester);
-
-    final gesture = await pressAndHold(tester);
-    await gesture.up();
-    await tester.pump();
-    recorder.startCompleter!.complete();
-    await tester.pump();
-    await tester.pump();
-
-    expect(recorder.count('cancel'), 1);
-    expect(recorder.count('stop'), 0);
-    expect(find.text(_idle), findsOneWidget);
-    expect(api.uploads, isEmpty);
-  });
-
-  testWidgets('error al iniciar: aviso, cancela y permite reintentar', (tester) async {
-    recorder.startError = PlatformException(code: 'record', message: 'micrófono ocupado');
-    await pumpRecorder(tester);
-
-    final failed = await pressAndHold(tester);
-    await failed.up();
-    await tester.pump();
-
-    expect(snackBarContains(tester, _startFailed), isTrue);
-    expect(recorder.count('cancel'), 1);
-    expect(find.text(_idle), findsOneWidget);
-
-    recorder.startError = null;
-    final retry = await pressAndHold(tester);
-    expect(find.text(_recording), findsOneWidget);
-    await releaseAndProcess(tester, retry);
-  });
-
-  testWidgets('start() sin grabación efectiva (isRecording false): aviso y sin grabar', (tester) async {
-    recorder.isRecordingAfterStart = false;
-    await pumpRecorder(tester);
-
-    final gesture = await pressAndHold(tester);
-    await gesture.up();
-    await tester.pump();
-
-    expect(snackBarContains(tester, _startFailed), isTrue);
-    expect(find.text(_recording), findsNothing);
-    expect(recorder.count('stop'), 0);
-  });
-
-  for (final variant in ['stop lanza', 'stop sin ruta']) {
-    testWidgets('error al parar ($variant): aviso, sin subida y sin carga infinita', (tester) async {
-      if (variant == 'stop lanza') {
-        recorder.stopError = PlatformException(code: 'record', message: 'fallo al parar');
-      } else {
-        recorder.stopPath = (_) => null;
-      }
-      await pumpRecorder(tester);
-      final gesture = await pressAndHold(tester);
-
-      await releaseAndProcess(tester, gesture);
-
-      expect(snackBarContains(tester, _nothingRecorded), isTrue);
-      expect(api.uploads, isEmpty);
-      expect(find.text(_idle), findsOneWidget);
-      expect(find.text(_processing), findsNothing);
-    });
   }
 
-  testWidgets('error al subir: aviso y vuelve a reposo (sin carga infinita)', (tester) async {
-    api.error = Exception('Error al enviar audio (500)');
-    await pumpRecorder(tester);
-    final gesture = await pressAndHold(tester);
+  void stubInterpretAudio(Object body, {int status = 201}) =>
+      backend.on('POST', '/actions/interpret-audio', (_) => jsonResponse(body, status: status));
 
-    await releaseAndProcess(tester, gesture);
+  testWidgets('estado inicial: invita a hablar y no toca el micrófono', (tester) => backend.run(() async {
+        await pumpRecorder(tester);
+        expect(status(tester), _idle);
+        expect(recorder.calls.where((c) => c != 'create'), isEmpty);
+        expect(find.text('Escribir la acción'), findsOneWidget);
+      }));
 
-    expect(api.uploads, hasLength(1));
-    expect(snackBarContains(tester, 'Error enviando audio'), isTrue);
-    expect(find.text(_processing), findsNothing);
-    expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.text(_idle), findsOneWidget);
-  });
+  testWidgets('pulsar graba; pulsar de nuevo para, sube el audio a /actions/interpret-audio y abre la revisión',
+      (tester) => backend.run(() async {
+            stubInterpretAudio({"transcript": activityDraft()["source_text"], "draft": activityDraft()});
+            await pumpRecorder(tester);
 
-  testWidgets('si la tarjeta se desmonta con el permiso pendiente no hay setState tras dispose', (tester) async {
-    recorder.permissionCompleter = Completer<bool>();
-    await pumpRecorder(tester);
-    final gesture = await pressAndHold(tester);
+            await tapMic(tester);
+            expect(status(tester), startsWith('Grabando 0:00'));
+            expect(recorder.calls, containsAllInOrder(['hasPermission', 'start', 'isRecording']));
+            expect(find.text('Cancelar grabación'), findsOneWidget);
 
-    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: Text('otra pantalla'))));
-    recorder.permissionCompleter!.complete(true);
-    await gesture.up();
-    await tester.pump();
-    await tester.pump();
+            await tapMic(tester);
+            await settleIo(tester);
 
-    expect(tester.takeException(), isNull);
-    expect(recorder.count('start'), 0);
-  });
+            expect(recorder.count('stop'), 1);
+            final upload = backend.calls('POST', '/actions/interpret-audio').single;
+            expect(upload.headers['content-type'], startsWith('multipart/form-data'));
+            expect(String.fromCharCodes(upload.bodyBytes), contains('filename="grabacion.m4a"'));
+            expect(backend.calls('POST', '/process-audio'), isEmpty); // nunca el flujo anterior
+            expect(find.byType(DraftReview), findsOneWidget);
+            expect(find.text('Nueva actividad · revisión'), findsOneWidget);
+          }));
+
+  testWidgets('durante la subida no se puede volver a grabar ni subir dos veces', (tester) => backend.run(() async {
+        final pending = Completer<http.Response>();
+        backend.on('POST', '/actions/interpret-audio', (_) => pending.future);
+        await pumpRecorder(tester);
+
+        await tapMic(tester);
+        await tapMic(tester);
+        for (var i = 0; i < 20 && backend.calls('POST', '/actions/interpret-audio').isEmpty; i++) {
+          await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+          await tester.pump();
+        }
+        expect(status(tester), _processing);
+        await tester.tap(mic(), warnIfMissed: false);
+        await tester.pump();
+        expect(recorder.count('start'), 1);
+        expect(backend.calls('POST', '/actions/interpret-audio'), hasLength(1));
+
+        pending.complete(jsonResponse({"transcript": "x", "draft": clientDraft()}, status: 201));
+        await tester.pumpAndSettle();
+        expect(find.byType(DraftReview), findsOneWidget);
+      }));
+
+  testWidgets('permiso denegado: error recuperable sin grabar; se puede escribir la acción', (tester) => backend.run(() async {
+        recorder.permission = false;
+        await pumpRecorder(tester);
+
+        await tapMic(tester);
+        expect(find.textContaining('Permiso de micrófono denegado'), findsOneWidget);
+        expect(recorder.count('start'), 0);
+        expect(find.text('Escribir la acción'), findsOneWidget);
+      }));
+
+  testWidgets('cancelar la grabación: descarta el audio y no sube nada', (tester) => backend.run(() async {
+        await pumpRecorder(tester);
+        await tapMic(tester);
+        await tapText(tester, 'Cancelar grabación');
+        expect(recorder.count('cancel'), 1);
+        expect(status(tester), _idle);
+        expect(backend.requests.where((r) => r.url.path.startsWith('/actions')), isEmpty);
+      }));
+
+  testWidgets('sin voz útil (422): conserva la transcripción y permite corregirla por texto',
+      (tester) => backend.run(() async {
+            stubInterpretAudio({
+              "detail": "No se ha entendido nada en el audio.",
+              "issues": [issueJson('missing', 'transcript', 'No se ha entendido nada en el audio.')],
+              "transcript": "eh mm",
+            }, status: 422);
+            backend.json('POST', '/actions/interpret', clientDraft(), status: 201);
+            await pumpRecorder(tester);
+
+            await tapMic(tester);
+            await tapMic(tester);
+            await settleIo(tester);
+
+            expect(find.text('No se ha entendido nada en el audio.'), findsOneWidget);
+            expect(find.text('Se ha entendido: «eh mm»'), findsOneWidget);
+            expect(find.text('Reintentar envío'), findsNothing); // reenviar el mismo audio no ayuda
+
+            await tapText(tester, 'Corregir el texto');
+            expect(find.text('eh mm'), findsOneWidget); // prellenado
+            await tester.enterText(find.byKey(const Key('voice-text-field')),
+                'Crea un cliente llamado Construcciones Mediterráneo en Alicante.');
+            await tapText(tester, 'Interpretar');
+            expect(lastJson(backend, 'POST', '/actions/interpret'),
+                {"text": "Crea un cliente llamado Construcciones Mediterráneo en Alicante."});
+            expect(find.text('Nuevo cliente · revisión'), findsOneWidget);
+          }));
+
+  testWidgets('servicio no disponible (503): Reintentar envío reutiliza el mismo audio', (tester) => backend.run(() async {
+        var calls = 0;
+        backend.on('POST', '/actions/interpret-audio', (_) {
+          calls++;
+          return calls == 1
+              ? jsonResponse({"detail": "No se pudo transcribir el audio. Inténtalo de nuevo.", "code": "transcription_failed"},
+                  status: 503)
+              : jsonResponse({"transcript": "x", "draft": clientDraft()}, status: 201);
+        });
+        await pumpRecorder(tester);
+        await tapMic(tester);
+        await tapMic(tester);
+        await settleIo(tester);
+
+        expect(find.text('No se pudo transcribir el audio. Inténtalo de nuevo.'), findsOneWidget);
+        await tapText(tester, 'Reintentar envío');
+        final uploads = backend.calls('POST', '/actions/interpret-audio');
+        expect(uploads, hasLength(2));
+        for (final upload in uploads) {
+          final body = String.fromCharCodes(upload.bodyBytes);
+          expect(body, contains('filename="grabacion.m4a"'));
+          expect(body, contains(String.fromCharCodes([7, 7, 7, 7])));
+        }
+        expect(recorder.count('start'), 1); // sin volver a grabar
+        expect(find.byType(DraftReview), findsOneWidget);
+      }));
+
+  testWidgets('sesión caducada (401): mensaje claro', (tester) => backend.run(() async {
+        stubInterpretAudio({"detail": "Token inválido o expirado"}, status: 401);
+        await pumpRecorder(tester);
+        await tapMic(tester);
+        await tapMic(tester);
+        await settleIo(tester);
+        expect(find.text('Tu sesión ha caducado. Vuelve a iniciar sesión.'), findsOneWidget);
+      }));
+
+  testWidgets('orden no soportada escrita: el error se muestra y el texto se conserva', (tester) => backend.run(() async {
+        backend.json('POST', '/actions/interpret', {
+          "detail": "No puedo completar actividades por voz todavía.",
+          "issues": [issueJson('unsupported', 'action', 'No puedo completar actividades por voz todavía.')],
+        }, status: 422);
+        await pumpRecorder(tester);
+        await tapText(tester, 'Escribir la acción');
+        await tester.enterText(find.byKey(const Key('voice-text-field')), 'Marca como hecha la reunión de ayer');
+        await tapText(tester, 'Interpretar');
+
+        expect(find.text('No puedo completar actividades por voz todavía.'), findsOneWidget);
+        expect(find.text('Marca como hecha la reunión de ayer'), findsOneWidget);
+        expect(find.byType(DraftReview), findsNothing);
+      }));
+
+  testWidgets('confirmar y abrir la ficha: navega a ClientDetail que carga datos frescos', (tester) => backend.run(() async {
+        backend.json('POST', '/actions/interpret', clientDraft(), status: 201);
+        backend.json('POST', '/actions/drf_cli/confirm', {
+          "result": {"entity": "client", "ids": [1], "data": {"id": 1, "name": "Nebula Logística S.L."}},
+          "draft": {...clientDraft(), "status": "executed", "confirmable": false},
+        });
+        backend.json('GET', '/clients/1', clientDetailJson());
+        backend.json('GET', '/activities', {"activities": []});
+        await pumpRecorder(tester);
+
+        await tapText(tester, 'Escribir la acción');
+        await tester.enterText(find.byKey(const Key('voice-text-field')), 'Crea el cliente Nebula');
+        await tapText(tester, 'Interpretar');
+        await tester.ensureVisible(find.byKey(const Key('voice-confirm')));
+        await tester.tap(find.byKey(const Key('voice-confirm')));
+        await tester.pumpAndSettle();
+        await tapText(tester, 'Abrir ficha del cliente');
+
+        expect(find.byType(ClientDetailScreen), findsOneWidget);
+        expect(backend.calls('GET', '/clients/1'), hasLength(1));
+        expect(find.text('Nebula Logística S.L.'), findsWidgets);
+      }));
 }

@@ -110,7 +110,11 @@ def test_create_con_varios_productos_guarda_product_id_correcto(client, user_a, 
     assert dbq.activity_products(activity_id) == expected
 
     listed = client.get("/activities", headers=user_a["headers"]).json()["activities"][0]
-    assert sorted(listed["products"], key=lambda p: p["product_id"]) == expected
+    products = sorted(listed["products"], key=lambda p: p["product_id"])
+    assert [{"product_id": p["product_id"], "product_raw": p["product_raw"]} for p in products] == expected
+    # H4-01: además, el nombre oficial del catálogo (lo que muestra la app)
+    names = {r["id"]: r["nombre"] for r in dbq.all("SELECT id, nombre FROM products")}
+    assert [p["name"] for p in products] == [names[p["product_id"]] for p in products]
 
 
 def test_create_sin_productos(client, user_a, catalog, fake_embedding, dbq):

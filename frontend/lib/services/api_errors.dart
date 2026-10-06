@@ -5,7 +5,7 @@ import 'dart:convert';
 
 import '../models/crm.dart';
 
-enum ApiErrorKind { network, unauthorized, notFound, validation, duplicate, conflict, server }
+enum ApiErrorKind { network, unauthorized, notFound, validation, duplicate, conflict, gone, unavailable, server }
 
 class ApiException implements Exception {
   final ApiErrorKind kind;
@@ -14,12 +14,20 @@ class ApiException implements Exception {
   final List<ApiIssue> issues;
   final int? existingId;
 
+  /// "code" del dominio (p. ej. "stale_revision", "draft_expired").
+  final String? code;
+
+  /// Cuerpo JSON del error: H.2 añade datos seguros como "draft" o "transcript".
+  final Map<String, dynamic> body;
+
   const ApiException(
     this.kind,
     this.message, {
     this.statusCode,
     this.issues = const [],
     this.existingId,
+    this.code,
+    this.body = const {},
   });
 
   const ApiException.network()
@@ -37,6 +45,8 @@ class ApiException implements Exception {
     final issues = ApiIssue.listFrom(map['issues']);
     final detail = map['detail'] is String ? (map['detail'] as String).trim() : null;
     final existingId = map['existing_id'] is int ? map['existing_id'] as int : null;
+    final code = map['code'] is String ? map['code'] as String : null;
+    final extra = Map<String, dynamic>.from(map);
 
     switch (status) {
       case 401:
@@ -45,7 +55,17 @@ class ApiException implements Exception {
             statusCode: status);
       case 404:
         return ApiException(ApiErrorKind.notFound, detail ?? 'No se ha encontrado el registro.',
-            statusCode: status);
+            statusCode: status, body: extra);
+      case 410:
+        return ApiException(ApiErrorKind.gone, detail ?? 'Ya no está disponible.',
+            statusCode: status, code: code, body: extra);
+      case 413:
+      case 415:
+        return ApiException(ApiErrorKind.validation, detail ?? 'Archivo no válido.', statusCode: status, body: extra);
+      case 503:
+        return ApiException(ApiErrorKind.unavailable,
+            detail ?? 'El servicio no está disponible ahora mismo. Inténtalo de nuevo en unos minutos.',
+            statusCode: status, code: code, body: extra);
       case 409:
         final duplicate = map['code'] is String && (map['code'] as String).startsWith('duplicate') ||
             issues.any((i) => i.code == 'duplicate');
@@ -55,6 +75,8 @@ class ApiException implements Exception {
           statusCode: status,
           issues: issues,
           existingId: existingId ?? (issues.isNotEmpty ? issues.first.existingId : null),
+          code: code,
+          body: extra,
         );
       case 400:
       case 422:
@@ -62,7 +84,8 @@ class ApiException implements Exception {
         final message = issues.isNotEmpty
             ? (issues.length == 1 ? describeIssue(issues.first) : 'Revisa los datos marcados.')
             : (detail ?? 'Datos no válidos.');
-        return ApiException(ApiErrorKind.validation, message, statusCode: status, issues: issues);
+        return ApiException(ApiErrorKind.validation, message,
+            statusCode: status, issues: issues, code: code, body: extra);
       default:
         return ApiException(ApiErrorKind.server, 'Error del servidor ($status). Inténtalo de nuevo más tarde.',
             statusCode: status);
@@ -115,6 +138,11 @@ const _fieldLabels = {
   'quantity': 'Cantidad',
   'amount': 'Importe',
   'activity': 'Actividad',
+  'transcript': 'Transcripción',
+  'action': 'Acción',
+  'date': 'Fecha',
+  'time': 'Hora',
+  'edits': 'Cambios',
 };
 
 /// "lines[1].amount" -> "Línea 2 · Importe"; "products[0]" -> "Productos".
@@ -133,8 +161,10 @@ String fieldLabel(String field) {
 }
 
 String describeIssue(ApiIssue issue) {
-  if (issue.field.isEmpty || issue.field == 'body') return issue.message;
-  return '${fieldLabel(issue.field)}: ${issue.message}';
+  // Los errores de un PATCH de borrador llegan como "edits.<campo>"
+  final field = issue.field.startsWith('edits.') ? issue.field.substring(6) : issue.field;
+  if (field.isEmpty || field == 'body' || field == 'transcript' || field == 'action') return issue.message;
+  return '${fieldLabel(field)}: ${issue.message}';
 }
 
 /// Mensaje para cualquier error capturado en una pantalla.

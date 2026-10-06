@@ -13,7 +13,7 @@ from typing import Literal
 from pydantic import (BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, StrictStr, field_validator,
                       model_validator)
 
-from core.formats import FormatError, normalize_datetime, parse_date, parse_money_cents
+from core.formats import FormatError, capitalize_first, normalize_datetime, parse_date, parse_money_cents
 
 ActivityStatus = Literal["pending", "completed", "cancelled"]
 
@@ -34,6 +34,11 @@ def _check_email(value):
     if value is not None and (len(value) > 120 or not _EMAIL.fullmatch(value)):
         raise ValueError("Email no válido")
     return value
+
+
+def _capitalize(value):
+    """Mayúscula inicial prudente (core.formats.capitalize_first, H4-03)."""
+    return capitalize_first(value)
 
 
 def _check_phone(value):
@@ -73,6 +78,7 @@ class ContactFields(StrictModel):
     phone: str | None = None
 
     _blanks = field_validator("role", "email", "phone", mode="before")(_blank_to_none)
+    _role = field_validator("role")(_capitalize)
     _email = field_validator("email")(_check_email)
     _phone = field_validator("phone")(_check_phone)
 
@@ -137,6 +143,7 @@ class SaleLineIn(StrictModel):
 
     _amount_cents: int = PrivateAttr()
     _concept = field_validator("concept", mode="before")(_blank_to_none)
+    _concept_case = field_validator("concept")(_capitalize)
 
     @model_validator(mode="after")
     def _parse_amount(self):
@@ -184,6 +191,7 @@ class SaleUpdate(StrictModel):
     notes: str | None = Field(None, max_length=500)
 
     _blanks = field_validator("concept", "notes", mode="before")(_blank_to_none)
+    _concept_case = field_validator("concept")(_capitalize)
     _date = field_validator("sale_date")(_check_sale_date)
 
     _amount_cents: int = PrivateAttr()

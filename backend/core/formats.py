@@ -96,5 +96,30 @@ def parse_time(value: str) -> str:
     return f"{int(match.group(1)):02d}:{match.group(2)}"
 
 
+def capitalize_first(value: str | None) -> str | None:
+    """
+    Mayúscula inicial PRUDENTE para textos tipo frase (cargo de un contacto,
+    concepto de una venta). Política (H4-03):
+
+    - solo se toca la PRIMERA letra y solo si la primera palabra está entera
+      en minúsculas: "encargada de proyectos" -> "Encargada de proyectos";
+    - el resto del texto no cambia (nada de .title()): "jefe de obra en BBVA"
+      -> "Jefe de obra en BBVA";
+    - si la primera palabra ya tiene alguna mayúscula se respeta tal cual
+      (siglas, marcas, mayúsculas deliberadas): "CEO", "iPhone", "eBay";
+    - si no empieza por una letra (cifras, símbolos) no se toca.
+
+    Se aplica a datos de formulario y de IA por igual (esquemas de escritura
+    y borradores). No se usa en nombres propios ni en identificadores, ni
+    interviene en la detección de duplicados.
+    """
+    if not value:
+        return value
+    first_word = value.split(maxsplit=1)[0]
+    if not value[0].isalpha() or first_word != first_word.lower():
+        return value
+    return value[0].upper() + value[1:]
+
+
 def iso_now(now: datetime) -> str:
     return now.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")

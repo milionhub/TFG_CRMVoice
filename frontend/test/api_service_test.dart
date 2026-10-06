@@ -235,14 +235,35 @@ void main() {
   // Audio y utilidades
   // -------------------------------------------------------------------
 
-  test('uploadAudio: multipart con el campo "file", nombre y Bearer; 200 devuelve el análisis', () async {
+  // Voice V2 (H.4): POST /actions/interpret-audio y ciclo del borrador
+  Map<String, dynamic> draftJson({int revision = 1, String status = 'open'}) => {
+        "id": "abc_123",
+        "action_type": "create_client",
+        "status": status,
+        "revision": revision,
+        "source": "voice",
+        "source_text": "Crea el cliente Ñandú",
+        "fields": {"name": "Ñandú"},
+        "issues": [],
+        "confirmable": true,
+        "expired": false,
+        "expires_at": "2026-10-06T12:00:00",
+        "result": null,
+        "created_at": "2026-10-06T11:30:00",
+        "updated_at": "2026-10-06T11:30:00",
+      };
+
+  test('interpretAudio: multipart "file" con Bearer a /actions/interpret-audio; transcripción y borrador', () async {
     final api = await authedApi();
-    backend.json('POST', '/process-audio', {"texto": "hola", "cliente_id": 1});
+    backend.json('POST', '/actions/interpret-audio',
+        {"transcript": "Crea el cliente Ñandú", "draft": draftJson()}, status: 201);
 
-    final result = await backend.run(() => api.uploadAudio(bytes: [1, 2, 3, 4], filename: 'audio_1.m4a'));
+    final result = await backend.run(() => api.interpretAudio(bytes: [1, 2, 3, 4], filename: 'audio_1.m4a'));
 
-    expect(result, {"texto": "hola", "cliente_id": 1});
-    final request = only('POST', '/process-audio');
+    expect(result.transcript, 'Crea el cliente Ñandú');
+    expect(result.draft.id, 'abc_123');
+    expect(result.draft.confirmable, isTrue);
+    final request = only('POST', '/actions/interpret-audio');
     expect(request.headers['Authorization'], 'Bearer ${api.auth.token}');
     expect(request.headers['content-type'], startsWith('multipart/form-data'));
     final body = latin1.decode(request.bodyBytes);
@@ -250,15 +271,64 @@ void main() {
     expect(body, contains('filename="audio_1.m4a"'));
   });
 
-  for (final status in [400, 413, 415, 500]) {
-    test('uploadAudio $status lanza excepción con el status', () async {
-      final api = await authedApi();
-      backend.json('POST', '/process-audio', {"detail": "error"}, status: status);
+  test('interpretAudio 422 sin voz: conserva la transcripción del error; 413/503 con su mensaje', () async {
+    final api = await authedApi();
+    backend.json('POST', '/actions/interpret-audio', {
+      "detail": "No se ha entendido nada en el audio.",
+      "issues": [{"code": "missing", "field": "transcript", "message": "No se ha entendido nada en el audio.", "blocking": true}],
+      "transcript": "eh",
+    }, status: 422);
+    await expectLater(
+        backend.run(() => api.interpretAudio(bytes: [1], filename: 'a.webm')),
+        throwsA(isA<ApiException>()
+            .having((e) => e.body['transcript'], 'transcript', 'eh')
+            .having((e) => e.message, 'message', 'No se ha entendido nada en el audio.')));
 
-      await expectLater(backend.run(() => api.uploadAudio(bytes: [1], filename: 'a.webm')),
-          throwsA(predicate((e) => e.toString().contains('($status)'))));
+    backend.json('POST', '/actions/interpret-audio', {"detail": "El audio supera el tamaño máximo (10 MB)"}, status: 413);
+    await expectLater(backend.run(() => api.interpretAudio(bytes: [1], filename: 'a.webm')),
+        throwsA(isA<ApiException>().having((e) => e.message, 'message', contains('10 MB'))));
+
+    backend.json('POST', '/actions/interpret-audio',
+        {"detail": "No se pudo transcribir el audio. Inténtalo de nuevo.", "code": "transcription_failed"}, status: 503);
+    await expectLater(backend.run(() => api.interpretAudio(bytes: [1], filename: 'a.webm')),
+        throwsA(isA<ApiException>().having((e) => e.kind, 'kind', ApiErrorKind.unavailable)));
+  });
+
+  test('borrador: PATCH con revisión y ediciones; confirm SOLO con la revisión; cancel sin cuerpo', () async {
+    final api = await authedApi();
+    backend.json('PATCH', '/actions/abc_123', draftJson(revision: 2));
+    backend.json('POST', '/actions/abc_123/confirm', {
+      "result": {"entity": "client", "ids": [9], "data": {"id": 9, "name": "Ñandú"}},
+      "draft": draftJson(revision: 2, status: 'executed'),
     });
-  }
+    backend.json('POST', '/actions/abc_123/cancel', draftJson(status: 'cancelled'));
+
+    final edited = await backend.run(() => api.patchDraft('abc_123', 1, {"city": "Alicante"}));
+    final confirmed = await backend.run(() => api.confirmDraft('abc_123', 2));
+    final cancelled = await backend.run(() => api.cancelDraft('abc_123'));
+
+    expect(jsonDecode(only('PATCH', '/actions/abc_123').body), {"revision": 1, "edits": {"city": "Alicante"}});
+    expect(jsonDecode(only('POST', '/actions/abc_123/confirm').body), {"revision": 2});
+    expect(edited.revision, 2);
+    expect(confirmed.result!.entity, 'client');
+    expect(confirmed.result!.clientId, 9);
+    expect(cancelled.status, 'cancelled');
+  });
+
+  test('409 stale_revision: el error trae el borrador actual', () async {
+    final api = await authedApi();
+    backend.json('POST', '/actions/abc_123/confirm', {
+      "detail": "El borrador ha cambiado: revisa la versión actual antes de confirmar.",
+      "code": "stale_revision",
+      "draft": draftJson(revision: 3),
+      "current_revision": 3,
+    }, status: 409);
+    await expectLater(
+        backend.run(() => api.confirmDraft('abc_123', 2)),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'code', 'stale_revision')
+            .having((e) => e.body['draft']['revision'], 'draft.revision', 3)));
+  });
 
   test('ping: devuelve "ok" con la respuesta real de /ping', () async {
     backend.json('GET', '/ping', {"status": "ok"});

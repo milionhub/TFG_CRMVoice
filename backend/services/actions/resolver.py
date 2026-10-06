@@ -23,7 +23,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ValidationError
 
-from core.formats import FormatError, iso_now, parse_date, parse_money_cents, parse_time
+from core.formats import FormatError, capitalize_first, iso_now, parse_date, parse_money_cents, parse_time
 from schemas.actions import (DRAFT_MODELS, EDIT_MODELS, ActivityDraft, ClientDraft, ContactDraft, Interpretation,
                              ResolvedRef, SaleDraft, SaleLineDraft)
 from schemas.crm import ActivityIn, ClientIn, ContactIn, SaleCreate, SaleLineIn, cents_to_text
@@ -220,7 +220,7 @@ def _contact_draft(it: Interpretation, salesperson_id: int) -> ContactDraft:
     new = it.new_contact
     client, _ = resolve_client_contact(it.client_name, None, salesperson_id)  # el contacto es NUEVO: no se busca
     return ContactDraft(client=client, name=_clean(new.name if new and new.name else it.contact_name, 80),
-                        role=_clean(new.role, 80) if new else None,
+                        role=capitalize_first(_clean(new.role, 80)) if new else None,
                         email=_clean(new.email, 120) if new else None,
                         phone=_clean(new.phone, 30) if new else None)
 
@@ -235,7 +235,7 @@ def _sale_draft(conn, it: Interpretation, salesperson_id: int, now: datetime) ->
 
 def _sale_line(conn, product_name, concept, quantity, amount, is_unit: bool = False) -> SaleLineDraft:
     product = resolve_product_ref(conn, product_name) if _clean(product_name) else None
-    line = SaleLineDraft(product=product, concept=_clean(concept, 200), quantity=quantity,
+    line = SaleLineDraft(product=product, concept=capitalize_first(_clean(concept, 200)), quantity=quantity,
                          amount_said=None if amount is None else _clean(str(amount), 40))
     if amount is not None:
         try:
@@ -348,6 +348,8 @@ def _edit_contact(conn, f: ContactDraft, e, changed, salesperson_id):
     for name in ("name", "role", "email", "phone"):
         if name in changed:
             setattr(f, name, _clean(getattr(e, name)))
+    if "role" in changed:
+        f.role = capitalize_first(f.role)        # misma política que el formulario (H4-03)
 
 
 def _edit_sale(conn, f: SaleDraft, e, changed, salesperson_id):

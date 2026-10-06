@@ -113,6 +113,30 @@ def test_confirmar_crea_la_actividad_una_sola_vez(client, user_a, h2_crm, draft,
     assert len(fake_embedding.calls) == 1        # después del commit, una sola vez
 
 
+def test_h4_01_producto_elegido_a_mano_se_lista_con_su_nombre_oficial(client, user_a, h2_crm, draft, dbq,
+                                                                       fake_embedding):
+    """Whisper oyó «portátil 1-13»; el usuario elige el producto en el borrador y confirma."""
+    created = draft(activity_interp(products=["portátil 1-13"]))
+    assert created["fields"]["products"][0]["problem"] == "not_found"
+
+    edited = patch(client, user_a, created["id"], 1, {"product_ids": [h2_crm.luna]})
+    assert edited.status_code == 200, edited.json()
+    assert confirm(client, user_a, created["id"], 2).status_code == 200
+
+    [row] = dbq.all("SELECT * FROM activities")
+    assert row["transcripcion"] == "dictado"                                   # la transcripción, intacta
+    assert dbq.activity_products(row["id"]) == [{"product_id": h2_crm.luna, "product_raw": None}]
+    listed = client.get("/activities", headers=user_a["headers"]).json()["activities"]
+    assert listed[0]["products"] == [{"product_id": h2_crm.luna, "name": "Portatil Luna 13", "product_raw": None}]
+
+
+def test_listado_muestra_el_nombre_oficial_aunque_se_dijera_otra_cosa(client, user_a, h2_crm, draft, fake_embedding):
+    created = draft()                                                          # dijo «Luna 13» (alias)
+    assert confirm(client, user_a, created["id"], 1).status_code == 200
+    [product] = client.get("/activities", headers=user_a["headers"]).json()["activities"][0]["products"]
+    assert (product["name"], product["product_raw"]) == ("Portatil Luna 13", "Luna 13")
+
+
 def test_confirmar_con_el_embedding_caido_guarda_igual(client, user_a, draft, dbq, failing_embedding):
     created = draft()
     assert confirm(client, user_a, created["id"], 1).status_code == 200
