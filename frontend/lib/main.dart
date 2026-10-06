@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'core/navigation.dart';
 import 'providers/activity_provider.dart';
 import 'providers/auth_provider.dart';
 import 'screens/home_screen.dart';
@@ -55,6 +56,8 @@ class _CRMVoiceAppState extends State<CRMVoiceApp> {
       debugShowCheckedModeBanner: false,
       title: "CRM Voice",
       theme: ThemeData.dark(),
+      // Recarga de las métricas de Home al volver a ella (H.5.2)
+      navigatorObservers: [crmRouteObserver],
 
       home: !auth.isInitialized
         ? const Scaffold(

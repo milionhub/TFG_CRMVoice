@@ -564,3 +564,46 @@ class ClientDetail {
     );
   }
 }
+
+// =====================================================================
+// Métricas de Home (GET /dashboard, H.5.2)
+// =====================================================================
+
+class DashboardData {
+  final int pending;
+  final int overdue;
+  final int upcoming;
+  final int upcoming7d;
+  final List<CrmActivity> nextActivities;
+  final String? salesMonth; // "YYYY-MM"
+  final int salesMonthCents;
+  final int salesMonthLines;
+
+  const DashboardData({
+    this.pending = 0,
+    this.overdue = 0,
+    this.upcoming = 0,
+    this.upcoming7d = 0,
+    this.nextActivities = const [],
+    this.salesMonth,
+    this.salesMonthCents = 0,
+    this.salesMonthLines = 0,
+  });
+
+  factory DashboardData.fromJson(Map<String, dynamic> json) {
+    final a = json['activities'] is Map ? Map<String, dynamic>.from(json['activities']) : const <String, dynamic>{};
+    final s = json['sales_month'] is Map ? Map<String, dynamic>.from(json['sales_month']) : const <String, dynamic>{};
+    return DashboardData(
+      pending: _int(a['pending']) ?? 0,
+      overdue: _int(a['overdue']) ?? 0,
+      upcoming: _int(a['upcoming']) ?? 0,
+      upcoming7d: _int(a['upcoming_7d']) ?? 0,
+      nextActivities: CrmActivity.listFrom(json['next_activities']),
+      salesMonth: _str(s['month']),
+      salesMonthCents: _int(s['total_cents']) ?? 0,
+      salesMonthLines: _int(s['line_count']) ?? 0,
+    );
+  }
+
+  bool get isEmpty => pending == 0 && upcoming == 0 && salesMonthLines == 0 && nextActivities.isEmpty;
+}

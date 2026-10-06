@@ -54,6 +54,9 @@ class FakeBackend {
     _routes['$method $path'] = handler;
   }
 
+  /// Hay ya un handler para "MÉTODO /ruta".
+  bool handles(String method, String path) => _routes.containsKey('$method $path');
+
   /// Atajo: responde siempre con este JSON y status.
   void json(String method, String path, Object? body, {int status = 200}) {
     on(method, path, (_) => http.Response(jsonEncode(body), status,
@@ -98,7 +101,16 @@ void stubSession(FakeBackend backend,
   backend.json('POST', '/register',
       {"access_token": fakeJwt(userId: userId, email: email), "token_type": "bearer"});
   backend.json('GET', '/me', {"id": userId, "nombre": nombre, "email": email});
+  // Métricas de Home (H.5.2): vacías por defecto; cada test puede sustituirlas
+  if (!backend.handles('GET', '/dashboard')) backend.json('GET', '/dashboard', emptyDashboard);
 }
+
+const emptyDashboard = {
+  "now": "2026-10-15T12:00:00",
+  "activities": {"pending": 0, "overdue": 0, "upcoming": 0, "upcoming_7d": 0},
+  "next_activities": [],
+  "sales_month": {"month": "2026-10", "date_from": "2026-10-01", "date_to": "2026-10-31", "total_cents": 0, "line_count": 0},
+};
 
 // =====================================================================
 // Canales de plataforma simulados

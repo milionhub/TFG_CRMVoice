@@ -8,9 +8,10 @@ tiene propietario efectivo en el CRM. Ninguna llama al LLM.
 from datetime import datetime
 
 from services.crm_tools._common import (
-    activity_summary, fetch_activities, iso_now, open_connection, resolve_now, validate_id,
+    NOT_CANCELLED, activity_summary, fetch_activities, iso_now, open_connection, resolve_now, validate_id,
 )
 from services.crm_tools.products import discussed_products, invoiced_products
+from services.crm_tools.sales import sales_summary
 from services.insights import detect_opportunities
 
 MEETING_RECENT_LIMIT = 5
@@ -47,7 +48,7 @@ def _contacts(conn, client_id: int) -> list[dict]:
 
 
 def _billing(conn, client_id: int) -> dict:
-    """Facturación GLOBAL del cliente (todas las facturas, de cualquier comercial)."""
+    """Facturación HISTÓRICA y GLOBAL del cliente (todas las facturas, de cualquier comercial)."""
     row = conn.execute("""
         SELECT COALESCE(SUM(il.total), 0) AS total, COUNT(DISTINCT i.id) AS invoices, MAX(i.fecha) AS last_date
         FROM invoices i
@@ -57,6 +58,7 @@ def _billing(conn, client_id: int) -> dict:
     top = invoiced_products(conn, client_id, limit=1)
     return {
         "scope": "global",
+        "source": "Facturas históricas (de todos los comerciales; no incluye las ventas registradas en CRMVoice)",
         "total_billed": row["total"],
         "invoice_count": row["invoices"],
         "average_ticket": round(row["total"] / row["invoices"], 2) if row["invoices"] else None,
@@ -76,6 +78,8 @@ def _overview(conn, client_id: int, salesperson_id: int, now: datetime):
         "contacts": _contacts(conn, client_id),
         "activity": activity_summary(conn, salesperson_id, now, client_id=client_id),
         "billing": _billing(conn, client_id),
+        # Ventas registradas por el comercial (H.2/H.3/H.4): separadas de las facturas, nunca sumadas
+        "my_sales": sales_summary(conn, salesperson_id, client_id=client_id),
         "products": {
             "discussed": discussed_products(conn, client_id, salesperson_id),
             "invoiced": invoiced_products(conn, client_id),
@@ -138,9 +142,11 @@ def prepare_meeting_context(client_id: int, salesperson_id: int, *, now: datetim
             return {"found": False, "client_id": client_id}
         current = iso_now(now)
         by_client = ("a.client_id = ?", client_id)
-        recent, _ = fetch_activities(conn, salesperson_id, [by_client, ("a.datetime_iso < ?", current)],
+        # Las canceladas no son contactos hechos ni compromisos
+        recent, _ = fetch_activities(conn, salesperson_id, [by_client, NOT_CANCELLED, ("a.datetime_iso < ?", current)],
                                      order="desc", limit=MEETING_RECENT_LIMIT, now=now)
-        upcoming, _ = fetch_activities(conn, salesperson_id, [by_client, ("a.datetime_iso >= ?", current)],
+        upcoming, _ = fetch_activities(conn, salesperson_id,
+                                       [by_client, NOT_CANCELLED, ("a.datetime_iso >= ?", current)],
                                        order="asc", limit=MEETING_UPCOMING_LIMIT, now=now)
 
     last = context["activity"]["last_activity"]

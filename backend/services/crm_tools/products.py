@@ -90,7 +90,7 @@ def discussed_products(conn, client_id: int, salesperson_id: int, limit: int = C
         FROM activity_products ap
         JOIN activities a ON a.id = ap.activity_id
         JOIN products p ON p.id = ap.product_id
-        WHERE a.client_id = ? AND a.salesperson_id = ?
+        WHERE a.client_id = ? AND a.salesperson_id = ? AND a.status != 'cancelled'
         GROUP BY p.id
         ORDER BY activities DESC, last_date DESC, p.nombre, p.id
         LIMIT ?

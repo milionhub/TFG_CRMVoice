@@ -17,6 +17,7 @@ from api.routers import (
     activities as activities_router,
     auth as auth_router,
     chat as chat_router,
+    dashboard as dashboard_router,
     crm as crm_router,
     sales as sales_router,
     system as system_router,
@@ -54,6 +55,7 @@ app.include_router(auth_router.router)
 app.include_router(crm_router.router)
 app.include_router(activities_router.router)
 app.include_router(sales_router.router)
+app.include_router(dashboard_router.router)
 app.include_router(actions_router.router)
 app.include_router(voice_router.router)
 app.include_router(chat_router.router)

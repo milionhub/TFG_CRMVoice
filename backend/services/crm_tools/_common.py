@@ -103,8 +103,13 @@ def scope_conditions(scope: str, now: datetime) -> list[tuple[str, str]]:
 
 # --- Actividades --------------------------------------------------------
 
+# Estados de una actividad (H.2). Una cancelada no es ni un compromiso ni un
+# contacto hecho: los recuentos, rankings y "última/próxima" la excluyen.
+ACTIVITY_STATUSES = ("pending", "completed", "cancelled")
+NOT_CANCELLED = ("a.status != 'cancelled'", [])
+
 _ACTIVITY_SELECT = """
-    SELECT a.id, a.datetime_iso, a.comentario,
+    SELECT a.id, a.datetime_iso, a.comentario, a.status,
            a.client_id, c.razon_social AS client_name,
            a.contact_id, ct.nombre AS contact_name,
            a.activity_type_id, at.accion AS activity_type
@@ -178,6 +183,9 @@ def fetch_activities(conn: sqlite3.Connection, salesperson_id: int, conditions=(
             "id": r["id"],
             "datetime": r["datetime_iso"],
             "timing": None if r["datetime_iso"] is None else ("past" if r["datetime_iso"] < current else "upcoming"),
+            "status": r["status"],
+            # Vencida: pendiente cuya fecha y hora ya pasó
+            "overdue": r["status"] == "pending" and r["datetime_iso"] is not None and r["datetime_iso"] < current,
             "client": _ref(r["client_id"], r["client_name"]),
             "contact": _ref(r["contact_id"], r["contact_name"]),
             "activity_type": _ref(r["activity_type_id"], r["activity_type"]),
@@ -208,7 +216,14 @@ def activities_by_client(conn: sqlite3.Connection, salesperson_id: int, conditio
 
 def activity_summary(conn: sqlite3.Connection, salesperson_id: int, now: datetime, *,
                      client_id: int | None = None, contact_id: int | None = None) -> dict:
-    """Recuento, última pasada, próxima y tipos de las actividades DEL comercial (con un cliente o contacto)."""
+    """
+    Resumen de las actividades DEL comercial (con un cliente o contacto):
+    - by_status: pending / overdue (pendientes ya pasadas) / completed / cancelled;
+    - total, past, upcoming y by_type SIN las canceladas;
+    - last_activity: la última COMPLETADA (el último contacto hecho);
+    - next_activity: la próxima no cancelada desde ahora (una futura no puede
+      estar completada: en la práctica, la próxima pendiente).
+    """
     conditions = []
     if client_id is not None:
         conditions.append(("a.client_id = ?", client_id))
@@ -219,24 +234,30 @@ def activity_summary(conn: sqlite3.Connection, salesperson_id: int, now: datetim
     current = iso_now(now)
 
     counts = conn.execute(f"""
-        SELECT COUNT(*) AS total,
-               COALESCE(SUM(a.datetime_iso < ?), 0) AS past,
-               COALESCE(SUM(a.datetime_iso >= ?), 0) AS upcoming
+        SELECT COALESCE(SUM(a.status != 'cancelled'), 0) AS total,
+               COALESCE(SUM(a.status != 'cancelled' AND a.datetime_iso < ?), 0) AS past,
+               COALESCE(SUM(a.status != 'cancelled' AND a.datetime_iso >= ?), 0) AS upcoming,
+               COALESCE(SUM(a.status = 'pending'), 0) AS pending,
+               COALESCE(SUM(a.status = 'pending' AND a.datetime_iso < ?), 0) AS overdue,
+               COALESCE(SUM(a.status = 'completed'), 0) AS completed,
+               COALESCE(SUM(a.status = 'cancelled'), 0) AS cancelled
         FROM activities a WHERE {where}
-    """, [current, current] + params).fetchone()
+    """, [current, current, current] + params).fetchone()
 
     by_type = conn.execute(f"""
         SELECT a.activity_type_id, at.accion, COUNT(*) AS total
         FROM activities a
         LEFT JOIN activity_types at ON at.id = a.activity_type_id
-        WHERE {where}
+        WHERE {where} AND a.status != 'cancelled'
         GROUP BY a.activity_type_id
         ORDER BY total DESC, at.accion, a.activity_type_id
     """, params).fetchall()
 
-    last, _ = fetch_activities(conn, salesperson_id, conditions + [("a.datetime_iso < ?", current)],
+    last, _ = fetch_activities(conn, salesperson_id, conditions + [("a.status = 'completed'", []),
+                                                                   ("a.datetime_iso < ?", current)],
                                order="desc", limit=1, now=now)
-    upcoming, _ = fetch_activities(conn, salesperson_id, conditions + [("a.datetime_iso >= ?", current)],
+    upcoming, _ = fetch_activities(conn, salesperson_id, conditions + [NOT_CANCELLED,
+                                                                       ("a.datetime_iso >= ?", current)],
                                    order="asc", limit=1, now=now)
 
     return {
@@ -244,6 +265,7 @@ def activity_summary(conn: sqlite3.Connection, salesperson_id: int, now: datetim
         "total": counts["total"],
         "past": counts["past"],
         "upcoming": counts["upcoming"],
+        "by_status": {k: counts[k] for k in ("pending", "overdue", "completed", "cancelled")},
         "last_activity": last[0] if last else None,
         "next_activity": upcoming[0] if upcoming else None,
         "by_type": [

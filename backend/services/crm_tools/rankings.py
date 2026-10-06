@@ -36,7 +36,7 @@ def _activity_count(conn, salesperson_id, limit, now):
         SELECT c.id, c.razon_social, COUNT(a.id) AS total, MAX(a.datetime_iso) AS last_date
         FROM activities a
         JOIN clients c ON c.id = a.client_id
-        WHERE a.salesperson_id = ?
+        WHERE a.salesperson_id = ? AND a.status != 'cancelled'
         GROUP BY c.id
         ORDER BY total DESC, c.razon_social, c.id
         LIMIT ?
@@ -52,18 +52,19 @@ def _inactivity(conn, salesperson_id, limit, now):
     current = iso_now(now)
     rows = conn.execute("""
         SELECT c.id, c.razon_social,
-               MAX(CASE WHEN a.datetime_iso < ? THEN a.datetime_iso END) AS last_past,
+               MAX(CASE WHEN a.status = 'completed' AND a.datetime_iso < ? THEN a.datetime_iso END) AS last_past,
                MIN(CASE WHEN a.datetime_iso >= ? THEN a.datetime_iso END) AS next_upcoming
         FROM activities a
         JOIN clients c ON c.id = a.client_id
-        WHERE a.salesperson_id = ?
+        WHERE a.salesperson_id = ? AND a.status != 'cancelled'
         GROUP BY c.id
         ORDER BY (last_past IS NOT NULL), last_past ASC, c.razon_social, c.id
         LIMIT ?
     """, (current, current, salesperson_id, limit)).fetchall()
     without = conn.execute("""
         SELECT COUNT(*) FROM clients c
-        WHERE NOT EXISTS (SELECT 1 FROM activities a WHERE a.client_id = c.id AND a.salesperson_id = ?)
+        WHERE NOT EXISTS (SELECT 1 FROM activities a WHERE a.client_id = c.id AND a.salesperson_id = ?
+                          AND a.status != 'cancelled')
     """, (salesperson_id,)).fetchone()[0]
 
     def days_since(value):
@@ -99,8 +100,8 @@ ATTENTION_ACTIVITY_WINDOW_DAYS = 90
 
 ATTENTION_RULES = (
     "Señales del CRM, no una puntuación. never_contacted: no tienes ninguna actividad con el cliente. "
-    f"inactive_90d: tu última actividad pasada con él fue hace más de {ATTENTION_INACTIVE_DAYS} días. "
-    "no_upcoming: no tienes ninguna actividad próxima con él. "
+    f"inactive_90d: tu última actividad COMPLETADA con él fue hace más de {ATTENTION_INACTIVE_DAYS} días. "
+    "no_upcoming: no tienes ninguna actividad próxima (no cancelada) con él. Las canceladas no cuentan. "
     "top_billing: está en el tercio superior por facturación total (global, todos los comerciales) "
     "de los clientes que facturan. "
     "top_billing_low_attention: top_billing y además never_contacted o inactive_90d. "
@@ -117,11 +118,12 @@ def _attention(conn, salesperson_id, limit, now):
     rows = conn.execute("""
         SELECT c.id, c.razon_social,
                COUNT(a.id) AS own_total,
-               MAX(CASE WHEN a.datetime_iso < ? THEN a.datetime_iso END) AS last_past,
+               MAX(CASE WHEN a.status = 'completed' AND a.datetime_iso < ? THEN a.datetime_iso END) AS last_past,
                MIN(CASE WHEN a.datetime_iso >= ? THEN a.datetime_iso END) AS next_upcoming,
-               COALESCE(SUM(CASE WHEN a.datetime_iso >= ? AND a.datetime_iso < ? THEN 1 ELSE 0 END), 0) AS recent
+               COALESCE(SUM(CASE WHEN a.status = 'completed' AND a.datetime_iso >= ? AND a.datetime_iso < ?
+                                 THEN 1 ELSE 0 END), 0) AS recent
         FROM clients c
-        LEFT JOIN activities a ON a.client_id = c.id AND a.salesperson_id = ?
+        LEFT JOIN activities a ON a.client_id = c.id AND a.salesperson_id = ? AND a.status != 'cancelled'
         GROUP BY c.id
     """, (current, current, window_start, current, salesperson_id)).fetchall()
 
@@ -187,7 +189,7 @@ def _product_discussed(conn, salesperson_id, limit, now):
         FROM activity_products ap
         JOIN activities a ON a.id = ap.activity_id
         JOIN products p ON p.id = ap.product_id
-        WHERE a.salesperson_id = ?
+        WHERE a.salesperson_id = ? AND a.status != 'cancelled'
         GROUP BY p.id
         ORDER BY activities DESC, clients DESC, p.nombre, p.id
         LIMIT ?

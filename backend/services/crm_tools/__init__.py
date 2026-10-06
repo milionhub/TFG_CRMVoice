@@ -17,9 +17,10 @@ from services.crm_tools.activities import list_activities, search_activities
 from services.crm_tools.entities import find_entities
 from services.crm_tools.products import get_client_products, search_product_catalog
 from services.crm_tools.rankings import METRICS as RANKING_METRICS, crm_rankings
+from services.crm_tools.sales import list_sales
 
 __all__ = [
     "RANKING_METRICS", "TEMPORAL_SCOPES", "ToolArgumentError",
     "crm_rankings", "find_entities", "get_client_overview", "get_client_products", "get_contact",
-    "list_activities", "prepare_meeting_context", "search_activities", "search_product_catalog",
+    "list_activities", "list_sales", "prepare_meeting_context", "search_activities", "search_product_catalog",
 ]

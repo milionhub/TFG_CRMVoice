@@ -146,6 +146,9 @@ class ListActivitiesArgs(_Args):
                           "limit 1. Para otros periodos, date_from/date_to con el calendario del contexto")
     date_from: str | None = Field(None, description="Día inicial YYYY-MM-DD (inclusive)")
     date_to: str | None = Field(None, description="Día final YYYY-MM-DD (inclusive)")
+    status: Literal["pending", "completed", "cancelled", "overdue"] | None = Field(
+        None, description="Estado: pending (pendientes), completed (hechas), cancelled (canceladas), overdue "
+                          "(vencidas: pendientes cuya fecha ya pasó). Sin status se excluyen las canceladas")
     product_name: str | None = Field(
         None, description="Nombre o alias de un producto del catálogo: solo actividades donde se trató. "
                           "No añadas fechas ni temporal_scope salvo que el usuario diga un periodo")
@@ -153,6 +156,16 @@ class ListActivitiesArgs(_Args):
 
     _ids = field_validator("client_id", "contact_id")(_check_id)
     _product = field_validator("product_name")(lambda v: _check_text(v, 100))
+    _limit = field_validator("limit")(lambda v: _check_limit(v, 20))
+
+
+class ListSalesArgs(_Args):
+    client_id: int | None = ClientId
+    date_from: str | None = Field(None, description="Día inicial YYYY-MM-DD (inclusive)")
+    date_to: str | None = Field(None, description="Día final YYYY-MM-DD (inclusive)")
+    limit: int | None = Field(None, description="Máximo de ventas detalladas (1-20, por defecto 10)")
+
+    _ids = field_validator("client_id")(_check_id)
     _limit = field_validator("limit")(lambda v: _check_limit(v, 20))
 
 
@@ -224,6 +237,8 @@ def _activity(a, comment_chars=COMMENT_CHARS):
         "client": _ref(a["client"]),
         "contact": _ref(a["contact"]),
         "type": a["activity_type"]["name"] if a["activity_type"] else None,
+        "status": a["status"],
+        "overdue": a["overdue"],
         "comment": _clip(a["comment"], comment_chars),
         "products": [p["name"] for p in a["products"]],
     }
@@ -232,6 +247,7 @@ def _activity(a, comment_chars=COMMENT_CHARS):
 def _activity_summary(s):
     return {
         "scope": s["scope"], "total": s["total"], "past": s["past"], "upcoming": s["upcoming"],
+        "by_status": s["by_status"],
         "last_activity": _activity(s["last_activity"]), "next_activity": _activity(s["next_activity"]),
         "by_type": [{"type": t["activity_type"]["name"] if t["activity_type"] else None, "count": t["count"]}
                     for t in s["by_type"]],
@@ -248,7 +264,9 @@ def _overview(r):
             "scope": b["scope"], "total_billed": b["total_billed"], "invoice_count": b["invoice_count"],
             "average_ticket": b["average_ticket"], "last_invoice_date": b["last_invoice_date"],
             "top_product": b["top_product"]["name"] if b["top_product"] else None,
+            "source": b["source"],
         },
+        "my_sales": _sales_summary(r["my_sales"]),
         "products": {},
     }
     # Sin teléfono ni email: datos de contacto solo con get_contact (petición explícita)
@@ -256,6 +274,11 @@ def _overview(r):
     _cap(_discussed(r["products"]["discussed"]), 8, data["products"], "discussed")
     _cap(_invoiced(r["products"]["invoiced"]), 8, data["products"], "invoiced")
     return data
+
+
+def _sales_summary(m):
+    return {"scope": m["scope"], "source": m["source"], "total_eur": m["total_eur"],
+            "line_count": m["line_count"], "last_sale_date": m["last_sale_date"]}
 
 
 def _discussed(items):
@@ -306,6 +329,13 @@ def shape_list_activities(r):
     if r.get("product_filter"):
         data["product_filter"] = r["product_filter"]   # solo nombres: nunca ids de producto
     return data
+
+
+def shape_list_sales(r):
+    return {"found": r["found"], "summary": _sales_summary(r["summary"]), "count": r["count"],
+            "has_more": r["has_more"],
+            "sales": [{k: x[k] for k in ("date", "client", "contact", "item", "quantity", "amount_eur")}
+                      for x in r["sales"]]}
 
 
 def shape_search_activities(r):
@@ -518,9 +548,18 @@ _TOOLS = (
         ListActivitiesArgs,
         lambda a, ctx: crm_tools.list_activities(
             ctx.salesperson_id, client_id=a.client_id, contact_id=a.contact_id, temporal_scope=a.temporal_scope,
-            date_from=a.date_from, date_to=a.date_to, product_name=a.product_name,
+            date_from=a.date_from, date_to=a.date_to, product_name=a.product_name, status=a.status,
             limit=a.limit or LIST_DEFAULT_LIMIT, now=ctx.now),
         shape_list_activities, lambda a, r, ctx: _focus_args(a, ctx),
+    ),
+    ChatTool(
+        "list_sales",
+        "Ventas registradas por el usuario en CRMVoice (no las facturas históricas): total exacto y detalle de "
+        "las más recientes. Sin client_id, todas sus ventas. Filtros opcionales: cliente y fechas.",
+        ListSalesArgs,
+        lambda a, ctx: crm_tools.list_sales(ctx.salesperson_id, client_id=a.client_id, date_from=a.date_from,
+                                            date_to=a.date_to, limit=a.limit, now=ctx.now),
+        shape_list_sales, lambda a, r, ctx: _focus_args(a, ctx),
     ),
     ChatTool(
         "search_activities",
@@ -598,7 +637,7 @@ def _unknown_id(args: _Args, ctx: ToolContext) -> str | None:
 
 
 # Consultas de actividades que el contexto activo podría estrechar sin que el usuario lo pida
-SCOPE_GUARDED_TOOLS = {"list_activities", "search_activities"}
+SCOPE_GUARDED_TOOLS = {"list_activities", "search_activities", "list_sales"}
 
 
 def _scoped_only_by_active_state(args: _Args, ctx: ToolContext) -> bool:

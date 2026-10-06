@@ -16,6 +16,7 @@ from services.chat_tools import Focus, ToolContext, ToolOutcome, derive_state, d
 EXPECTED_TOOLS = {
     "find_entities", "list_activities", "search_activities", "get_client_overview", "get_contact",
     "crm_rankings", "search_product_catalog", "get_client_products", "prepare_meeting_context",
+    "list_sales",  # H.5.2: ventas registradas del comercial
 }
 
 
@@ -171,7 +172,8 @@ def test_recorte_de_actividades(chat_crm, factory):
     result = call("list_activities", {"client_id": chat_crm.rivera, "temporal_scope": "past"}, ctx).result
 
     activity = result["activities"][0]
-    assert set(activity) == {"datetime", "timing", "client", "contact", "type", "comment", "products"}
+    assert set(activity) == {"datetime", "timing", "client", "contact", "type", "comment", "products",
+                             "status", "overdue"}
     assert len(activity["comment"]) <= chat_tools.COMMENT_CHARS
     assert "filters" not in result and "now" not in result
 

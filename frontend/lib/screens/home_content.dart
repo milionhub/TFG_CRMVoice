@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../widgets/home/dashboard_panel.dart';
 import '../widgets/recorder_card.dart';
 
 class HomeContent extends StatefulWidget {
@@ -24,12 +25,14 @@ class _HomeContentState extends State<HomeContent> {
     try {
       final api = context.read<ApiService>();
       final message = await api.ping();
+      if (!mounted) return;
 
       setState(() {
         isConnected = message == "ok" || message.isNotEmpty;
         isChecking = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
         isConnected = false;
         isChecking = false;
@@ -39,22 +42,18 @@ class _HomeContentState extends State<HomeContent> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    // Resumen (métricas reales) arriba y el micrófono debajo; con scroll en pantallas bajas
+    return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (!isChecking && !isConnected)
-          StatusCard(
-            isConnected: isConnected,
-            isChecking: isChecking,
-          ),
+            StatusCard(isConnected: isConnected, isChecking: isChecking),
+          const SizedBox(height: 8),
+          const Center(child: DashboardPanel()),
           const SizedBox(height: 24),
-          const Expanded(
-            child: Center(
-              child: RecorderCard(),
-            ),
-          ),
+          const Center(child: RecorderCard()),
         ],
       ),
     );
@@ -101,7 +100,7 @@ class StatusCard extends StatelessWidget {
             color: Colors.black.withOpacity(0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
-          )
+          ),
         ],
       ),
       child: Row(
@@ -110,11 +109,8 @@ class StatusCard extends StatelessWidget {
           const SizedBox(width: 12),
           Text(
             text,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-          )
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          ),
         ],
       ),
     );

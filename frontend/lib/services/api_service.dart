@@ -385,6 +385,11 @@ Future<void> deleteActivity(int id) async {
       CrmActivity.fromJson(data) ??
       (throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.'));
 
+  // ---------- Home ----------
+
+  /// GET /dashboard: métricas del comercial (H.5.2).
+  Future<DashboardData> getDashboard() async => DashboardData.fromJson(_object(await _send('GET', '/dashboard')));
+
   // ---------- Ventas ----------
 
   Future<List<Sale>> createSales(SaleCreateInput input) async =>

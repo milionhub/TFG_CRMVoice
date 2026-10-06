@@ -397,8 +397,12 @@ def test_politica_de_respuesta_en_el_prompt():
         "Separa los hechos del CRM de tu interpretación",
         "No muestres teléfonos ni emails",
         "Si necesitas algo más",                            # cierre genérico prohibido
-        "facturación total del cliente (todos los comerciales)",
-        "todavía no guarda si una actividad está hecha",    # pendiente
+        "facturas históricas de todos los comerciales",     # H.5.2: facturas != ventas registradas
+        "no las sumes sin decirlo",
+        "-> list_sales",
+        "overdue = pendiente ya pasada",                    # H.5.2: estados reales
+        "-> list_activities con status",
+        "nunca las presentes",
         "no una puntuación",                                # attention
         "no inventes otros criterios",
         "He entendido 'Costa'",                             # partial (ejemplo, no frase obligatoria)
@@ -429,6 +433,8 @@ def test_politica_de_respuesta_en_el_prompt():
         "Estaré encantado",
     ]:
         assert fragment in prompt, fragment
+    # H.5.2: la afirmación obsoleta (antes de H.2 no había estados) ya no está
+    assert "todavía no guarda si una actividad está hecha" not in prompt
     assert len(prompt) < 6500                               # sigue siendo un prompt acotado (~1,5k tokens)
 
 

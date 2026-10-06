@@ -326,7 +326,8 @@ def test_vista_de_cliente(world):
     assert {t["activity_type"]["name"]: t["count"] for t in activity["by_type"]} == {
         "Concertar reunión": 2, "Registrar visita comercial": 1, "Realizar llamada de seguimiento": 1}
     assert result["billing"] == {
-        "scope": "global", "total_billed": 1500, "invoice_count": 2, "average_ticket": 750.0,
+        "scope": "global", "source": result["billing"]["source"],
+        "total_billed": 1500, "invoice_count": 2, "average_ticket": 750.0,
         "last_invoice_date": "2026-08-01",
         "top_product": {"id": world.monitor, "name": "Monitor Vela 27", "total_billed": 600},
     }

@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 
 from services import semantic_search_service
 from services.crm_tools._common import (
-    TEMPORAL_SCOPES, ToolArgumentError, activities_by_client, day_bound, fetch_activities, id_in_condition,
-    open_connection, parse_date, resolve_now, scope_conditions, validate_id, validate_limit,
+    ACTIVITY_STATUSES, NOT_CANCELLED, TEMPORAL_SCOPES, ToolArgumentError, activities_by_client, day_bound, fetch_activities, id_in_condition,
+    iso_now, open_connection, parse_date, resolve_now, scope_conditions, validate_id, validate_limit,
 )
 from services.crm_tools.products import PRODUCT_NAME_MAX_LENGTH, resolve_product
 
@@ -23,7 +23,7 @@ _ASCENDING_SCOPES = {"upcoming", "today", "tomorrow", "yesterday", "this_week", 
 def list_activities(salesperson_id: int, *, client_id: int | None = None, contact_id: int | None = None,
                     activity_type_id: int | None = None, date_from: str | None = None,
                     date_to: str | None = None, temporal_scope: str | None = None,
-                    product_name: str | None = None,
+                    product_name: str | None = None, status: str | None = None,
                     limit: int | None = None, now: datetime | None = None) -> dict:
     """
     Actividades del comercial que cumplen TODOS los filtros indicados.
@@ -38,6 +38,9 @@ def list_activities(salesperson_id: int, *, client_id: int | None = None, contac
       product_filter.by_client resume por cliente TODAS las actividades que
       cumplen los filtros (no solo las `limit` de la lista); con filtros de
       fecha o ámbito, total_without_date_filters cuenta las que hay sin ellos.
+    - status: pending | completed | cancelled | overdue (pendiente cuya fecha ya
+      pasó). Sin status se EXCLUYEN las canceladas (no son compromisos ni
+      contactos hechos); cancelled las muestra solo a ellas.
     - "Última actividad": temporal_scope="past", limit=1.
 
     Orden: ascendente (fecha, id) con ámbito de agenda o solo rango de
@@ -51,12 +54,14 @@ def list_activities(salesperson_id: int, *, client_id: int | None = None, contac
     limit = validate_limit(limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT)
     if temporal_scope is not None and temporal_scope not in TEMPORAL_SCOPES:
         raise ToolArgumentError(f"temporal_scope debe ser uno de: {', '.join(TEMPORAL_SCOPES)}")
+    if status is not None and status not in ACTIVITY_STATUSES + ("overdue",):
+        raise ToolArgumentError("status debe ser uno de: pending, completed, cancelled, overdue")
     if start and end and start > end:
         raise ToolArgumentError("date_from no puede ser posterior a date_to")
     if product_name is not None and (not isinstance(product_name, str) or not product_name.strip()
                                      or len(product_name) > PRODUCT_NAME_MAX_LENGTH):
         raise ToolArgumentError(f"product_name debe ser un texto no vacío de hasta {PRODUCT_NAME_MAX_LENGTH} caracteres")
-    now = resolve_now(now)
+    now = resolve_now(now)  # antes de los filtros: "overdue" depende de ahora
 
     # Filtros de entidad y de tiempo por separado: con producto, el recuento sin
     # fechas evita que un periodo vacío parezca "nunca se habló de él"
@@ -67,6 +72,12 @@ def list_activities(salesperson_id: int, *, client_id: int | None = None, contac
         entity_conditions.append(("a.contact_id = ?", contact_id))
     if activity_type_id is not None:
         entity_conditions.append(("a.activity_type_id = ?", activity_type_id))
+    if status is None:
+        entity_conditions.append(NOT_CANCELLED)
+    elif status == "overdue":
+        entity_conditions += [("a.status = 'pending'", []), ("a.datetime_iso < ?", iso_now(now))]
+    else:
+        entity_conditions.append(("a.status = ?", status))
     time_conditions = []
     if start:
         time_conditions.append(("a.datetime_iso >= ?", day_bound(start)))
@@ -108,7 +119,7 @@ def list_activities(salesperson_id: int, *, client_id: int | None = None, contac
         "filters": {
             "client_id": client_id, "contact_id": contact_id, "activity_type_id": activity_type_id,
             "date_from": date_from, "date_to": date_to, "temporal_scope": temporal_scope,
-            "product_name": product_name,
+            "product_name": product_name, "status": status,
         },
         "product_filter": product_filter,
         "now": now.isoformat(),
