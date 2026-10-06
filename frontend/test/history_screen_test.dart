@@ -116,6 +116,7 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
 
         expect(find.byType(CircularProgressIndicator), findsNothing);
-      }),
-      skip: true); // FE-D7-01: _loadActivities no captura errores -> spinner infinito y error no controlado
+        expect(find.text('No se pudieron cargar las actividades.'), findsOneWidget);
+        expect(find.text('Reintentar'), findsOneWidget);
+      })); // FE-D7-01 resuelto en H.3: estado de error con Reintentar
 }

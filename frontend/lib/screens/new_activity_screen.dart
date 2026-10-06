@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../core/app_colors.dart';
-import 'history_screen.dart';
+import '../widgets/crm/crm_ui.dart' show getActivityColor;
 
 class NewActivityScreen extends StatefulWidget {
   final Map<String, dynamic> result;

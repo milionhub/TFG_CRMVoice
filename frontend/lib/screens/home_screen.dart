@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'history_screen.dart';
 import 'calendar_screen.dart';
 import 'chat_screen.dart';
+import 'clients_screen.dart';
 import '../core/app_colors.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -184,35 +185,18 @@ class SidebarState extends State<Sidebar> {
       selectedIndex = index;
     });
 
-    switch (index) {
-      case 0:
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-        break;
+    final Widget screen = switch (index) {
+      1 => const ClientsScreen(),
+      2 => const CalendarScreen(),
+      3 => const HistoryScreen(),
+      4 => const ChatScreen(),
+      _ => const HomeScreen(),
+    };
 
-      case 1:
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HistoryScreen()),
-        );
-        break;
-
-      case 2:
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const CalendarScreen()),
-        );
-        break;
-
-      case 3:
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const ChatScreen()),
-        );
-        break;
-    }
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => screen),
+    );
   }
 
   @override
@@ -240,8 +224,8 @@ class SidebarState extends State<Sidebar> {
             onTap: () => _navigate(0, context),
           ),
           _PremiumSidebarItem(
-            icon: Icons.menu_book_rounded,
-            label: "Histórico",
+            icon: Icons.business_rounded,
+            label: "Clientes",
             selected: selectedIndex == 1,
             onTap: () => _navigate(1, context),
           ),
@@ -252,10 +236,16 @@ class SidebarState extends State<Sidebar> {
             onTap: () => _navigate(2, context),
           ),
           _PremiumSidebarItem(
-            icon: Icons.chat_bubble_outline_rounded,
-            label: "Chat IA",
+            icon: Icons.menu_book_rounded,
+            label: "Histórico",
             selected: selectedIndex == 3,
             onTap: () => _navigate(3, context),
+          ),
+          _PremiumSidebarItem(
+            icon: Icons.chat_bubble_outline_rounded,
+            label: "Chat IA",
+            selected: selectedIndex == 4,
+            onTap: () => _navigate(4, context),
           ),
 
           const Spacer(),
@@ -365,12 +355,12 @@ class MobileDrawer extends StatelessWidget {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.menu_book),
-            title: const Text("Histórico"),
+            leading: const Icon(Icons.business),
+            title: const Text("Clientes"),
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const HistoryScreen()),
+                MaterialPageRoute(builder: (_) => const ClientsScreen()),
               );
             },
           ),
@@ -381,6 +371,16 @@ class MobileDrawer extends StatelessWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const CalendarScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.menu_book),
+            title: const Text("Histórico"),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const HistoryScreen()),
               );
             },
           ),

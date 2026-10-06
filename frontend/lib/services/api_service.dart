@@ -3,7 +3,11 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import '../models/chat_message.dart';
+import '../models/crm.dart';
 import '../providers/auth_provider.dart';
+import 'api_errors.dart';
+
+export 'api_errors.dart';
 
 class ApiService {
   final AuthProvider auth;
@@ -94,9 +98,14 @@ class ApiService {
   int? actionId,
   String? dateFrom,
   String? dateTo,
+  String? status,
 }) async {
 
   final queryParams = <String, String>{};
+
+  if (status != null) {
+    queryParams["status"] = status;
+  }
 
   if (clientId != null) {
     queryParams["client_id"] = clientId.toString();
@@ -294,15 +303,148 @@ Future<bool> updateActivity(int id, Map<String, dynamic> data) async {
 }
 
 Future<void> deleteActivity(int id) async {
-  final response = await http.delete(
-    Uri.parse("$baseUrl/activities/$id"),
-    headers: _headers(),
-  );
-
-  if (response.statusCode != 200) {
-    throw Exception("Error borrando actividad");
-  }
+  await _send('DELETE', '/activities/$id');
 }
+
+  // ===================================================================
+  // CRM funcional (H.3): contratos H.2 tipados
+  // ===================================================================
+
+  static const Duration crmTimeout = Duration(seconds: 20);
+
+  /// Petición JSON al backend. Devuelve el cuerpo decodificado (UTF-8) o
+  /// lanza [ApiException] con un mensaje apto para el usuario.
+  Future<dynamic> _send(String method, String path,
+      {Map<String, String>? query, Object? body}) async {
+    final uri = Uri.parse("$baseUrl$path")
+        .replace(queryParameters: query == null || query.isEmpty ? null : query);
+    final http.Response response;
+    final headers = _headers();
+    final payload = body == null ? null : jsonEncode(body);
+    try {
+      final Future<http.Response> future = switch (method) {
+        'GET' => http.get(uri, headers: headers),
+        'POST' => http.post(uri, headers: headers, body: payload),
+        'PUT' => http.put(uri, headers: headers, body: payload),
+        'PATCH' => http.patch(uri, headers: headers, body: payload),
+        'DELETE' => http.delete(uri, headers: headers),
+        _ => throw ArgumentError.value(method, 'method'),
+      };
+      response = await future.timeout(crmTimeout);
+    } on TimeoutException {
+      throw const ApiException(ApiErrorKind.network,
+          'El servidor ha tardado demasiado en responder. Inténtalo de nuevo.');
+    } catch (_) {
+      throw const ApiException.network();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException.fromResponse(response.statusCode, response.bodyBytes);
+    }
+    if (response.bodyBytes.isEmpty) return null;
+    try {
+      return jsonDecode(utf8.decode(response.bodyBytes));
+    } catch (_) {
+      throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.');
+    }
+  }
+
+  Map<String, dynamic> _object(Object? data) {
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.');
+  }
+
+  // ---------- Catálogo ----------
+
+  Future<List<CatalogItem>> clientItems() async =>
+      CatalogItem.listFrom(_object(await _send('GET', '/clients'))['clients']);
+
+  Future<List<CatalogItem>> contactItems(int clientId) async => CatalogItem.listFrom(
+      _object(await _send('GET', '/contacts', query: {'client_id': '$clientId'}))['contacts']);
+
+  Future<List<CatalogItem>> activityTypeItems() async =>
+      CatalogItem.listFrom(_object(await _send('GET', '/activity-types'))['activity_types']);
+
+  Future<List<CatalogItem>> productItems() async =>
+      CatalogItem.listFrom(_object(await _send('GET', '/products'))['products']);
+
+  // ---------- Clientes y contactos ----------
+
+  /// GET /clients?q= (búsqueda del backend: razón social o alias).
+  Future<List<ClientSummary>> searchClients({String? query}) async {
+    final q = query?.trim() ?? '';
+    final data = _object(await _send('GET', '/clients', query: q.isEmpty ? null : {'q': q}));
+    final list = data['clients'];
+    return list is List ? list.map(ClientSummary.fromJson).whereType<ClientSummary>().toList() : const [];
+  }
+
+  Future<ClientDetail> getClientDetail(int clientId) async {
+    try {
+      return ClientDetail.fromJson(_object(await _send('GET', '/clients/$clientId')));
+    } on FormatException {
+      throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.');
+    }
+  }
+
+  Future<ClientSaveResult> createClient(ClientInput input) async =>
+      ClientSaveResult.fromJson(_object(await _send('POST', '/clients', body: input.toJson())));
+
+  Future<ClientSaveResult> updateClient(int clientId, ClientInput input) async =>
+      ClientSaveResult.fromJson(_object(await _send('PUT', '/clients/$clientId', body: input.toJson())));
+
+  Future<Contact> createContact(int clientId, ContactInput input) async =>
+      _contact(await _send('POST', '/contacts', body: input.toJson(clientId: clientId)));
+
+  /// Sin client_id: un contacto no cambia de cliente.
+  Future<Contact> updateContact(int contactId, ContactInput input) async =>
+      _contact(await _send('PUT', '/contacts/$contactId', body: input.toJson()));
+
+  Contact _contact(Object? data) =>
+      Contact.fromJson(data) ??
+      (throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.'));
+
+  // ---------- Actividades V2 ----------
+
+  Future<List<CrmActivity>> listActivities({
+    int? clientId,
+    ActivityStatus? status,
+    String? dateFrom,
+    String? dateTo,
+  }) async {
+    final data = _object(await _send('GET', '/activities', query: {
+      if (clientId != null) 'client_id': '$clientId',
+      if (status != null) 'status': status.api,
+      if (dateFrom != null) 'date_from': dateFrom,
+      if (dateTo != null) 'date_to': dateTo,
+    }));
+    return CrmActivity.listFrom(data['activities']);
+  }
+
+  Future<CrmActivity> createActivityV2(ActivityInput input) async =>
+      _activity(await _send('POST', '/activities', body: input.toJson()));
+
+  Future<CrmActivity> updateActivityV2(int id, ActivityInput input) async =>
+      _activity(await _send('PUT', '/activities/$id', body: input.toJson()));
+
+  /// PATCH /activities/{id}: solo el estado.
+  Future<CrmActivity> setActivityStatus(int id, ActivityStatus status) async =>
+      _activity(await _send('PATCH', '/activities/$id', body: {'status': status.api}));
+
+  CrmActivity _activity(Object? data) =>
+      CrmActivity.fromJson(data) ??
+      (throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.'));
+
+  // ---------- Ventas ----------
+
+  Future<List<Sale>> createSales(SaleCreateInput input) async =>
+      Sale.listFrom(_object(await _send('POST', '/sales', body: input.toJson()))['sales']);
+
+  Future<Sale> updateSale(int saleId, SaleUpdateInput input) async =>
+      Sale.fromJson(await _send('PUT', '/sales/$saleId', body: input.toJson())) ??
+      (throw const ApiException(ApiErrorKind.server, 'Respuesta no válida del servidor.'));
+
+  Future<void> deleteSale(int saleId) async {
+    await _send('DELETE', '/sales/$saleId');
+  }
 
   // ===================================================================
   // Chat IA (G.5)

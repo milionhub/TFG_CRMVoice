@@ -71,7 +71,7 @@ class _ChatScreenState extends State<ChatScreen> {
           : null,
       body: Row(
         children: [
-          if (!isMobile) const Sidebar(currentIndex: 3),
+          if (!isMobile) const Sidebar(currentIndex: 4),
           Expanded(
             child: SafeArea(
               child: ChatView(key: _chatKey, showHeader: !isMobile, canReset: _canReset),
