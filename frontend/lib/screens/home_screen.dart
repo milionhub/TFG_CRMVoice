@@ -6,7 +6,7 @@ import 'home_content.dart';
 // La navegación principal vive en el shell (I.2). Se reexporta aquí porque
 // las pantallas de sección y los tests la importan desde home_screen.dart.
 export '../widgets/shell/app_shell.dart'
-    show AppShell, MobileDrawer, Sidebar, SidebarState, sectionScreen;
+    show AppShell, MobileDrawer, SectionRoute, Sidebar, SidebarState, sectionScreen;
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});

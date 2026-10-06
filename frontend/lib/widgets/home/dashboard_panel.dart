@@ -14,6 +14,7 @@ import '../../core/navigation.dart';
 import '../../models/crm.dart';
 import '../../screens/client_detail_screen.dart';
 import '../../services/api_service.dart';
+import '../shell/app_shell.dart';
 import '../crm/crm_ui.dart';
 import '../ui/cv_components.dart';
 
@@ -295,9 +296,10 @@ class _UpcomingRow extends StatelessWidget {
       hoverColor: CvColors.background,
       onTap: a.clientId == null
           ? null
+          // Ruta del shell (la barra lateral no se anima; I.3.2)
           : () => Navigator.push(
                 context,
-                MaterialPageRoute(
+                SectionRoute(
                   builder: (_) => ClientDetailScreen(clientId: a.clientId!),
                 ),
               ),

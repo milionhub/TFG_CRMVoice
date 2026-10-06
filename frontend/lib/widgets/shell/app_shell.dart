@@ -131,6 +131,15 @@ class AppShell extends StatelessWidget {
   final List<Widget>? mobileActions;
   final Color backgroundColor;
 
+  /// false en subpáginas de una sección (p. ej. la ficha de un cliente
+  /// dentro de Clientes): su destino sigue activo en la navegación y
+  /// pulsarlo vuelve a la raíz de la sección.
+  final bool sectionRoot;
+
+  /// Subpáginas en móvil: la cabecera muestra «Atrás» (con esta acción) en
+  /// lugar del menú, como una pantalla de detalle nativa.
+  final VoidCallback? onBack;
+
   const AppShell({
     super.key,
     required this.currentIndex,
@@ -138,6 +147,8 @@ class AppShell extends StatelessWidget {
     this.title,
     this.mobileActions,
     this.backgroundColor = CvColors.background,
+    this.sectionRoot = true,
+    this.onBack,
   });
 
   static bool isMobile(BuildContext context) =>
@@ -148,8 +159,8 @@ class AppShell extends StatelessWidget {
     if (isMobile(context)) {
       return Scaffold(
         backgroundColor: backgroundColor,
-        appBar: ShellAppBar(title: title, actions: mobileActions),
-        drawer: MobileDrawer(currentIndex: currentIndex),
+        appBar: ShellAppBar(title: title, actions: mobileActions, onBack: onBack),
+        drawer: MobileDrawer(currentIndex: currentIndex, reselectNavigates: !sectionRoot),
         body: SafeArea(child: body),
       );
     }
@@ -157,7 +168,7 @@ class AppShell extends StatelessWidget {
       backgroundColor: backgroundColor,
       body: Row(
         children: [
-          Sidebar(currentIndex: currentIndex),
+          Sidebar(currentIndex: currentIndex, reselectNavigates: !sectionRoot),
           Expanded(child: SafeArea(child: _SectionContentTransition(child: body))),
         ],
       ),
@@ -202,7 +213,10 @@ class _SectionContentTransition extends StatelessWidget {
 class Sidebar extends StatefulWidget {
   final int currentIndex;
 
-  const Sidebar({super.key, required this.currentIndex});
+  /// Pulsar el destino activo también navega (desde una subpágina).
+  final bool reselectNavigates;
+
+  const Sidebar({super.key, required this.currentIndex, this.reselectNavigates = false});
 
   @override
   State<Sidebar> createState() => SidebarState();
@@ -218,7 +232,7 @@ class SidebarState extends State<Sidebar> {
   }
 
   void _navigate(int index, BuildContext context) {
-    if (index == selectedIndex) return;
+    if (index == selectedIndex && !widget.reselectNavigates) return;
 
     setState(() {
       selectedIndex = index;
@@ -505,7 +519,10 @@ class ShellAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String? title;
   final List<Widget>? actions;
 
-  const ShellAppBar({super.key, this.title, this.actions});
+  /// Si se indica, «Atrás» sustituye al botón de menú (subpáginas).
+  final VoidCallback? onBack;
+
+  const ShellAppBar({super.key, this.title, this.actions, this.onBack});
 
   @override
   Size get preferredSize => const Size.fromHeight(60);
@@ -522,13 +539,15 @@ class ShellAppBar extends StatelessWidget implements PreferredSizeWidget {
       scrolledUnderElevation: 0,
       shape: const Border(bottom: BorderSide(color: CvColors.border)),
       titleSpacing: 4,
-      leading: Builder(
-        builder: (context) => IconButton(
-          tooltip: 'Abrir menú',
-          icon: const Icon(Icons.menu_rounded, color: CvColors.textPrimary),
-          onPressed: () => Scaffold.of(context).openDrawer(),
-        ),
-      ),
+      leading: onBack != null
+          ? BackButton(color: CvColors.textPrimary, onPressed: onBack)
+          : Builder(
+              builder: (context) => IconButton(
+                tooltip: 'Abrir menú',
+                icon: const Icon(Icons.menu_rounded, color: CvColors.textPrimary),
+                onPressed: () => Scaffold.of(context).openDrawer(),
+              ),
+            ),
       title: title == null
           ? const CrmVoiceWordmark(markSize: 26)
           : Row(
@@ -561,12 +580,15 @@ class ShellAppBar extends StatelessWidget implements PreferredSizeWidget {
 class MobileDrawer extends StatelessWidget {
   final int currentIndex;
 
-  const MobileDrawer({super.key, required this.currentIndex});
+  /// Pulsar el destino activo también navega (desde una subpágina).
+  final bool reselectNavigates;
+
+  const MobileDrawer({super.key, required this.currentIndex, this.reselectNavigates = false});
 
   void _go(BuildContext context, int index) {
     final navigator = Navigator.of(context);
     navigator.pop(); // cierra el menú
-    if (index == currentIndex) return;
+    if (index == currentIndex && !reselectNavigates) return;
     replaceWithSection(navigator, index);
   }
 

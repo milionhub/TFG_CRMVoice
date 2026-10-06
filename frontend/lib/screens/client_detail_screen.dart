@@ -1,12 +1,19 @@
 // Ficha de cliente (H.3): datos, contactos, actividades del comercial,
 // ventas del comercial y resumen comercial (GET /clients/{id}).
 //
+// I.3.2: vive dentro del AppShell como subpágina de Clientes. Cabecera con
+// el propio cliente, Información | Contactos, Resumen comercial, Actividad
+// reciente (5 y «Ver todas») y Ventas. La lógica y los formularios no cambian.
+// Por densidad, la ficha no muestra los productos tratados ni el comentario
+// de cada actividad: los datos no cambian (el comentario se ve al abrirla).
+//
 // Las actividades se piden con GET /activities?client_id= (trae todo lo
 // necesario para editarlas; recent_activities de la ficha no lo trae).
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../core/app_colors.dart';
+import '../core/design/cv_theme.dart';
+import '../core/design/cv_tokens.dart';
 import '../core/money.dart';
 import '../models/crm.dart';
 import '../services/api_service.dart';
@@ -15,9 +22,15 @@ import '../widgets/crm/activity_form.dart';
 import '../widgets/crm/client_form.dart';
 import '../widgets/crm/crm_ui.dart';
 import '../widgets/crm/sale_form.dart';
+import '../widgets/shell/app_shell.dart';
+import '../widgets/ui/cv_components.dart';
 
 class ClientDetailScreen extends StatefulWidget {
   final int clientId;
+
+  /// Nombre de la ruta cuando la ficha se abre desde el listado de Clientes
+  /// («← Clientes» vuelve entonces con pop, sin recrear el listado).
+  static const fromClientsRoute = 'client-detail-from-clients';
 
   const ClientDetailScreen({super.key, required this.clientId});
 
@@ -26,7 +39,7 @@ class ClientDetailScreen extends StatefulWidget {
 }
 
 class _ClientDetailScreenState extends State<ClientDetailScreen> {
-  static const _collapsedActivities = 8;
+  static const _collapsedActivities = 5;
 
   ClientDetail? _detail;
   List<CrmActivity> _activities = const [];
@@ -113,201 +126,345 @@ class _ClientDetailScreenState extends State<ClientDetailScreen> {
     }
   }
 
+  /// «← Clientes»: si la ficha se abrió desde el listado, vuelve a él (que se
+  /// recarga); si se abrió desde Inicio o Voz, abre la sección Clientes.
+  void _backToClients() {
+    final navigator = Navigator.of(context);
+    final fromList = ModalRoute.of(context)?.settings.name == ClientDetailScreen.fromClientsRoute;
+    if (fromList && navigator.canPop()) {
+      navigator.pop();
+    } else {
+      replaceWithSection(navigator, 1);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Subpágina de Clientes dentro del shell: Clientes sigue activo.
+    // CrmTheme se mantiene: los formularios y menús (fuera de I.3.2) lo heredan.
+    // En móvil la vuelta va en la cabecera («Atrás»), no en el contenido.
+    return AppShell(
+      currentIndex: 1,
+      title: 'Clientes',
+      sectionRoot: false,
+      onBack: _backToClients,
+      body: CrmTheme(child: _page()),
+    );
+  }
+
+  Widget _page() {
     final detail = _detail;
-    return CrmTheme(
-      child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          title: Text(detail?.client.name ?? 'Cliente', overflow: TextOverflow.ellipsis),
-          actions: [
-            if (detail != null)
-              IconButton(tooltip: 'Actualizar', icon: const Icon(Icons.refresh), onPressed: _loading ? null : _load),
-            if (detail != null)
-              IconButton(tooltip: 'Editar cliente', icon: const Icon(Icons.edit_outlined), onPressed: _editClient),
-          ],
-          bottom: detail != null && _loading
-              ? const PreferredSize(preferredSize: Size.fromHeight(2), child: LinearProgressIndicator(minHeight: 2))
-              : null,
+    if (detail == null) {
+      return CvPageBody(
+        children: [
+          if (!AppShell.isMobile(context)) ...[_backLink(), const SizedBox(height: CvSpace.lg)],
+          _error != null
+              ? CvStatePanel(
+                  icon: const Icon(Icons.cloud_off_outlined),
+                  title: 'No se pudo cargar la ficha.',
+                  message: _error,
+                  action: CvSecondaryButton(label: 'Reintentar', icon: Icons.refresh_rounded, onPressed: _load),
+                )
+              : const CvStatePanel(
+                  icon: SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: CvColors.primaryDark),
+                  ),
+                  title: 'Cargando ficha…',
+                ),
+        ],
+      );
+    }
+    return _content(detail);
+  }
+
+  Widget _backLink() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: _backToClients,
+        style: TextButton.styleFrom(
+          foregroundColor: CvColors.textSecondary,
+          minimumSize: const Size(0, 40),
+          padding: const EdgeInsets.only(left: CvSpace.xs, right: CvSpace.sm),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.sm)),
+          textStyle: CvText.label.copyWith(fontSize: 13.5, fontWeight: FontWeight.w500),
+          iconSize: 18,
         ),
-        body: SafeArea(
-          child: detail == null
-              ? (_error != null ? ErrorView(message: _error!, onRetry: _load) : const LoadingView())
-              : _content(detail),
-        ),
+        icon: const Icon(Icons.arrow_back_rounded),
+        label: const Text('Clientes'),
       ),
     );
   }
 
   Widget _content(ClientDetail detail) {
-    final info = _infoSection(detail.client);
-    final summary = _summarySection(detail);
-    final contacts = _contactsSection(detail.contacts);
-    final activities = _activitiesSection();
-    final sales = _salesSection(detail);
-    const gap = SizedBox(height: 16);
+    const sectionGap = SizedBox(height: 40);
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 1000;
-        return SingleChildScrollView(
-          padding: EdgeInsets.all(wide ? 24 : 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_error != null)
-                FormErrorBanner(message: 'No se pudo actualizar la ficha: $_error'),
-              if (wide)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 2, child: Column(children: [info, gap, summary, gap, contacts])),
-                    const SizedBox(width: 16),
-                    Expanded(flex: 3, child: Column(children: [activities, gap, sales])),
-                  ],
-                )
-              else
-                Column(children: [info, gap, summary, gap, contacts, gap, activities, gap, sales]),
+        final mobile = constraints.maxWidth < CvBreakpoints.tablet;
+        final contentWidth = constraints.maxWidth - CvPageBody.insets(constraints.maxWidth).horizontal;
+        final twoColumns = contentWidth >= 880;
+
+        final info = _infoSection(detail.client);
+        final contacts = _contactsSection(detail.contacts);
+
+        return CvPageBody(
+          children: [
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.only(bottom: CvSpace.xs),
+                child: LinearProgressIndicator(minHeight: 2, color: CvColors.primary),
+              ),
+            if (_error != null) FormErrorBanner(message: 'No se pudo actualizar la ficha: $_error'),
+            _header(detail.client, mobile: mobile),
+            sectionGap,
+            if (twoColumns)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 5, child: info),
+                  const SizedBox(width: 40),
+                  Expanded(flex: 7, child: contacts),
+                ],
+              )
+            else ...[
+              info,
+              sectionGap,
+              contacts,
             ],
-          ),
+            sectionGap,
+            _summarySection(detail),
+            sectionGap,
+            _activitiesSection(),
+            sectionGap,
+            _salesSection(detail),
+          ],
         );
       },
     );
   }
 
-  // ---------------------------------------------------------------- Datos
+  // ------------------------------------------------------------- Cabecera
 
-  Widget _infoSection(Client c) {
-    Widget row(IconData icon, String label, String? value) => value == null
-        ? const SizedBox.shrink()
-        : Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(icon, size: 18, color: AppColors.textSecondary),
-                const SizedBox(width: 8),
-                SizedBox(
-                    width: 80,
-                    child: Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13))),
-                Expanded(child: SelectableText(value)),
+  Widget _header(Client c, {required bool mobile}) {
+    final subtitle = [if (c.alias != null) c.alias!, if (c.location != null) c.location!].join(' · ');
+    final refresh = IconButton(
+      tooltip: 'Actualizar',
+      icon: const Icon(Icons.refresh_rounded, size: 20),
+      color: CvColors.textSecondary,
+      onPressed: _loading ? null : _load,
+    );
+    final edit = CvSecondaryButton(
+      label: 'Editar',
+      icon: Icons.edit_outlined,
+      tooltip: 'Editar cliente',
+      onPressed: _editClient,
+    );
+    final identity = Row(
+      children: [
+        CvInitialAvatar(name: c.name, size: mobile ? 44 : 52),
+        const SizedBox(width: CvSpace.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Semantics(
+                header: true,
+                child: Text(
+                  c.name,
+                  style: CvText.heading.copyWith(fontSize: mobile ? 22 : 26, letterSpacing: -0.5),
+                ),
+              ),
+              if (subtitle.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(subtitle, style: CvText.body),
               ],
-            ),
-          );
-    final hasData = [c.location, c.phone, c.email, c.cif, c.groupName].any((v) => v != null);
-    return SectionCard(
-      title: 'Datos del cliente',
-      icon: Icons.business,
-      action: TextButton.icon(onPressed: _editClient, icon: const Icon(Icons.edit_outlined, size: 18), label: const Text('Editar')),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (mobile) {
+      // Acciones en su propia fila (la vuelta está en la cabecera del shell):
+      // el nombre usa todo el ancho
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(c.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-          if (c.alias != null)
-            Text(c.alias!, style: const TextStyle(color: AppColors.textSecondary)),
-          row(Icons.place_outlined, 'Ubicación', c.location),
-          row(Icons.phone_outlined, 'Teléfono', c.phone),
-          row(Icons.email_outlined, 'Email', c.email),
-          row(Icons.badge_outlined, 'CIF', c.cif),
-          row(Icons.account_tree_outlined, 'Grupo', c.groupName),
-          if (!hasData)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text('Sin datos de contacto ni ubicación.',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-            ),
+          Row(children: [const Spacer(), refresh, const SizedBox(width: CvSpace.xxs), edit]),
+          const SizedBox(height: CvSpace.md),
+          identity,
         ],
-      ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Entre 600 y 800 px el shell ya es móvil: la vuelta va en su cabecera
+        if (!AppShell.isMobile(context)) ...[_backLink(), const SizedBox(height: CvSpace.md)],
+        Row(
+          children: [
+            Expanded(child: identity),
+            const SizedBox(width: CvSpace.lg),
+            refresh,
+            const SizedBox(width: CvSpace.xs),
+            edit,
+          ],
+        ),
+      ],
     );
   }
 
-  // ------------------------------------------------------ Resumen comercial
+  // ------------------------------------------------------------ Información
 
-  Widget _summarySection(ClientDetail d) {
-    final r = d.revenue;
-    Widget figure(String label, String help, int cents, int lines, {bool strong = false}) => Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(label, style: TextStyle(fontWeight: strong ? FontWeight.w700 : FontWeight.w600)),
-                    Text(help, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(formatEuros(cents),
-                  style: TextStyle(fontWeight: strong ? FontWeight.w800 : FontWeight.w600, fontSize: strong ? 16 : 14)),
-            ],
+  Widget _infoSection(Client c) {
+    final items = [
+      if (c.location != null) CvInfoItem(icon: Icons.place_outlined, label: 'Ubicación', value: c.location!),
+      if (c.phone != null) CvInfoItem(icon: Icons.phone_outlined, label: 'Teléfono', value: c.phone!),
+      if (c.email != null) CvInfoItem(icon: Icons.mail_outline, label: 'Email', value: c.email!),
+      if (c.cif != null) CvInfoItem(icon: Icons.badge_outlined, label: 'CIF', value: c.cif!),
+      if (c.groupName != null) CvInfoItem(icon: Icons.account_tree_outlined, label: 'Grupo', value: c.groupName!),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const CvSectionHeading(title: 'Información'),
+        const SizedBox(height: CvSpace.sm),
+        if (items.isEmpty)
+          const CvEmptyNote(icon: Icons.info_outline, text: 'Sin datos de contacto ni ubicación.')
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Dos columnas de datos si hay anchura; si no, una
+              final columns = constraints.maxWidth >= 520 ? 2 : 1;
+              final width = (constraints.maxWidth - CvSpace.xl * (columns - 1)) / columns;
+              return Wrap(
+                spacing: CvSpace.xl,
+                runSpacing: CvSpace.md + 2,
+                children: [for (final item in items) SizedBox(width: width, child: item)],
+              );
+            },
           ),
-        );
-    return SectionCard(
-      title: 'Resumen comercial',
-      icon: Icons.insights_outlined,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          figure('Tus ventas registradas', '${r.mySalesLines} líneas registradas por ti en CRMVoice',
-              r.mySalesCents, r.mySalesLines),
-          figure('Facturación histórica', '${r.invoiceLines} líneas de factura del cliente (de todos los comerciales)',
-              r.invoicesCents, r.invoiceLines),
-          const Divider(height: 20),
-          figure('Total', 'Facturas históricas + tus ventas', r.totalCents, 0, strong: true),
-          if (d.discussedProducts.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Text('Productos tratados en tus actividades',
-                style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [for (final p in d.discussedProducts) Chip(label: Text(p), visualDensity: VisualDensity.compact)],
-            ),
-          ],
-        ],
-      ),
+      ],
     );
   }
 
   // ------------------------------------------------------------- Contactos
 
   Widget _contactsSection(List<Contact> contacts) {
-    return SectionCard(
-      title: 'Contactos (${contacts.length})',
-      icon: Icons.people_outline,
-      action: TextButton.icon(
-        onPressed: () => _contactForm(),
-        icon: const Icon(Icons.person_add_alt, size: 18),
-        label: const Text('Añadir'),
-      ),
-      child: contacts.isEmpty
-          ? const Text('Este cliente no tiene contactos.', style: TextStyle(color: AppColors.textSecondary))
-          : Column(
-              children: [
-                for (final c in contacts)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    leading: const CircleAvatar(radius: 16, child: Icon(Icons.person, size: 18)),
-                    title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(
-                      [if (c.role != null) c.role!, if (c.phone != null) c.phone!, if (c.email != null) c.email!]
-                          .join(' · ')
-                          .ifEmpty('Sin cargo ni datos de contacto'),
-                    ),
-                    trailing: IconButton(
-                      tooltip: 'Editar contacto',
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      onPressed: () => _contactForm(c),
-                    ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CvSectionHeading(
+          title: 'Contactos (${contacts.length})',
+          trailing: CvTextAction(label: 'Añadir', onPressed: () => _contactForm()),
+        ),
+        const SizedBox(height: CvSpace.sm),
+        if (contacts.isEmpty)
+          const CvEmptyNote(icon: Icons.people_outline, text: 'Este cliente no tiene contactos.')
+        else
+          CvListSurface(
+            children: [
+              for (final c in contacts)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(CvSpace.md, CvSpace.sm, CvSpace.xs, CvSpace.sm),
+                  child: Row(
+                    children: [
+                      CvInitialAvatar(name: c.name, size: 34, circle: true),
+                      const SizedBox(width: CvSpace.sm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(c.name, style: CvText.label.copyWith(fontSize: 14)),
+                            const SizedBox(height: 1),
+                            Text(
+                              [if (c.role != null) c.role!, if (c.phone != null) c.phone!, if (c.email != null) c.email!]
+                                  .join(' · ')
+                                  .ifEmpty('Sin cargo ni datos de contacto'),
+                              style: CvText.helper.copyWith(fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Editar contacto',
+                        icon: const Icon(Icons.edit_outlined, size: 19),
+                        color: CvColors.textSecondary,
+                        onPressed: () => _contactForm(c),
+                      ),
+                    ],
                   ),
-              ],
-            ),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  // ------------------------------------------------------ Resumen comercial
+
+  static String _lines(int n, [String? participle]) =>
+      '$n ${n == 1 ? 'línea' : 'líneas'}${participle == null ? '' : ' ${n == 1 ? participle : '${participle}s'}'}';
+
+  Widget _summarySection(ClientDetail d) {
+    final r = d.revenue;
+    final figures = [
+      _Figure('Tus ventas registradas', '${_lines(r.mySalesLines, 'registrada')} por ti en CRMVoice', r.mySalesCents),
+      _Figure('Facturación histórica', '${_lines(r.invoiceLines)} de factura del cliente (de todos los comerciales)',
+          r.invoicesCents),
+      _Figure('Total', 'Facturas históricas + tus ventas', r.totalCents, strong: true),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const CvSectionHeading(title: 'Resumen comercial'),
+        const SizedBox(height: CvSpace.sm),
+        Container(
+          decoration: BoxDecoration(
+            color: CvColors.surface,
+            borderRadius: BorderRadius.circular(CvSliverListSurface.radius),
+            border: Border.all(color: CvColors.border),
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth >= 600) {
+                // Tres columnas con separadores verticales suaves
+                return IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < figures.length; i++) ...[
+                        if (i > 0) const VerticalDivider(width: 1, thickness: 1, color: CvColors.border),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.all(CvSpace.lg),
+                            child: figures[i].column(),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              }
+              // Móvil: una cifra por fila, sin comprimir importes
+              return Column(
+                children: [
+                  for (var i = 0; i < figures.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, thickness: 1, color: CvColors.border),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: CvSpace.md, vertical: CvSpace.md - 2),
+                      child: figures[i].row(),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -317,33 +474,42 @@ class _ClientDetailScreenState extends State<ClientDetailScreen> {
     final all = _activities;
     final visible = _showAllActivities ? all : all.take(_collapsedActivities).toList();
     final pending = all.where((a) => a.status == ActivityStatus.pending).length;
-    return SectionCard(
-      title: 'Tus actividades (${all.length})',
-      icon: Icons.event_note_outlined,
-      action: TextButton.icon(
-        onPressed: () => _activityForm(),
-        icon: const Icon(Icons.add, size: 18),
-        label: const Text('Nueva'),
-      ),
-      child: all.isEmpty
-          ? const Text('No tienes actividades con este cliente.', style: TextStyle(color: AppColors.textSecondary))
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (pending > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text('$pending pendiente${pending == 1 ? '' : 's'}',
-                        style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+    final meta = [
+      '${all.length} actividad${all.length == 1 ? '' : 'es'}',
+      if (pending > 0) '$pending pendiente${pending == 1 ? '' : 's'}',
+    ].join(' · ');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CvSectionHeading(
+          title: 'Actividad reciente',
+          trailing: CvTextAction(label: 'Nueva', onPressed: () => _activityForm()),
+        ),
+        if (all.isNotEmpty) Text(meta, key: const Key('activities-meta'), style: CvText.helper.copyWith(fontSize: 13)),
+        const SizedBox(height: CvSpace.sm),
+        if (all.isEmpty)
+          const CvEmptyNote(icon: Icons.event_note_outlined, text: 'No tienes actividades con este cliente.')
+        else ...[
+          CvListSurface(children: [for (final a in visible) _activityTile(a)]),
+          if (all.length > _collapsedActivities)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(top: CvSpace.xs),
+                child: TextButton(
+                  onPressed: () => setState(() => _showAllActivities = !_showAllActivities),
+                  style: TextButton.styleFrom(
+                    foregroundColor: CvColors.primaryDark,
+                    minimumSize: const Size(0, 40),
+                    textStyle: CvText.label.copyWith(fontSize: 14),
                   ),
-                for (final a in visible) _activityTile(a),
-                if (all.length > _collapsedActivities)
-                  TextButton(
-                    onPressed: () => setState(() => _showAllActivities = !_showAllActivities),
-                    child: Text(_showAllActivities ? 'Ver menos' : 'Ver todas (${all.length})'),
-                  ),
-              ],
+                  child: Text(_showAllActivities ? 'Ver menos' : 'Ver todas (${all.length})'),
+                ),
+              ),
             ),
+        ],
+      ],
     );
   }
 
@@ -351,39 +517,40 @@ class _ClientDetailScreenState extends State<ClientDetailScreen> {
     final color = getActivityColor(a.activityType ?? '');
     return InkWell(
       onTap: () => _activityForm(a),
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.fromLTRB(10, 8, 0, 8),
-        decoration: BoxDecoration(
-          border: Border(left: BorderSide(color: color, width: 3)),
-        ),
+      hoverColor: CvColors.background,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(CvSpace.md, CvSpace.sm + 2, CvSpace.xxs, CvSpace.sm + 2),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Acento por tipo de actividad
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+            ),
+            const SizedBox(width: CvSpace.sm),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
+                    spacing: CvSpace.xs,
+                    runSpacing: CvSpace.xxs,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(a.activityType ?? 'Actividad', style: const TextStyle(fontWeight: FontWeight.w700)),
+                      Text(a.activityType ?? 'Actividad', style: CvText.label.copyWith(fontSize: 14)),
                       StatusBadge(status: a.status, overdue: a.isOverdue),
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     [formatDateTime(a.datetime), if (a.contactName != null) a.contactName!].join(' · '),
-                    style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                    style: CvText.helper.copyWith(fontSize: 13),
                   ),
-                  if (a.comment != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(a.comment!, maxLines: 2, overflow: TextOverflow.ellipsis),
-                    ),
                 ],
               ),
             ),
@@ -398,67 +565,129 @@ class _ClientDetailScreenState extends State<ClientDetailScreen> {
 
   Widget _salesSection(ClientDetail d) {
     final sales = d.sales;
-    return SectionCard(
-      title: 'Tus ventas',
-      icon: Icons.point_of_sale_outlined,
-      action: TextButton.icon(
-        onPressed: () => _saleForm(),
-        icon: const Icon(Icons.add, size: 18),
-        label: const Text('Registrar venta'),
-      ),
-      child: sales.isEmpty
-          ? const Text('No has registrado ventas a este cliente.', style: TextStyle(color: AppColors.textSecondary))
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final s in sales)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: Text(
-                      s.quantity != null ? '${s.label} × ${s.quantity}' : s.label,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: Text([
-                      formatIsoDate(s.saleDate),
-                      if (s.contactName != null) s.contactName!,
-                      if (s.notes != null) s.notes!,
-                    ].join(' · ')),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(formatEuros(s.amountCents), style: const TextStyle(fontWeight: FontWeight.w700)),
-                        PopupMenuButton<String>(
-                          tooltip: 'Acciones',
-                          onSelected: (v) => v == 'edit' ? _saleForm(s) : _deleteSale(s),
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              value: 'edit',
-                              child: ListTile(dense: true, leading: Icon(Icons.edit_outlined), title: Text('Editar')),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CvSectionHeading(
+          title: 'Ventas',
+          trailing: CvTextAction(label: 'Registrar venta', onPressed: () => _saleForm()),
+        ),
+        const SizedBox(height: CvSpace.sm),
+        if (sales.isEmpty)
+          const CvEmptyNote(icon: Icons.point_of_sale_outlined, text: 'No has registrado ventas a este cliente.')
+        else ...[
+          CvListSurface(
+            children: [
+              for (final s in sales)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(CvSpace.md, CvSpace.sm, CvSpace.xxs, CvSpace.sm),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              s.quantity != null ? '${s.label} × ${s.quantity}' : s.label,
+                              style: CvText.label.copyWith(fontSize: 14),
                             ),
-                            PopupMenuItem(
-                              value: 'delete',
-                              child: ListTile(
-                                dense: true,
-                                leading: Icon(Icons.delete_outline, color: Color(0xFFB91C1C)),
-                                title: Text('Eliminar venta'),
-                              ),
+                            const SizedBox(height: 1),
+                            Text(
+                              [
+                                formatIsoDate(s.saleDate),
+                                if (s.contactName != null) s.contactName!,
+                                if (s.notes != null) s.notes!,
+                              ].join(' · '),
+                              style: CvText.helper.copyWith(fontSize: 13),
                             ),
                           ],
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(width: CvSpace.sm),
+                      Text(formatEuros(s.amountCents), style: CvText.label.copyWith(fontSize: 14.5)),
+                      PopupMenuButton<String>(
+                        tooltip: 'Acciones',
+                        icon: const Icon(Icons.more_vert, color: CvColors.textSecondary),
+                        onSelected: (v) => v == 'edit' ? _saleForm(s) : _deleteSale(s),
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                            value: 'edit',
+                            child: ListTile(dense: true, leading: Icon(Icons.edit_outlined), title: Text('Editar')),
+                          ),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: ListTile(
+                              dense: true,
+                              leading: Icon(Icons.delete_outline, color: Color(0xFFB91C1C)),
+                              title: Text('Eliminar venta'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                if (sales.length >= 20)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: Text('Se muestran tus 20 ventas más recientes.',
-                        style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                  ),
-              ],
+                ),
+            ],
+          ),
+          if (sales.length >= 20)
+            Padding(
+              padding: const EdgeInsets.only(top: CvSpace.xs),
+              child: Text('Se muestran tus 20 ventas más recientes.', style: CvText.helper),
             ),
+        ],
+      ],
     );
   }
+}
+
+/// Cifra del resumen comercial: etiqueta, importe y explicación (menor peso).
+class _Figure {
+  final String label;
+  final String help;
+  final int cents;
+  final bool strong;
+
+  const _Figure(this.label, this.help, this.cents, {this.strong = false});
+
+  TextStyle get _valueStyle => CvText.heading.copyWith(
+        fontSize: strong ? 24 : 21,
+        fontWeight: strong ? FontWeight.w700 : FontWeight.w600,
+        letterSpacing: -0.5,
+        color: strong ? CvColors.primaryDark : CvColors.textPrimary,
+      );
+
+  Widget column() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: CvText.label.copyWith(fontSize: 13, fontWeight: FontWeight.w500, color: CvColors.textSecondary)),
+          const SizedBox(height: CvSpace.xs - 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(formatEuros(cents), maxLines: 1, style: _valueStyle),
+          ),
+          const SizedBox(height: CvSpace.xxs),
+          Text(help, style: CvText.helper.copyWith(fontSize: 12)),
+        ],
+      );
+
+  Widget row() => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: CvText.label.copyWith(fontSize: 13.5)),
+                const SizedBox(height: 1),
+                Text(help, style: CvText.helper.copyWith(fontSize: 12)),
+              ],
+            ),
+          ),
+          const SizedBox(width: CvSpace.sm),
+          Text(formatEuros(cents), style: _valueStyle.copyWith(fontSize: strong ? 20 : 17)),
+        ],
+      );
 }
 
 extension on String {

@@ -23,6 +23,7 @@ import '../screens/history_screen.dart';
 import '../services/api_service.dart';
 import 'brand/crm_voice_brand.dart';
 import 'crm/crm_ui.dart';
+import 'shell/app_shell.dart';
 import 'voice/draft_review.dart';
 
 enum VoiceState { idle, requestingPermission, recording, uploading, error }
@@ -241,7 +242,8 @@ class _RecorderCardState extends State<RecorderCard> {
     final clientId = outcome.result.clientId;
     switch (outcome.target) {
       case VoiceNavTarget.clientDetail when clientId != null:
-        await Navigator.push(context, MaterialPageRoute(builder: (_) => ClientDetailScreen(clientId: clientId)));
+        // Ruta del shell (la barra lateral no se anima; I.3.2)
+        await Navigator.push(context, SectionRoute(builder: (_) => ClientDetailScreen(clientId: clientId)));
       case VoiceNavTarget.history:
         await Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
       default:

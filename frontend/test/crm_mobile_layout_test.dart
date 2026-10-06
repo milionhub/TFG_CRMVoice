@@ -50,7 +50,7 @@ void main() {
 
   testWidgets('Ficha y formularios de contacto, actividad y venta en móvil', (tester) => backend.run(() async {
         await pumpPhone(tester, const ClientDetailScreen(clientId: 1));
-        expect(find.text('Tus ventas'), findsOneWidget);
+        expect(find.text('Ventas'), findsOneWidget);
 
         await tapText(tester, 'Nueva');
         expect(find.text('Crear actividad'), findsOneWidget);
