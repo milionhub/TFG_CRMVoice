@@ -1,12 +1,25 @@
+// Actividades (antes «Histórico»): listado completo con filtro por estado,
+// filtros avanzados, alta, edición, cambio de estado y borrado.
+//
+// I.4.1: cabecera de página, selector de estado segmentado, acceso a
+// «Filtros», filtros activos como pastillas y una única superficie con filas
+// compactas. La fila muestra los productos asociados como metadato discreto;
+// por densidad no muestra el comentario (se ve al editar). El diálogo de
+// filtros, el menú «⋮» y los formularios mantienen su estilo hasta la fase
+// común de diálogos.
+// Internamente se conserva el nombre History*.
 import 'package:flutter/material.dart';
 import '../core/app_colors.dart';
+import '../core/design/cv_theme.dart';
+import '../core/design/cv_tokens.dart';
 import 'home_screen.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../models/crm.dart';
-import '../widgets/crm/activity_actions.dart';
 import '../widgets/crm/activity_form.dart';
+import '../widgets/crm/activity_list.dart';
 import '../widgets/crm/crm_ui.dart';
+import '../widgets/ui/cv_components.dart';
 
 class HistoryScreen extends StatelessWidget {
   const HistoryScreen({super.key});
@@ -16,8 +29,7 @@ class HistoryScreen extends StatelessWidget {
     // Shell común (I.2): barra lateral en escritorio, cabecera + menú en móvil
     return const AppShell(
       currentIndex: 3,
-      title: "Histórico",
-      backgroundColor: AppColors.background,
+      title: "Actividades",
       body: HistoryContent(),
     );
   }
@@ -420,203 +432,261 @@ class _HistoryContentState extends State<HistoryContent> {
   });
   }
 
+
   String _chipLabel(List<dynamic> items, int id) {
     final match = items.where((i) => i["id"] == id);
     return match.isEmpty ? "#$id" : "${match.first["name"]}";
   }
 
-  Widget _filterChip(String label, VoidCallback onDeleted) {
-    return Chip(
-      backgroundColor: AppColors.primary,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      label: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      deleteIcon: const Icon(
-        Icons.close,
-        color: Colors.white,
-        size: 16,
-      ),
-      onDeleted: onDeleted,
-    );
+  int get _activeFilterCount => [
+        selectedClientId,
+        selectedActionId,
+        selectedContactId,
+        selectedProductId,
+        selectedRange,
+      ].where((f) => f != null).length;
+
+  void _selectStatus(ActivityStatus? status) {
+    if (selectedStatus == status) return;
+    setState(() => selectedStatus = status);
+    _loadActivities();
+  }
+
+  /// Quita estado y filtros avanzados (lo mismo que «Limpiar» del diálogo).
+  void _clearAllFilters() {
+    setState(() {
+      selectedStatus = null;
+      selectedClientId = null;
+      selectedActionId = null;
+      selectedContactId = null;
+      selectedProductId = null;
+      selectedRange = null;
+    });
+    _loadActivities();
   }
 
   @override
   Widget build(BuildContext context) {
-
     return CrmTheme(
-      child: Column(
-        children: [
-
-          /// HEADER
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 16,
-              runSpacing: 8,
-              children: [
-
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      "Histórico CRM",
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primary,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      "Registro completo de actividades",
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 4,
-                  children: [
-
-                    FilledButton.icon(
-                      onPressed: _createActivity,
-                      icon: const Icon(Icons.add),
-                      label: const Text("Nueva actividad"),
-                    ),
-
-                    IconButton(
-                      icon: const Icon(Icons.filter_alt_outlined),
-                      tooltip: "Filtros",
-                      onPressed: _openFilters,
-                    ),
-
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      tooltip: "Actualizar",
-                      onPressed: _loadActivities,
-                    ),
-
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          /// FILTRO POR ESTADO
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              children: [
-                for (final status in <ActivityStatus?>[null, ...ActivityStatus.values])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(status == null ? "Todas" : "${status.label}s"),
-                      selected: selectedStatus == status,
-                      onSelected: (_) {
-                        if (selectedStatus == status) return;
-                        setState(() => selectedStatus = status);
-                        _loadActivities();
-                      },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final insets = CvPageBody.insets(constraints.maxWidth);
+          final compact = constraints.maxWidth < CvBreakpoints.tablet;
+          return RefreshIndicator(
+            onRefresh: _loadActivities,
+            color: CvColors.primaryDark,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(insets.left, insets.top, insets.right, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        CvPageHeader(
+                          title: "Actividades",
+                          subtitle: "Gestiona y consulta toda tu actividad comercial.",
+                          action: _headerActions(compact),
+                        ),
+                        const SizedBox(height: CvSpace.xl),
+                        _toolbar(compact),
+                        if (_activeFilterCount > 0) ...[
+                          const SizedBox(height: CvSpace.sm),
+                          _activeFilters(),
+                        ],
+                        const SizedBox(height: CvSpace.lg),
+                      ],
                     ),
                   ),
+                ),
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(insets.left, 0, insets.right, insets.bottom),
+                  sliver: _body(),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// «Nueva actividad» es la acción principal; «Actualizar» queda discreta
+  /// (en móvil basta con deslizar hacia abajo).
+  Widget _headerActions(bool compact) {
+    final create = CvPrimaryButton(label: "Nueva actividad", icon: Icons.add_rounded, onPressed: _createActivity);
+    if (compact) return create;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: "Actualizar",
+          onPressed: _loadActivities,
+          icon: const Icon(Icons.refresh_rounded, size: 20, color: CvColors.textSecondary),
+        ),
+        const SizedBox(width: CvSpace.xs),
+        create,
+      ],
+    );
+  }
+
+  /// Estado (segmentado) y acceso a los filtros avanzados.
+  Widget _toolbar(bool compact) {
+    final count = _activeFilterCount;
+    final filters = CvSecondaryButton(
+      key: const Key('activities-filters'),
+      label: count == 0 ? "Filtros" : "Filtros ($count)",
+      icon: Icons.tune_rounded,
+      tooltip: "Filtrar actividades",
+      onPressed: _openFilters,
+    );
+    final status = ActivityStatusFilter(selected: selectedStatus, onSelected: _selectStatus);
+
+    if (compact) {
+      // Móvil: el selector ocupa todo el ancho con las cuatro opciones completas
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ActivityStatusFilter(selected: selectedStatus, onSelected: _selectStatus, expand: true),
+          const SizedBox(height: CvSpace.sm),
+          filters,
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Flexible(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: status)),
+        const SizedBox(width: CvSpace.md),
+        filters,
+      ],
+    );
+  }
+
+  Widget _activeFilters() {
+    void remove(VoidCallback clear) {
+      setState(clear);
+      _loadActivities();
+    }
+
+    return Wrap(
+      key: const Key('active-filters'),
+      spacing: CvSpace.xs,
+      runSpacing: CvSpace.xs,
+      children: [
+        if (selectedClientId != null)
+          ActiveFilterChip(
+            label: _chipLabel(clients, selectedClientId!),
+            onRemove: () => remove(() => selectedClientId = null),
+          ),
+        if (selectedActionId != null)
+          ActiveFilterChip(
+            label: _chipLabel(actions, selectedActionId!),
+            onRemove: () => remove(() => selectedActionId = null),
+          ),
+        if (selectedRange != null)
+          ActiveFilterChip(
+            label: "${selectedRange!.start.day}/${selectedRange!.start.month} → "
+                "${selectedRange!.end.day}/${selectedRange!.end.month}",
+            onRemove: () => remove(() => selectedRange = null),
+          ),
+        if (selectedContactId != null)
+          ActiveFilterChip(
+            label: _chipLabel(contacts, selectedContactId!),
+            onRemove: () => remove(() => selectedContactId = null),
+          ),
+        if (selectedProductId != null)
+          ActiveFilterChip(
+            label: _chipLabel(products, selectedProductId!),
+            onRemove: () => remove(() => selectedProductId = null),
+          ),
+      ],
+    );
+  }
+
+  /// Estados: carga inicial, error, vacío (con o sin filtros) y listado
+  /// (al recargar se mantiene el listado con una barra de progreso fina).
+  Widget _body() {
+    if (loading && activities.isEmpty) {
+      return const SliverToBoxAdapter(
+        child: CvStatePanel(
+          icon: SizedBox.square(
+            dimension: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: CvColors.primaryDark),
+          ),
+          title: "Cargando actividades…",
+        ),
+      );
+    }
+    if (loadError != null && !loading) {
+      return SliverToBoxAdapter(
+        child: CvStatePanel(
+          icon: const Icon(Icons.cloud_off_outlined),
+          title: loadError!,
+          message: "Comprueba la conexión e inténtalo de nuevo.",
+          action: CvSecondaryButton(label: "Reintentar", icon: Icons.refresh_rounded, onPressed: _loadActivities),
+        ),
+      );
+    }
+    if (activities.isEmpty) {
+      final filtered = selectedStatus != null || _activeFilterCount > 0;
+      return SliverToBoxAdapter(
+        child: filtered
+            ? CvStatePanel(
+                icon: const Icon(Icons.filter_alt_off_outlined),
+                title: "No hay actividades con estos filtros.",
+                message: "Prueba con otro estado o quita algún filtro.",
+                action: TextButton(
+                  onPressed: _clearAllFilters,
+                  style: TextButton.styleFrom(foregroundColor: CvColors.primaryDark),
+                  child: const Text("Quitar filtros"),
+                ),
+              )
+            : const CvStatePanel(
+                icon: Icon(Icons.event_note_outlined),
+                title: "Aún no tienes actividades.",
+                message: "Registra la primera con «Nueva actividad» o por voz desde Inicio.",
+              ),
+      );
+    }
+
+    final n = activities.length;
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: CvSpace.sm),
+            child: Row(
+              children: [
+                Text(
+                  n == 1 ? "1 actividad" : "$n actividades",
+                  key: const Key('activities-count'),
+                  style: CvText.helper.copyWith(fontSize: 13),
+                ),
+                if (loading) ...[
+                  const SizedBox(width: CvSpace.sm),
+                  const SizedBox(
+                    width: 64,
+                    child: LinearProgressIndicator(minHeight: 2, color: CvColors.primary),
+                  ),
+                ],
               ],
             ),
           ),
-
-          if (selectedClientId != null ||
-              selectedActionId != null ||
-              selectedContactId != null ||
-              selectedProductId != null ||
-              selectedRange != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-
-                  if (selectedClientId != null)
-                    _filterChip(_chipLabel(clients, selectedClientId!), () {
-                      setState(() => selectedClientId = null);
-                      _loadActivities();
-                    }),
-
-                  if (selectedActionId != null)
-                    _filterChip(_chipLabel(actions, selectedActionId!), () {
-                      setState(() => selectedActionId = null);
-                      _loadActivities();
-                    }),
-
-                  if (selectedRange != null)
-                    _filterChip(
-                      "${selectedRange!.start.day}/${selectedRange!.start.month} → "
-                      "${selectedRange!.end.day}/${selectedRange!.end.month}",
-                      () {
-                        setState(() => selectedRange = null);
-                        _loadActivities();
-                      },
-                    ),
-
-                  if (selectedContactId != null)
-                    _filterChip(_chipLabel(contacts, selectedContactId!), () {
-                      setState(() => selectedContactId = null);
-                      _loadActivities();
-                    }),
-
-                  if (selectedProductId != null)
-                    _filterChip(_chipLabel(products, selectedProductId!), () {
-                      setState(() => selectedProductId = null);
-                      _loadActivities();
-                    }),
-                ],
-              ),
-            ),
-
-          /// CONTENIDO
-          Expanded(
-            child: loading
-                ? const Center(child: CircularProgressIndicator())
-                : loadError != null
-                    ? ErrorView(message: loadError!, onRetry: _loadActivities)
-                    : activities.isEmpty
-                        ? const Center(
-                            child: Text("No hay actividades registradas"),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 10),
-                            itemCount: activities.length,
-                            itemBuilder: (_, i) {
-                              final activity = activities[i];
-                              return ActivityHistoryCard(
-                                activity: activity,
-                                onEdit: () => _openEditDialog(activity),
-                                onDelete: () => _deleteActivity(activity),
-                                onChanged: _loadActivities,
-                              );
-                            },
-                          ),
-          ),
-        ],
-      ),
+        ),
+        CvSliverListSurface(
+          itemCount: n,
+          itemBuilder: (context, i) {
+            final activity = activities[i];
+            return ActivityListRow(
+              key: ValueKey('activity-${activity.id}'),
+              activity: activity,
+              onEdit: () => _openEditDialog(activity),
+              onChanged: _loadActivities,
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -628,230 +698,5 @@ class _HistoryContentState extends State<HistoryContent> {
   Future<void> _openEditDialog(CrmActivity activity) async {
     final outcome = await openActivityForm(context, activity: activity);
     if (outcome != null && mounted) _loadActivities();
-  }
-
-  Future<void> _deleteActivity(CrmActivity activity) async {
-    if (await deleteActivityWithConfirmation(context, activity) && mounted) {
-      _loadActivities();
-    }
-  }
-}
-
-class ActivityHistoryCard extends StatelessWidget {
-
-  final CrmActivity activity;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-  final VoidCallback onChanged;
-
-  const ActivityHistoryCard({
-    super.key,
-    required this.activity,
-    required this.onEdit,
-    required this.onDelete,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-
-    final type = activity.activityType ?? "Actividad";
-    final color = getActivityColor(type);
-    final cancelled = activity.status == ActivityStatus.cancelled;
-
-    final client = activity.clientName ?? "";
-    final contact = activity.contactName ?? "";
-    final date = activity.datetime;
-
-    final time = date != null
-        ? "${date.day}/${date.month}/${date.year} · "
-          "${date.hour.toString().padLeft(2,'0')}:"
-          "${date.minute.toString().padLeft(2,'0')}"
-        : "";
-
-    final products = [
-      ...activity.products.map((p) => p.name),
-      ...activity.unlinkedProducts,
-    ];
-
-    return Opacity(
-      opacity: cancelled ? 0.65 : 1,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 18),
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 14,
-              offset: const Offset(0,6),
-            )
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-
-            /// BARRA COLOR
-            Container(
-              width: 4,
-              height: 90,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(6),
-              ),
-            ),
-
-            const SizedBox(width: 16),
-
-            /// CONTENIDO
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-
-                  /// HEADER
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
-                        type,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                          color: AppColors.primary,
-                          decoration: cancelled ? TextDecoration.lineThrough : null,
-                        ),
-                      ),
-                      StatusBadge(status: activity.status, overdue: activity.isOverdue),
-                    ],
-                  ),
-
-                  const SizedBox(height: 4),
-
-                  Text(
-                    time,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-
-                  const SizedBox(height: 6),
-
-                  /// CLIENTE
-                  if (client.isNotEmpty)
-                    Text(
-                      client,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                        color: Colors.black87,
-                      ),
-                    ),
-
-                  /// CONTACTO
-                  if (contact.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        contact,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ),
-
-                  /// COMENTARIO
-                  if (activity.comment != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        activity.comment!,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
-                      ),
-                    ),
-
-                  const SizedBox(height: 8),
-
-                  /// PRODUCTOS
-                  if (products.isNotEmpty)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: products.map<Widget>((name) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            name,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: color,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                ],
-              ),
-            ),
-
-            const SizedBox(width: 8),
-
-            /// ACCIONES
-            Column(
-              children: [
-
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: "Editar",
-                  onPressed: onEdit,
-                ),
-
-                PopupMenuButton<ActivityStatus>(
-                  tooltip: "Cambiar estado",
-                  icon: const Icon(Icons.flag_outlined),
-                  onSelected: (status) async {
-                    if (await changeActivityStatus(context, activity, status) != null) {
-                      onChanged();
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    for (final status in activity.allowedTransitions)
-                      PopupMenuItem(
-                        value: status,
-                        child: Text(statusActionLabel(status)),
-                      ),
-                  ],
-                ),
-
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: "Eliminar",
-                  onPressed: onDelete,
-                ),
-
-              ],
-            )
-          ],
-        ),
-      ),
-    );
   }
 }

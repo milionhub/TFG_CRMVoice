@@ -1,10 +1,24 @@
+// Calendario: semana de lunes a domingo (GET /activities?date_from&date_to),
+// navegación entre semanas o a una fecha, alta global o desde un día (con la
+// fecha propuesta) y edición al tocar una actividad.
+//
+// I.4.2: cabecera de página, navegador de semana (‹ rango › · Hoy; el rango
+// abre el selector de fecha) y dos presentaciones según el ancho:
+// - ancho: una sola superficie semanal con siete columnas;
+// - estrecho: selector de los siete días + agenda del día seleccionado.
+// Sin comentarios ni productos (se ven al editar). El formulario y el
+// selector de fecha mantienen su estilo hasta la fase común de diálogos.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../core/app_colors.dart';
+import '../core/design/cv_theme.dart';
+import '../core/design/cv_tokens.dart';
 import '../models/crm.dart';
 import '../widgets/crm/activity_form.dart';
+import '../widgets/crm/calendar_views.dart';
 import '../widgets/crm/crm_ui.dart';
+import '../widgets/ui/cv_components.dart';
 import 'home_screen.dart';
 
 
@@ -17,13 +31,16 @@ class CalendarScreen extends StatelessWidget {
     return const AppShell(
       currentIndex: 2,
       title: "Calendario",
-      backgroundColor: AppColors.background,
       body: CalendarContent(),
     );
   }
 }
 
 class CalendarContent extends StatefulWidget {
+  /// Por debajo de este ancho de contenido, selector de días + agenda (las
+  /// siete columnas dejarían de ser legibles). Mismo corte que el shell.
+  static const double agendaBelow = CvBreakpoints.shellMobile;
+
   const CalendarContent({super.key});
 
   @override
@@ -34,8 +51,15 @@ class _CalendarContentState extends State<CalendarContent> {
   DateTime _currentWeekStart = DateTime.now();
   List<CrmActivity> _activities = [];
   bool _isLoading = true;
+  bool _hasLoaded = false;
   String? _loadError;
   int _request = 0;
+
+  /// Día elegido en la agenda (0 = lunes de la semana mostrada).
+  int _selectedIndex = DateTime.now().weekday - 1;
+
+  /// Sentido del último cambio de semana (para la transición).
+  int _direction = 0;
 
   @override
   void initState() {
@@ -71,6 +95,7 @@ class _CalendarContentState extends State<CalendarContent> {
       setState(() {
         _activities = data;
         _isLoading = false;
+        _hasLoaded = true;
       });
     } catch (e) {
       if (!mounted || request != _request) return;
@@ -83,6 +108,7 @@ class _CalendarContentState extends State<CalendarContent> {
 
   void _previousWeek() {
     setState(() {
+      _direction = -1;
       _currentWeekStart =
           _currentWeekStart.subtract(const Duration(days: 7));
     });
@@ -91,10 +117,24 @@ class _CalendarContentState extends State<CalendarContent> {
 
   void _nextWeek() {
     setState(() {
+      _direction = 1;
       _currentWeekStart =
           _currentWeekStart.add(const Duration(days: 7));
     });
     _loadActivities();
+  }
+
+  /// «Hoy»: la semana actual (misma regla que al abrir) con hoy elegido.
+  void _goToday() {
+    final now = DateTime.now();
+    final start = _getStartOfWeek(now);
+    final sameWeek = start == _currentWeekStart;
+    setState(() {
+      _direction = start.isBefore(_currentWeekStart) ? -1 : 1;
+      _currentWeekStart = start;
+      _selectedIndex = now.weekday - 1;
+    });
+    if (!sameWeek) _loadActivities();
   }
 
   void _openMonthPicker() async {
@@ -117,28 +157,13 @@ class _CalendarContentState extends State<CalendarContent> {
 
     if (picked != null) {
       setState(() {
-        _currentWeekStart = _getStartOfWeek(picked);
+        final start = _getStartOfWeek(picked);
+        _direction = start.isBefore(_currentWeekStart) ? -1 : 1;
+        _currentWeekStart = start;
+        _selectedIndex = picked.weekday - 1;
       });
       _loadActivities();
     }
-  }
-
-  String _monthName(int month) {
-    const months = [
-      "Enero",
-      "Febrero",
-      "Marzo",
-      "Abril",
-      "Mayo",
-      "Junio",
-      "Julio",
-      "Agosto",
-      "Septiembre",
-      "Octubre",
-      "Noviembre",
-      "Diciembre"
-    ];
-    return months[month - 1];
   }
 
   /// Abrir una actividad = el formulario compartido (editar, estado, borrar).
@@ -152,448 +177,174 @@ class _CalendarContentState extends State<CalendarContent> {
     if (outcome != null && mounted) _loadActivities();
   }
 
+  List<DateTime> get _days => List.generate(7, (index) => _currentWeekStart.add(Duration(days: index)));
+
+  /// Actividades de un día, por hora.
+  List<CrmActivity> _activitiesOn(DateTime day) => _activities.where((a) {
+        final date = a.datetime;
+        if (date == null) return false;
+
+        return date.year == day.year &&
+            date.month == day.month &&
+            date.day == day.day;
+      }).toList()
+        ..sort((a, b) => a.datetime!.compareTo(b.datetime!));
 
   @override
   Widget build(BuildContext context) {
     return CrmTheme(
-      child: Container(
-        color: AppColors.background,
-        child: Column(
-          children: [
-
-            /// HEADER PROPIO DEL CALENDARIO
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-              child: Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 16,
-                runSpacing: 12,
-                children: [
-
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        "Calendario",
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        "Vista semanal organizada por hora",
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-
-                      FilledButton.icon(
-                        onPressed: () => _createActivity(),
-                        icon: const Icon(Icons.add),
-                        label: const Text("Nueva actividad"),
-                      ),
-
-                      /// SELECTOR MES
-                      GestureDetector(
-                        onTap: _openMonthPicker,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: Colors.grey.withValues(alpha: 0.2),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.calendar_today,
-                                size: 16,
-                                color: AppColors.primary,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                "${_monthName(_currentWeekStart.month)} ${_currentWeekStart.year}",
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              const Icon(Icons.expand_more, size: 18),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(
-                              Icons.chevron_left,
-                              color: AppColors.primary,
-                            ),
-                            tooltip: "Semana anterior",
-                            onPressed: _previousWeek,
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.chevron_right,
-                              color: AppColors.primary,
-                            ),
-                            tooltip: "Semana siguiente",
-                            onPressed: _nextWeek,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            /// CONTENIDO
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _loadError != null
-                      ? ErrorView(message: _loadError!, onRetry: _loadActivities)
-                      : _buildWeekView(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWeekView() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // En pantallas estrechas las columnas no bajan de 150 px: scroll horizontal
-        final width = constraints.maxWidth < 7 * 150 + 48 ? 7 * 150 + 48.0 : constraints.maxWidth;
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            width: width,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: List.generate(7, (index) {
-                final day = _currentWeekStart.add(
-                  Duration(days: index),
-                );
-
-                return Expanded(
-                  child: _buildDayColumn(day),
-                );
-              }),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-
-  Widget _buildDayColumn(DateTime day) {
-    final dayActivities = _activities.where((a) {
-      final date = a.datetime;
-      if (date == null) return false;
-
-      return date.year == day.year &&
-          date.month == day.month &&
-          date.day == day.day;
-    }).toList()
-      ..sort((a, b) => a.datetime!.compareTo(b.datetime!));
-
-    final isToday =
-        DateTime.now().year == day.year &&
-        DateTime.now().month == day.month &&
-        DateTime.now().day == day.day;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isToday
-            ? AppColors.primary.withValues(alpha: 0.04)
-            : Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: isToday
-            ? Border.all(
-                color: AppColors.primary,
-                width: 1.5,
-              )
-            : null,
-        boxShadow: [
-          BoxShadow(
-            color: isToday
-                ? AppColors.primary.withValues(alpha: 0.08)
-                : Colors.black.withValues(alpha: 0.04),
-            blurRadius: isToday ? 18 : 12,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          /// HEADER (NO SCROLLEA)
-          _buildDayHeader(day, isToday),
-          const SizedBox(height: 12),
-
-          Container(
-            height: 1,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Colors.transparent,
-                  Colors.grey.withValues(alpha: 0.3),
-                  Colors.transparent,
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          /// ACTIVIDADES SCROLLABLES
-          Expanded(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final insets = CvPageBody.insets(constraints.maxWidth);
+          final agenda = constraints.maxWidth < CalendarContent.agendaBelow;
+          final compact = constraints.maxWidth < CvBreakpoints.tablet;
+          final days = _days;
+          return RefreshIndicator(
+            onRefresh: _loadActivities,
+            color: CvColors.primaryDark,
             child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: insets,
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (dayActivities.isEmpty)
-                    const Text(
-                      "Sin actividades",
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey,
-                      ),
-                    ),
-
-                  ...dayActivities.map(
-                    (activity) => _ActivityCard(
-                      activity: activity,
-                      onTap: () => _openActivity(activity),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDayHeader(DateTime day, bool isToday) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                ["LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM"]
-                    [day.weekday - 1],
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isToday
-                      ? const Color(0xFF1565C0)
-                      : Colors.grey,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                "${day.day}",
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: isToday
-                      ? const Color(0xFF1565C0)
-                      : Colors.black,
-                ),
-              ),
-            ],
-          ),
-        ),
-        IconButton(
-          icon: const Icon(Icons.add_circle_outline, size: 20),
-          color: AppColors.primary,
-          visualDensity: VisualDensity.compact,
-          tooltip: "Nueva actividad este día",
-          onPressed: () => _createActivity(day),
-        ),
-      ],
-    );
-  }
-}
-
-/// Tarjeta de una actividad en el calendario (abre el formulario compartido).
-class _ActivityCard extends StatefulWidget {
-  final CrmActivity activity;
-  final VoidCallback onTap;
-
-  const _ActivityCard({required this.activity, required this.onTap});
-
-  @override
-  State<_ActivityCard> createState() => _ActivityCardState();
-}
-
-class _ActivityCardState extends State<_ActivityCard> {
-  bool isHovering = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final activity = widget.activity;
-    final date = activity.datetime;
-
-    final time = date != null ? formatTime(date) : "--:--";
-
-    final activityType = activity.activityType ?? "Actividad";
-    final client = activity.clientName ?? "";
-    final contact = activity.contactName ?? "";
-    final cancelled = activity.status == ActivityStatus.cancelled;
-
-    final color = getActivityColor(activityType);
-
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => isHovering = true),
-      onExit: (_) => setState(() => isHovering = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Opacity(
-          opacity: cancelled ? 0.6 : 1,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isHovering
-                    ? color.withValues(alpha: 0.4)
-                    : Colors.transparent,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(
-                    alpha: isHovering ? 0.08 : 0.04,
-                  ),
-                  blurRadius: isHovering ? 18 : 10,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: IntrinsicHeight(
-              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-
-                  /// BARRA LATERAL
-                  Container(
-                    width: 4,
-                    decoration: BoxDecoration(
-                      color: color,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(16),
-                        bottomLeft: Radius.circular(16),
-                      ),
+                  CvPageHeader(
+                    title: "Calendario",
+                    subtitle: "Organiza tu semana y no pierdas ningún seguimiento.",
+                    action: CvPrimaryButton(
+                      label: "Nueva actividad",
+                      icon: Icons.add_rounded,
+                      onPressed: () => _createActivity(),
                     ),
                   ),
-
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-
-                          /// HORA
-                          Text(
-                            time,
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: color,
-                            ),
-                          ),
-
-                          const SizedBox(height: 6),
-
-                          /// TIPO ACTIVIDAD
-                          Text(
-                            activityType,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                              color: AppColors.primary,
-                              decoration: cancelled ? TextDecoration.lineThrough : null,
-                            ),
-                          ),
-
-                          const SizedBox(height: 6),
-
-                          /// ESTADO
-                          StatusBadge(status: activity.status, overdue: activity.isOverdue),
-
-                          const SizedBox(height: 6),
-
-                          /// CLIENTE
-                          if (client.isNotEmpty)
-                            Text(
-                              client,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: Colors.black87,
-                              ),
-                            ),
-
-                          /// CONTACTO
-                          if (contact.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Text(
-                                contact,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                  const SizedBox(height: CvSpace.xl),
+                  WeekNavigator(
+                    start: days.first,
+                    end: days.last,
+                    compact: compact,
+                    onPrevious: _previousWeek,
+                    onNext: _nextWeek,
+                    onToday: _goToday,
+                    onPickDate: _openMonthPicker,
+                  ),
+                  // Recarga: barra fina con altura reservada (sin saltos)
+                  SizedBox(
+                    height: agenda ? CvSpace.sm : CvSpace.md,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: _isLoading && _hasLoaded
+                          ? const SizedBox(
+                              width: 64,
+                              child: LinearProgressIndicator(minHeight: 2, color: CvColors.primary),
+                            )
+                          : null,
                     ),
                   ),
+                  _content(days, agenda),
                 ],
               ),
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _content(List<DateTime> days, bool agenda) {
+    if (_isLoading && !_hasLoaded) {
+      return const CvStatePanel(
+        icon: SizedBox.square(
+          dimension: 20,
+          child: CircularProgressIndicator(strokeWidth: 2, color: CvColors.primaryDark),
+        ),
+        title: "Cargando calendario…",
+      );
+    }
+    if (_loadError != null && !_isLoading) {
+      return CvStatePanel(
+        icon: const Icon(Icons.cloud_off_outlined),
+        title: "No se pudo cargar el calendario.",
+        message: _loadError,
+        action: CvSecondaryButton(label: "Reintentar", icon: Icons.refresh_rounded, onPressed: _loadActivities),
+      );
+    }
+
+    final byDay = [for (final d in days) _activitiesOn(d)];
+    final today = DateTime.now();
+
+    // Cambio de semana: fundido con un desplazamiento mínimo en su sentido
+    Widget transition(Widget child, Animation<double> animation) => FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween(begin: Offset(0.012 * _direction, 0), end: Offset.zero)
+                .chain(CurveTween(curve: Curves.easeOut))
+                .animate(animation),
+            child: child,
+          ),
+        );
+
+    if (!agenda) {
+      final empty = !_isLoading && byDay.every((d) => d.isEmpty);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: transition,
+            child: CalendarWeekGrid(
+              key: ValueKey(_currentWeekStart),
+              days: days,
+              activitiesByDay: byDay,
+              today: today,
+              onOpen: _openActivity,
+              onCreate: _createActivity,
+            ),
+          ),
+          if (empty)
+            Padding(
+              padding: const EdgeInsets.only(top: CvSpace.sm, left: 2),
+              child: Text(
+                "No hay actividades esta semana.",
+                key: const Key('calendar-week-empty'),
+                style: CvText.helper.copyWith(fontSize: 13),
+              ),
+            ),
+        ],
+      );
+    }
+
+    final selectedDay = days[_selectedIndex];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MobileWeekSelector(
+          days: days,
+          counts: [for (final d in byDay) d.length],
+          selected: _selectedIndex,
+          today: today,
+          onSelected: (i) => setState(() => _selectedIndex = i),
+        ),
+        const SizedBox(height: CvSpace.lg),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
+          layoutBuilder: (current, previous) => Stack(
+            alignment: Alignment.topCenter,
+            children: [...previous, ?current],
+          ),
+          child: DayAgenda(
+            key: ValueKey(selectedDay),
+            day: selectedDay,
+            activities: byDay[_selectedIndex],
+            onOpen: _openActivity,
+            onCreate: () => _createActivity(selectedDay),
           ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -67,7 +67,7 @@ void main() {
         expect(find.text('Crear contacto'), findsOneWidget);
       }));
 
-  testWidgets('Histórico en móvil', (tester) => backend.run(() async {
+  testWidgets('Actividades en móvil', (tester) => backend.run(() async {
         await pumpPhone(tester, const HistoryScreen());
         expect(find.text('Nueva actividad'), findsOneWidget);
         expect(find.text('Pendiente · vencida'), findsOneWidget);

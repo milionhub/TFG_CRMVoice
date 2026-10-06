@@ -392,8 +392,8 @@ class _DraftReviewState extends State<DraftReview> {
         if (r.entity == 'activity')
           OutlinedButton.icon(
             onPressed: () => Navigator.pop(context, VoiceReviewOutcome(r, target: VoiceNavTarget.history)),
-            icon: const Icon(Icons.menu_book_outlined),
-            label: const Text('Ver en Histórico'),
+            icon: const Icon(Icons.event_note_outlined),
+            label: const Text('Ver en Actividades'),
           ),
         if (r.clientId != null)
           OutlinedButton.icon(

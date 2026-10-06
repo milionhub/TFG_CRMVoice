@@ -63,7 +63,7 @@ void main() {
         for (final (label, type) in [
           ('Clientes', ClientsScreen),
           ('Calendario', CalendarScreen),
-          ('Histórico', HistoryScreen),
+          ('Actividades', HistoryScreen),
           ('Chat IA', ChatScreen),
         ]) {
           await openSection(tester, label);
@@ -76,7 +76,7 @@ void main() {
 
   testWidgets('Inicio vuelve realmente a Home desde otra sección', (tester) => backend.run(() async {
         await pumpPhoneHome(tester);
-        await openSection(tester, 'Histórico');
+        await openSection(tester, 'Actividades');
         expect(find.byType(HistoryScreen), findsOneWidget);
 
         await openSection(tester, 'Inicio');
@@ -89,7 +89,7 @@ void main() {
         await pumpPhoneHome(tester);
         for (var i = 0; i < 4; i++) {
           await openSection(tester, 'Clientes');
-          await openSection(tester, 'Histórico');
+          await openSection(tester, 'Actividades');
           await openSection(tester, 'Inicio');
         }
         expect(find.byType(HomeScreen), findsOneWidget);
@@ -114,7 +114,7 @@ void main() {
         await openSection(tester, 'Clientes');
         expect(find.text('Nebula Logística S.L.'), findsOneWidget);
 
-        await openSection(tester, 'Histórico');
+        await openSection(tester, 'Actividades');
         clientName = 'Nebula Logística Renombrada S.L.'; // cambio hecho mientras tanto
         await openSection(tester, 'Clientes');
 

@@ -37,9 +37,9 @@ const shellDestinations = [
     Icons.calendar_month_rounded,
   ),
   ShellDestination(
-    'Histórico',
-    Icons.menu_book_outlined,
-    Icons.menu_book_rounded,
+    'Actividades',
+    Icons.event_note_outlined,
+    Icons.event_note_rounded,
   ),
   ShellDestination(
     'Chat IA',
@@ -65,7 +65,7 @@ void replaceWithSection(NavigatorState navigator, int index) {
   );
 }
 
-/// Ruta entre secciones hermanas (Inicio, Clientes, Calendario, Histórico,
+/// Ruta entre secciones hermanas (Inicio, Clientes, Calendario, Actividades,
 /// Chat IA). Sustituye la transición de página de la plataforma
 /// (MaterialPageRoute: zoom con velo del color de superficie en Windows/Linux,
 /// deslizamiento lateral en macOS/iOS), que animaba la pantalla completa,
@@ -178,7 +178,7 @@ class AppShell extends StatelessWidget {
 
 /// Entrada del contenido al cambiar de sección en escritorio/tablet: fundido
 /// desde el fondo con una subida de 4 px. Solo en [SectionRoute]: el resto de
-/// rutas (p. ej. Histórico abierto desde Voz) conservan su transición.
+/// rutas (p. ej. Actividades abierta desde Voz) conservan su transición.
 class _SectionContentTransition extends StatelessWidget {
   final Widget child;
 
@@ -239,7 +239,7 @@ class SidebarState extends State<Sidebar> {
     });
 
     // La sección sustituye TODA la pila (como el menú móvil): si había algo
-    // apilado sobre Home (p. ej. Histórico abierto desde Voice V2), no queda
+    // apilado sobre Home (p. ej. Actividades abierta desde Voice V2), no queda
     // una Home antigua debajo
     replaceWithSection(Navigator.of(context), index);
   }

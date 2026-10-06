@@ -55,6 +55,12 @@ String formatTime(DateTime d) => '${two(d.hour)}:${two(d.minute)}';
 
 String formatDateTime(DateTime? d) => d == null ? 'Sin fecha' : '${formatDate(d)} · ${formatTime(d)}';
 
+const _monthsShort = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+/// "21 may 2026 · 12:00" (listados de actividades).
+String formatShortDateTime(DateTime? d) =>
+    d == null ? 'Sin fecha' : '${d.day} ${_monthsShort[d.month - 1]} ${d.year} · ${formatTime(d)}';
+
 /// "2026-10-01" -> "01/10/2026" (o el texto tal cual si no es una fecha).
 String formatIsoDate(String? iso) {
   final d = iso == null ? null : DateTime.tryParse(iso);
@@ -105,7 +111,12 @@ class StatusBadge extends StatelessWidget {
   final ActivityStatus? status;
   final bool overdue;
 
-  const StatusBadge({super.key, required this.status, this.overdue = false});
+  /// Variante compacta (columnas estrechas del calendario): icono y texto,
+  /// sin pastilla. Misma semántica; «vencida» se abrevia y la etiqueta
+  /// completa queda en Semantics.
+  final bool compact;
+
+  const StatusBadge({super.key, required this.status, this.overdue = false, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
@@ -113,6 +124,25 @@ class StatusBadge extends StatelessWidget {
     if (s == null) return const SizedBox.shrink();
     final color = overdue ? const Color(0xFFB91C1C) : statusColor(s);
     final text = overdue ? 'Pendiente · vencida' : s.label;
+    if (compact) {
+      return Semantics(
+        label: text,
+        excludeSemantics: true,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(statusIcon(s), size: 12, color: color),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(overdue ? 'Vencida' : s.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+            ),
+          ],
+        ),
+      );
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(

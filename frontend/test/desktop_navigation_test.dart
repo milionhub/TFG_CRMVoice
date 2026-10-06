@@ -47,7 +47,7 @@ void main() {
             await tester.pumpAndSettle();
 
             for (var i = 0; i < 3; i++) {
-              // Lo que hace RecorderCard tras confirmar: «Ver en Histórico» (push sobre Home)
+              // Lo que hace RecorderCard tras confirmar: «Ver en Actividades» (push sobre Home)
               navigator(tester).push(MaterialPageRoute(builder: (_) => const HistoryScreen()));
               await tester.pumpAndSettle();
               await sidebar(tester, 'Inicio');
@@ -66,7 +66,7 @@ void main() {
         await sidebar(tester, 'Clientes');
         expect(find.byType(ClientsScreen), findsOneWidget);
         expect(navigator(tester).canPop(), isFalse);
-        await sidebar(tester, 'Histórico');
+        await sidebar(tester, 'Actividades');
         expect(find.byType(HistoryScreen), findsOneWidget);
         expect(find.byType(ClientsScreen), findsNothing);
         expect(navigator(tester).canPop(), isFalse);

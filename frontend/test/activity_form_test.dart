@@ -156,7 +156,7 @@ void main() {
         }));
   });
 
-  group('Histórico V2', () {
+  group('Actividades V2', () {
     Future<void> pumpHistory(WidgetTester tester) async {
       useDesktopSurface(tester);
       final auth = await loggedInAuth(backend);
@@ -183,11 +183,12 @@ void main() {
 
               await tapText(tester, 'Canceladas');
               expect(backend.calls('GET', '/activities').last.url.queryParameters['status'], 'cancelled');
-              expect(find.text('Anulada'), findsOneWidget);
-              expect(find.text('Presentar el monitor'), findsNothing);
+              expect(find.byKey(const ValueKey('activity-11')), findsOneWidget);
+              expect(find.byKey(const ValueKey('activity-10')), findsNothing);
+              expect(find.text('Anulada'), findsNothing); // el comentario no se lista
 
               await tapText(tester, 'Todas');
-              await tester.tap(find.byTooltip('Cambiar estado').first);
+              await tester.tap(find.byTooltip('Acciones').first);
               await tester.pumpAndSettle();
               await tapText(tester, 'Marcar completada');
               expect(lastJson(backend, 'PATCH', '/activities/10'), {"status": "completed"});
@@ -197,9 +198,18 @@ void main() {
           backend.json('GET', '/activities', {"activities": [listedActivity(at: yesterday)]});
           await pumpHistory(tester);
 
-          await tester.tap(find.byTooltip('Editar'));
+          // Desde el menú «⋮»
+          await tester.tap(find.byTooltip('Acciones'));
           await tester.pumpAndSettle();
+          await tapText(tester, 'Editar');
           expect(find.byType(ActivityForm), findsOneWidget);
+          expect(find.text('Editar actividad'), findsOneWidget);
+          await tester.tap(find.byTooltip('Cerrar'));
+          await tester.pumpAndSettle();
+
+          // Tocando la fila
+          await tester.tap(find.byKey(const ValueKey('activity-10')));
+          await tester.pumpAndSettle();
           expect(find.text('Editar actividad'), findsOneWidget);
           await tester.tap(find.byTooltip('Cerrar'));
           await tester.pumpAndSettle();

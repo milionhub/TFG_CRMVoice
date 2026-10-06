@@ -218,7 +218,7 @@ void main() {
         expect(backend.calls('GET', '/me'), hasLength(1));
       }));
 
-  testWidgets('sidebar: Histórico navega a HistoryScreen y carga las actividades', (tester) => backend.run(() async {
+  testWidgets('sidebar: Actividades navega a HistoryScreen y carga las actividades', (tester) => backend.run(() async {
         stubSession(backend);
         cleanPreferences({...noGoogleAutoLogin, 'auth_token': fakeJwt()});
         backend.json('GET', '/activities', {"activities": []});
@@ -227,7 +227,7 @@ void main() {
         backend.json('GET', '/products', {"products": []});
         await pumpApp(tester);
 
-        await tester.tap(find.descendant(of: find.byType(Sidebar), matching: find.text('Histórico')));
+        await tester.tap(find.descendant(of: find.byType(Sidebar), matching: find.text('Actividades')));
         await tester.pumpAndSettle();
 
         expect(find.byType(HistoryScreen), findsOneWidget);

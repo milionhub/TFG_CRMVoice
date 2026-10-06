@@ -92,7 +92,7 @@ void main() {
               expect(backend.calls('POST', '/actions/drf_act/confirm'), hasLength(1));
               expect(lastJson(backend, 'POST', '/actions/drf_act/confirm'), {"revision": 1});
               expect(find.text('Actividad creada'), findsOneWidget);
-              expect(find.text('Ver en Histórico'), findsOneWidget);
+              expect(find.text('Ver en Actividades'), findsOneWidget);
               await tapText(tester, 'Abrir ficha del cliente');
               expect(host.outcome!.target, VoiceNavTarget.clientDetail);
               expect(host.outcome!.result.clientId, 1);
