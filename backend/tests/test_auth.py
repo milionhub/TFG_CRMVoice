@@ -189,8 +189,9 @@ def test_me_cabecera_authorization_invalida_401(client, authorization):
 
 PROTECTED_ENDPOINTS = [
     ("GET", "/me"),
-    ("POST", "/process-text"),
-    ("POST", "/process-audio"),
+    ("POST", "/actions/interpret"),          # Voice V2 (sustituye a /process-text y /process-audio)
+    ("POST", "/actions/interpret-audio"),
+    ("GET", "/dashboard"),
     ("GET", "/activities"),
     ("POST", "/activities"),
     ("PUT", "/activities/1"),

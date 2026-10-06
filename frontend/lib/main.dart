@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/navigation.dart';
-import 'providers/activity_provider.dart';
 import 'providers/auth_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/auth_screen.dart';
@@ -16,10 +15,6 @@ void main() {
 
         ProxyProvider<AuthProvider, ApiService>(
           update: (_, auth, __) => ApiService(auth),
-        ),
-
-        ProxyProvider<ApiService, ActivityProvider>(
-          update: (_, api, __) => ActivityProvider(api),
         ),
       ],
       child: const CRMVoiceApp(),

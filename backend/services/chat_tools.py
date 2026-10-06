@@ -535,7 +535,7 @@ _TOOLS = (
         "conflict = el contacto no es de ese cliente. Solo identifica: no devuelve actividades, contactos del "
         "cliente ni facturación.",
         FindEntitiesArgs,
-        lambda a, ctx: crm_tools.find_entities(None, ctx.salesperson_id, client_name=a.client_name,
+        lambda a, ctx: crm_tools.find_entities(ctx.salesperson_id, client_name=a.client_name,
                                                contact_name=a.contact_name),
         shape_find_entities, _focus_find_entities,
     ),

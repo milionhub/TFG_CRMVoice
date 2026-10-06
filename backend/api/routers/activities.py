@@ -5,11 +5,9 @@ Las rutas son finas: la validación y la escritura están en
 services/writes/activities.py. El embedding se genera DESPUÉS de guardar
 (best-effort: si OpenAI falla la actividad ya está guardada).
 
-POST y PUT aceptan el cuerpo V2 (ActivityIn) y, temporalmente, el formato
-anterior de la app Flutter (api/legacy_activity_adapter.py, que se borra con
-Voice V2). Por eso reciben un dict y lo validan dentro: así la propiedad de
-la actividad se comprueba antes que el cuerpo (otro comercial recibe 404,
-nunca un 422 que delate que existe).
+POST y PUT aceptan solo el cuerpo V2 (ActivityIn). Reciben un dict y lo
+validan dentro: así la propiedad de la actividad se comprueba antes que el
+cuerpo (otro comercial recibe 404, nunca un 422 que delate que existe).
 """
 from typing import Literal, Optional
 
@@ -18,7 +16,6 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from api import legacy_activity_adapter as legacy
 from api.deps import get_current_user
 from db import connection
 from schemas.activities import SemanticSearchRequest
@@ -59,16 +56,10 @@ def get_activities(
 @router.post("/activities")
 async def create_activity(data: dict = Body(...), current_user: dict = Depends(get_current_user)):
     user_id, now = current_user["user_id"], current_time()
-    if legacy.is_legacy_create(data):
-        activity, provenance = legacy.translate_create(data, now)
-    else:
-        activity, provenance = _activity_in(data), None
-    created = await run_in_threadpool(activity_writes.create_activity, activity, user_id, now=now,
-                                      provenance=provenance)
+    activity = _activity_in(data)
+    created = await run_in_threadpool(activity_writes.create_activity, activity, user_id, now=now)
     # Después del commit: red fuera de la transacción, sin poder deshacer la actividad
     await run_in_threadpool(activities.ensure_embedding, created["id"])
-    if provenance is not None:
-        return {"success": True, "activity_id": created["id"]}   # respuesta del formato anterior
     return JSONResponse(status_code=201, content=created)
 
 
@@ -92,17 +83,11 @@ async def update_activity(activity_id: int, data: dict = Body(...), current_user
             return dict(activity_writes.owned_activity(conn, activity_id, user_id))   # 404 antes que 422
 
     row = await run_in_threadpool(current)
-    if legacy.is_legacy_update(data):
-        activity, provenance = legacy.translate_update(data, row["status"], row["comentario"], now)
-    else:
-        activity, provenance = _activity_in(data), None
-    updated = await run_in_threadpool(activity_writes.update_activity, activity_id, activity, user_id, now=now,
-                                      provenance=provenance)
+    activity = _activity_in(data)
+    updated = await run_in_threadpool(activity_writes.update_activity, activity_id, activity, user_id, now=now)
     if activity.comment != row["comentario"]:
         # El servicio ha borrado el embedding obsoleto: se regenera tras el commit
         await run_in_threadpool(activities.ensure_embedding, activity_id)
-    if provenance is not None:
-        return {"success": True}
     return updated
 
 

@@ -48,7 +48,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return Scaffold(
       backgroundColor: ChatColors.background,
-      drawer: isMobile ? const MobileDrawer() : null,
+      drawer: isMobile ? const MobileDrawer(currentIndex: 4) : null,
       appBar: isMobile
           ? AppBar(
               backgroundColor: ChatColors.surface,

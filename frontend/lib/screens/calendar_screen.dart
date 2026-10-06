@@ -51,7 +51,7 @@ class _MobileLayoutCalendar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      drawer: const MobileDrawer(),  // mismo drawer del home
+      drawer: const MobileDrawer(currentIndex: 2),  // mismo drawer del home
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,

@@ -14,16 +14,16 @@ Severidad: **IMPORTANT** (debe corregirse en su fase) · **MINOR** (mejora o rie
 ## E — Backend / refactor
 
 Sin deuda abierta. Decisión de diseño (B7): `PUT /activities/{id}` es una sustitución
-completa; si falta `fecha`, `client_id`, `contact_id`, `activity_type_id` o `products`
-responde 422 (no hay `PATCH`). El `comentario` es opcional: si no se envía, se conserva.
+completa con el cuerpo V2 (`ActivityIn`); el estado se cambia con `PATCH`. Desde H.5.2 la
+API ya no acepta el formato anterior de la app (Voice V1).
 
 ## F — CRM / resolución de entidades
 
-Completada. `/process-audio` expone de forma aditiva `cliente_status`, `cliente_origen`,
-`cliente_candidates`, `contacto_status` y `contacto_candidates`: un cliente dicho pero no
-resuelto no se sustituye por el del contacto (`conflict`), solo se hereda el cliente de un
-contacto inequívoco cuando no se dijo ninguno (`inherited`) y la ambigüedad no se resuelve
-en silencio. La confianza solo pondera lo mencionado. Los MINOR pendientes están en H y J.
+Completada. La resolución contextual (`entity_resolver.resolve_client_and_contact`, que
+usan el Action Engine y el chat): un cliente dicho pero no resuelto no se sustituye por el del
+contacto (`conflict`), solo se hereda el cliente de un contacto inequívoco cuando no se dijo
+ninguno (`inherited`) y la ambigüedad no se resuelve en silencio. (`/process-audio`, que la
+expuso primero, se retiró en H.5.2.) Los MINOR pendientes están en H y J.
 
 ## G — Chat IA V2
 
@@ -96,14 +96,8 @@ Contrato de H.2 que conviene conocer:
 
 | ID | Resumen | Severidad |
 |---|---|---|
-| — | `detect_action` no reconoce "seguimiento", "email", "presentar", "llamé"… y el orden de las reglas prioriza "oferta" sobre "visita"/"reunión" | MINOR |
-| — | `/process-audio` no distingue un producto mencionado pero no reconocido de uno no mencionado (`resolve_products` solo devuelve los reconocidos): la confianza no lo penaliza | MINOR |
-| FE-D7-02 | NewActivity: un error de red o un 500 al guardar no muestra ningún aviso (excepción no controlada) (1 `skip`) | IMPORTANT |
-| B9 | `/process-text` solo aplica regex (sin ids, productos ni hora) y diverge de `/process-audio`; el frontend no lo usa | MINOR |
-| FE-D7-03 | El botón de guardar no se deshabilita mientras guarda: posible doble envío (1 `skip`) | MINOR |
-| — | Horas: "10h" y "9h30" no se reconocen; cantidades en palabras se toman como hora ("a las dos clínicas" → 02:00); solo se entienden "y media", "y cuarto" y "menos cuarto"; "12 de la noche" → 12:00; el día de la semana tiene prioridad sobre una fecha explícita; una hora sin fecha se descarta | MINOR |
 | — | Whisper se carga en la primera transcripción: un fallo de carga aparece como 500 en esa petición, no al arrancar | MINOR |
-| — | ADAPTADOR TEMPORAL: `POST /activities` y `PUT /activities/{id}` aceptan todavía el formato anterior de la app (NewActivityScreen y el calendario) mediante `api/legacy_activity_adapter.py`, que solo traduce a `ActivityIn` (las reglas son las de V2). Se borra con Voice V2, junto con `/process-text`, `/process-audio`, `text_analysis` y el análisis de `voice_pipeline` | MINOR |
+| — | Retirado en H.5.2: Voice V1 (`/process-audio`, `/process-text`, `text_analysis`, `date_resolver`, el análisis de `voice_pipeline`, `schemas/voice.py`) y el adaptador del formato anterior de `POST/PUT /activities`. `voice_pipeline` queda solo con el audio de Voice V2 (límites, formatos y transcripción). Sus incidencias (B9, FE-D7-02, FE-D7-03, `detect_action`, horas en texto libre, confianza de `/process-audio`) desaparecen con él | — |
 | — | Hora: todo (estado de actividades, fechas futuras de ventas, calendario del intérprete, caducidad de borradores) usa la hora LOCAL del servidor sin zona horaria; se asume que el servidor corre en la zona del usuario (Europe/Madrid) | MINOR |
 | — | Action Engine: una petición no soportada (consultas, borrar, completar, varias acciones...) responde 422 sin crear borrador. Los duplicados de actividad son solo exactos (al minuto): una misma llamada a las 10:00 y a las 10:05 no se detecta | MINOR |
 | — | Action Engine: la calidad del intérprete con audio real (nombres mal transcritos, importes dichos) solo se ha probado con interpretaciones simuladas; la aceptación con Whisper y OpenAI reales sobre una copia de la BD queda para H.6 | MINOR |
@@ -113,19 +107,19 @@ Contrato de H.2 que conviene conocer:
 | ID | Resumen | Severidad |
 |---|---|---|
 | FE-02 | No hay manejo global de 401: con un token rechazado la sesión sigue activa (1 `skip`) | IMPORTANT |
-| FE-D7-01 | History (actividades y filtros) y Calendar no capturan errores: spinner infinito sin aviso y `setState` sin comprobar `mounted` (2 `skip`) | IMPORTANT |
-| B8 | `ApiService.getActivity` llama a `GET /activities/{id}`, que no existe (405); no se usa: eliminarlo | MINOR |
-| FE-D7-04 | `Activity.fromJson` falla con `comentario` null; `Activity` y `ActivityProvider` no se usan en ninguna pantalla (1 `skip`) | MINOR |
-| — | `ApiService.analyzeText` no se usa; `flutter analyze` mantiene 53 avisos informativos (`withOpacity` deprecado, etc.) | MINOR |
+| FE-D7-01 | Resuelto en H.3: History y Calendar muestran error con Reintentar | — |
+| B8 | Resuelto en H.5.2: `ApiService.getActivity` eliminado (junto con `createActivity`/`updateActivity` del formato anterior) | — |
+| FE-D7-04 | Resuelto en H.5.2: `Activity` y `ActivityProvider` (sin uso) eliminados | — |
+| — | `flutter analyze` mantiene avisos informativos en código anterior (`withOpacity` deprecado, etc.); `analyzeText` se eliminó en H.4 | MINOR |
+| — | Navegación móvil (H.5.2): el menú lateral sustituye la pila como la barra lateral de escritorio; la ficha de cliente y los formularios siguen apilándose (con Atrás) | — |
 
 ## J — Calidad final (tests y CI)
 
 | Resumen | Severidad |
 |---|---|
 | Resolución de entidades: fuzzy permisivo con nombres cortos ("Alba" → Alma, "Villa" → Villademo); un modelo sin palabra de categoría ni alias ("el Nova 14") no se detecta; modelos alfanuméricos ("X27"/"X28") sin comprobación de número; la forma jurídica solo se ignora en el catálogo ("SL" frente a "S.L." queda fuzzy); un alias que es palabra común ("aurora") se detecta como cliente | MINOR |
-| Extracción de cliente: con dos empresas en la frase, una que no está en el catálogo se sustituye por la que sí está; un nombre con "de" fuera del catálogo se reduce a su parte final ("Ayuntamiento de X" → "X") | MINOR |
 | Tests frontend: la guarda de `FakeBackend` solo cubre las peticiones hechas dentro de `backend.run`; sin tests de `rememberMe=false` en registro y Google, ni del timeout de `fetchMe`; la rama web de Google (`kIsWeb`) no se puede probar | MINOR |
 | Los widget tests dependen de textos e iconos concretos: habrá que actualizarlos con el rediseño de la Fase I | MINOR |
 | Tests backend: `test_infra.py` importa `conftest` directamente; dependencias transitivas sin fijar (aviso de deprecación de anyio) | MINOR |
 | Emails: la comparación sin mayúsculas usa `lower()` de SQLite, que solo pliega ASCII (una cuenta antigua con mayúsculas no ASCII no se reconocería); la unicidad sigue siendo la del texto guardado | MINOR |
-| Tres implementaciones de similitud coseno (`openai_service`, `semantic_search_service`, `/semantic-search`): unificarlas junto con la búsqueda del chat (Fase G) | MINOR |
+| Tres implementaciones de similitud coseno (`openai_service`, `semantic_search_service`, `/semantic-search`): unificarlas. `/semantic-search` se conserva (H.5.2) como API independiente, sin consumidor en la app ni en el chat, que usa `semantic_search_service`; devuelve `cliente_raw`, vacío en las actividades creadas por formulario o Voice V2 | MINOR |

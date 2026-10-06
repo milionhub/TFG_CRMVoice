@@ -108,55 +108,6 @@ void main() {
     });
   }
 
-  test('createActivity: POST con el payload en JSON (productos incluidos) y devuelve el body', () async {
-    final api = await authedApi();
-    backend.json('POST', '/activities', {"success": true, "activity_id": 42});
-    final payload = {
-      "cliente_id": 1, "contacto_id": 2, "activity_type_id": 3,
-      "products_detected": [{"product_id": 4, "product_raw": "Monitor", "confidence": 95}],
-    };
-
-    final result = await backend.run(() => api.createActivity(payload));
-
-    expect(result, {"success": true, "activity_id": 42});
-    expect(jsonDecode(only('POST', '/activities').body), payload);
-  });
-
-  test('createActivity: un 4xx con {"detail"} se devuelve tal cual (sin excepción)', () async {
-    final api = await authedApi();
-    backend.json('POST', '/activities', {"detail": "Cliente obligatorio"}, status: 422);
-
-    expect(await backend.run(() => api.createActivity({})), {"detail": "Cliente obligatorio"});
-  });
-
-  test('createActivity: respuesta no JSON (500) lanza FormatException', () async {
-    final api = await authedApi();
-    backend.on('POST', '/activities', (_) => http.Response('Internal Server Error', 500));
-
-    await expectLater(backend.run(() => api.createActivity({})), throwsFormatException);
-  });
-
-  test('updateActivity: PUT /activities/{id} con JSON; success true -> true', () async {
-    final api = await authedApi();
-    backend.json('PUT', '/activities/5', {"success": true});
-
-    final ok = await backend.run(() => api.updateActivity(5, {"fecha": "2026-10-02T09:00:00", "products": []}));
-
-    expect(ok, isTrue);
-    expect(jsonDecode(only('PUT', '/activities/5').body), {"fecha": "2026-10-02T09:00:00", "products": []});
-  });
-
-  test('updateActivity: success false, 404 o 500 -> false (sin excepción)', () async {
-    final api = await authedApi();
-    backend.json('PUT', '/activities/1', {"success": false, "error": "x"});
-    backend.json('PUT', '/activities/2', {"detail": "Actividad no encontrada"}, status: 404);
-    backend.on('PUT', '/activities/3', (_) => http.Response('Internal Server Error', 500));
-
-    expect(await backend.run(() => api.updateActivity(1, {})), isFalse);
-    expect(await backend.run(() => api.updateActivity(2, {})), isFalse);
-    expect(await backend.run(() => api.updateActivity(3, {})), isFalse);
-  });
-
   test('deleteActivity: 200 ok; 404 lanza excepción', () async {
     final api = await authedApi();
     backend.json('DELETE', '/activities/8', {"success": true});

@@ -51,7 +51,7 @@ class _MobileLayoutHistory extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      drawer: const MobileDrawer(),
+      drawer: const MobileDrawer(currentIndex: 3),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,

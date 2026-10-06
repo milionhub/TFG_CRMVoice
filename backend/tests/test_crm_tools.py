@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import db
-from services import crm_tools, semantic_search_service, voice_pipeline
+from services import crm_tools, semantic_search_service
 from services.crm_tools import ToolArgumentError
 from services.openai_client import AIServiceError
 
@@ -97,19 +97,17 @@ def activity_ids(result):
 # find_entities (reutiliza la Fase F)
 # =====================================================================
 
-def test_find_entities_cliente_en_texto_libre(world):
-    result = crm_tools.find_entities("¿Qué sabes de Rivera?", world.a)
+def test_find_entities_cliente_por_nombre(world):
+    result = crm_tools.find_entities(world.a, client_name="Rivera")
 
     assert result["found"] is True
-    assert result["client"] | {"candidates": None} == {
-        "id": world.rivera, "name": "Rivera Industrial S.L.", "mention": "Rivera", "status": "exact",
-        "origin": "detected", "score": 100.0, "candidates": None,
-    }
+    assert (result["client"]["id"], result["client"]["name"], result["client"]["mention"],
+            result["client"]["status"]) == (world.rivera, "Rivera Industrial S.L.", "Rivera", "exact")
     assert result["contact"]["id"] is None and result["contact"]["mention"] is None
 
 
 def test_find_entities_contacto_hereda_su_cliente(world):
-    result = crm_tools.find_entities("¿Tengo algo próximo con Marta López?", world.a)
+    result = crm_tools.find_entities(world.a, contact_name="Marta López")
 
     assert result["contact"]["id"] == world.marta_lopez
     assert result["contact"]["client_id"] == world.rivera and result["contact"]["status"] == "exact"
@@ -118,7 +116,7 @@ def test_find_entities_contacto_hereda_su_cliente(world):
 
 
 def test_find_entities_ambiguo_no_elige(world):
-    result = crm_tools.find_entities(None, world.a, contact_name="Marta")
+    result = crm_tools.find_entities(world.a, contact_name="Marta")
 
     assert result["found"] is False
     assert result["contact"]["status"] == "ambiguous" and result["contact"]["id"] is None
@@ -127,7 +125,7 @@ def test_find_entities_ambiguo_no_elige(world):
 
 
 def test_find_entities_contacto_de_otro_cliente_es_conflicto(world):
-    result = crm_tools.find_entities(None, world.a, client_name="Rivera", contact_name="Marta Ruiz")
+    result = crm_tools.find_entities(world.a, client_name="Rivera", contact_name="Marta Ruiz")
 
     assert result["client"]["id"] == world.rivera
     assert result["contact"]["status"] == "conflict" and result["contact"]["id"] is None
@@ -135,48 +133,20 @@ def test_find_entities_contacto_de_otro_cliente_es_conflicto(world):
 
 
 def test_find_entities_sin_coincidencias(world):
-    result = crm_tools.find_entities(None, world.a, client_name="Zeta Global")
+    result = crm_tools.find_entities(world.a, client_name="Zeta Global")
 
     assert result["found"] is False
     assert result["client"]["status"] == "unresolved" and result["client"]["id"] is None
 
 
-@pytest.mark.parametrize("question,client,contact", [
-    ("¿Cuándo fue mi última actividad con Sierra Norte?", "sierra", None),
-    ("¿Qué productos hemos tratado con San Lucas?", "lucas", None),
-    ("Prepárame los datos para una reunión con Rivera", "rivera", None),
-    ("¿Tengo algo próximo con Marta López?", "rivera", "marta_lopez"),
-])
-def test_find_entities_en_las_preguntas_del_chat(world, question, client, contact):
-    result = crm_tools.find_entities(question, world.a)
-
-    assert result["client"]["id"] == getattr(world, client)
-    assert result["contact"]["id"] == (getattr(world, contact) if contact else None)
-
-
-@pytest.mark.parametrize("text", [
-    "reunión mañana con Marta López",
-    "visita a Rivera con Marta Ruiz",
-    "llamada con Pablo de San Lucas",
-])
-def test_find_entities_resuelve_igual_que_process_audio(world, text):
-    tool = crm_tools.find_entities(text, world.a)
-    voice = voice_pipeline.analyze_transcription(text)
-
-    assert (tool["client"]["id"], tool["client"]["status"]) == (voice["cliente_id"], voice["cliente_status"])
-    assert (tool["contact"]["id"], tool["contact"]["status"]) == (voice["contacto_id"], voice["contacto_status"])
-
-
 @pytest.mark.parametrize("kwargs", [
-    {"text": None},
-    {"text": "Rivera", "client_name": "Rivera"},
-    {"text": "   "},
-    {"text": "x" * 501},
+    {},
+    {"client_name": "   "},
+    {"contact_name": "x" * 501},
 ])
 def test_find_entities_argumentos_invalidos(world, kwargs):
-    text = kwargs.pop("text")
     with pytest.raises(ToolArgumentError):
-        crm_tools.find_entities(text, world.a, **kwargs)
+        crm_tools.find_entities(world.a, **kwargs)
 
 
 # =====================================================================
@@ -464,7 +434,7 @@ def test_contexto_de_reunion(world):
 
 def _all_tool_results(world, user_id):
     return [
-        crm_tools.find_entities("¿Qué sabes de Rivera?", user_id),
+        crm_tools.find_entities(user_id, client_name="Rivera"),
         crm_tools.list_activities(user_id, now=NOW),
         crm_tools.list_activities(user_id, client_id=world.rivera, temporal_scope="upcoming", now=NOW),
         crm_tools.list_activities(user_id, contact_id=world.marta_lopez, now=NOW),
@@ -615,7 +585,7 @@ def partial_catalog(factory):
     ("Costa", "costa"), ("Sierra", "sierra"), ("Valle", "valle"), ("VALLE", "valle"), ("válle", "valle"),
 ])
 def test_coincidencia_parcial_unica_resuelve(partial_catalog, mention, key):
-    result = crm_tools.find_entities(None, 1, client_name=mention)
+    result = crm_tools.find_entities(1, client_name=mention)
 
     assert result["found"] is True
     assert (result["client"]["id"], result["client"]["status"]) == (partial_catalog[key], "partial")
@@ -624,7 +594,7 @@ def test_coincidencia_parcial_unica_resuelve(partial_catalog, mention, key):
 def test_coincidencia_parcial_ambigua_no_elige(partial_catalog, factory):
     factory.client("Costa Azul Viajes")
 
-    result = crm_tools.find_entities(None, 1, client_name="Costa")
+    result = crm_tools.find_entities(1, client_name="Costa")
 
     assert result["found"] is False and result["client"]["id"] is None
     assert result["client"]["status"] == "ambiguous"
@@ -633,35 +603,34 @@ def test_coincidencia_parcial_ambigua_no_elige(partial_catalog, factory):
 
 @pytest.mark.parametrize("mention", ["Construcciones", "de", "SL", "Costa Brava"])
 def test_sin_coincidencia_sigue_sin_resolver(partial_catalog, mention):
-    result = crm_tools.find_entities(None, 1, client_name=mention)
+    result = crm_tools.find_entities(1, client_name=mention)
     assert result["found"] is False and result["client"]["status"] == "unresolved"
 
 
 def test_contacto_parcial_y_dentro_del_cliente(partial_catalog):
-    by_surname = crm_tools.find_entities(None, 1, contact_name="Ruiz")
+    by_surname = crm_tools.find_entities(1, contact_name="Ruiz")
     assert by_surname["contact"]["id"] == partial_catalog["ruiz"] and by_surname["contact"]["status"] == "partial"
     assert by_surname["client"]["id"] == partial_catalog["lucas"] and by_surname["client"]["status"] == "inherited"
 
     # Cliente parcial + contacto: el contacto se resuelve dentro de ese cliente (lógica de la Fase F)
-    scoped = crm_tools.find_entities(None, 1, client_name="Costa", contact_name="Raul")
+    scoped = crm_tools.find_entities(1, client_name="Costa", contact_name="Raul")
     assert scoped["client"]["status"] == "partial" and scoped["contact"]["id"] == partial_catalog["raul"]
 
     # Cliente dicho que no existe + contacto (parcial) de otro cliente: conflicto, como en la Fase F
-    conflict = crm_tools.find_entities(None, 1, client_name="Construcciones", contact_name="Ruiz")
+    conflict = crm_tools.find_entities(1, client_name="Construcciones", contact_name="Ruiz")
     assert conflict["client"]["status"] == "conflict" and conflict["client"]["id"] is None
     assert conflict["contact"]["status"] == "partial"
 
     # "Carlos" sigue siendo ambiguo: dos contactos lo contienen
-    carlos = crm_tools.find_entities(None, 1, contact_name="Carlos")
+    carlos = crm_tools.find_entities(1, contact_name="Carlos")
     assert carlos["contact"]["status"] == "ambiguous" and carlos["contact"]["id"] is None
 
 
-def test_el_resolvedor_de_la_voz_no_cambia(partial_catalog):
+def test_el_resolvedor_base_no_cambia(partial_catalog):
     from services.entity_resolver import resolve_client_and_contact
 
-    # La coincidencia parcial es solo de la herramienta del chat: la voz sigue igual
+    # La coincidencia parcial es solo de la herramienta del chat: el resolvedor base sigue igual
     assert resolve_client_and_contact("Costa", None)["client"]["status"] == "unresolved"
-    assert voice_pipeline.resolve_client_and_contact is resolve_client_and_contact
 
 
 # =====================================================================
@@ -837,7 +806,7 @@ def test_f1_contacto_de_otro_cliente_mantiene_el_conflicto(two_costas):
 
     assert resolve_client_and_contact("Costa", "Pablo Gil")["client"]["status"] == "conflict"   # Fase F
 
-    result = crm_tools.find_entities(None, 1, client_name="Costa", contact_name="Pablo Gil")
+    result = crm_tools.find_entities(1, client_name="Costa", contact_name="Pablo Gil")
 
     assert result["client"]["status"] == "conflict" and result["client"]["id"] is None
     # Los candidatos parciales quedan para aclarar, pero ninguno es el cliente del contacto
@@ -846,7 +815,7 @@ def test_f1_contacto_de_otro_cliente_mantiene_el_conflicto(two_costas):
 
 
 def test_f1_contacto_compatible_deshace_la_ambiguedad(two_costas):
-    result = crm_tools.find_entities(None, 1, client_name="Costa", contact_name="Raul")
+    result = crm_tools.find_entities(1, client_name="Costa", contact_name="Raul")
 
     assert (result["client"]["status"], result["client"]["id"]) == ("partial", two_costas["costa"])
     assert result["client"]["candidates"] == [{"id": two_costas["costa"], "name": "Diputacion Costa Verde",
@@ -855,7 +824,7 @@ def test_f1_contacto_compatible_deshace_la_ambiguedad(two_costas):
 
 
 def test_f1_sin_contacto_sigue_ambiguo(two_costas):
-    result = crm_tools.find_entities(None, 1, client_name=" Costa ")
+    result = crm_tools.find_entities(1, client_name=" Costa ")
 
     assert (result["client"]["status"], result["client"]["id"]) == ("ambiguous", None)
     assert {c["name"] for c in result["client"]["candidates"]} == {"Costa Azul Viajes", "Diputacion Costa Verde"}

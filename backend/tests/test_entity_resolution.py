@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 import db
-from services import entity_resolver, text_analysis
+from services import entity_resolver
 
 
 @pytest.fixture
@@ -193,30 +193,6 @@ def test_b12_producto_que_solo_difiere_en_el_numero_no_se_resuelve(factory):
 
 
 # =====================================================================
-# TIPO DE ACTIVIDAD
-# =====================================================================
-
-def test_cada_accion_de_detect_action_resuelve_a_un_tipo_de_actividad(dbq):
-    """detect_action (text_analysis) y db.ACTIVITY_TYPES deben seguir alineados."""
-    texts = ["enviar presupuesto", "mandar la oferta", "concertar reunión", "visita", "llamar"]
-    actions = {text_analysis.detect_action(t) for t in texts}
-
-    assert actions == set(db.ACTIVITY_TYPES)
-    for action in actions:
-        assert entity_resolver.resolve_activity_type(action) is not None
-
-
-def test_tipo_de_actividad_ignora_tildes_y_mayusculas(dbq):
-    assert (entity_resolver.resolve_activity_type("CONCERTAR REUNION")
-            == entity_resolver.resolve_activity_type("Concertar reunión"))
-
-
-@pytest.mark.parametrize("raw", ["Otra acción", "", None])
-def test_tipo_de_actividad_desconocido(dbq, raw):
-    assert entity_resolver.resolve_activity_type(raw) is None
-
-
-# =====================================================================
 # F.1 — Productos con número de modelo (B12 generalizado) y textos cortos
 # =====================================================================
 
@@ -289,7 +265,7 @@ def test_f1_mismo_nombre_de_pila_en_dos_clientes_sin_cliente_no_se_elige(factory
 
 
 # =====================================================================
-# F.1 — API interna: match_client / match_contact / find_client_in_text
+# F.1 — API interna: match_client / match_contact
 # =====================================================================
 
 def ids(match):
@@ -368,23 +344,3 @@ def test_match_contact_exacto_fuzzy_y_ambiguo_global(factory):
     assert ambiguous["status"] == "ambiguous" and ids(ambiguous) == [quintana, pastor]
     # Dentro de un cliente ya no hay ambigüedad
     assert entity_resolver.match_contact("Nora", lumen)["id"] == pastor
-
-
-@pytest.mark.parametrize("text,expected", [
-    ("Concertar reunión con Nebula mañana", ("nebula", "Nebula")),
-    ("visita a clinica horizonte el martes", ("horizonte", "Clínica Horizonte S.L.")),
-    ("hablar con alguien de acme", (None, None)),
-    ("la nebulosa de orion", (None, None)),          # solo palabras completas
-])
-def test_find_client_in_text(crm, text, expected):
-    match = entity_resolver.find_client_in_text(text)
-
-    expected_id = getattr(crm, expected[0]) if expected[0] else None
-    assert (match["id"], match["mention"]) == (expected_id, expected[1])
-
-
-def test_find_client_in_text_dos_clientes_distintos_es_ambiguo(crm):
-    match = entity_resolver.find_client_in_text("reunión con Rivera y con Horizonte")
-
-    assert match["status"] == "ambiguous" and match["id"] is None
-    assert set(ids(match)) == {crm.rivera, crm.horizonte}

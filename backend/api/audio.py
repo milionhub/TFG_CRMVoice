@@ -1,6 +1,6 @@
 """
-Lectura segura de un audio subido, común a /process-audio (formato anterior)
-y a /actions/interpret-audio (H.2): una sola implementación de los límites.
+Lectura segura de un audio subido para /actions/interpret-audio (Voice V2):
+una sola implementación de los límites.
 
 - tipo de contenido de audio (la app suele enviar application/octet-stream);
 - tamaño máximo (voice_pipeline.MAX_AUDIO_BYTES), leyendo como mucho uno más;

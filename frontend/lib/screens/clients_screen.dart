@@ -22,7 +22,7 @@ class ClientsScreen extends StatelessWidget {
     if (isMobile) {
       return Scaffold(
         backgroundColor: AppColors.background,
-        drawer: const MobileDrawer(),
+        drawer: const MobileDrawer(currentIndex: 1),
         appBar: AppBar(backgroundColor: Colors.white, elevation: 1, title: const Text("Clientes")),
         body: const SafeArea(child: CrmTheme(child: ClientsContent())),
       );

@@ -1,10 +1,9 @@
 """
 Resolución de clientes y contactos para el chat, con la lógica de la Fase F
 (no hay un segundo resolvedor):
-- texto libre: text_analysis.analyze_text extrae las menciones igual que
-  en /process-audio (regex + catálogo, sin fuzzy sobre todo el mensaje);
-- nombres ya extraídos (client_name / contact_name): se resuelven tal cual;
-- en ambos casos, entity_resolver.resolve_client_and_contact aplica
+- nombres ya extraídos (client_name / contact_name, del modelo del chat o
+  del intérprete de acciones): se resuelven tal cual;
+- entity_resolver.resolve_client_and_contact aplica
   exact/fuzzy/ambiguous/unresolved y el contexto cliente↔contacto
   (conflict, inherited).
 
@@ -21,7 +20,6 @@ aquí; se recibe para que todas las herramientas tengan el mismo contrato.
 """
 from services.crm_tools._common import ToolArgumentError, id_in_condition, open_connection
 from services.entity_resolver import normalize_text, resolve_client_and_contact
-from services.text_analysis import analyze_text
 
 MAX_TEXT_LENGTH = 500
 PARTIAL_MIN_WORD_LENGTH = 3
@@ -124,26 +122,18 @@ def _with_partial_matches(resolution: dict, client_mention: str | None, contact_
     return resolution
 
 
-def find_entities(text: str | None, salesperson_id: int, *, client_name: str | None = None,
+def find_entities(salesperson_id: int, *, client_name: str | None = None,
                   contact_name: str | None = None) -> dict:
     """
-    Cliente y contacto nombrados en `text`, o en client_name/contact_name
-    (nombres ya extraídos; no se combinan con text). Nunca elige ante la
-    ambigüedad: id solo con status exact, fuzzy, partial o inherited.
+    Cliente y contacto nombrados en client_name/contact_name (nombres ya
+    extraídos). Nunca elige ante la ambigüedad: id solo con status exact,
+    fuzzy, partial o inherited.
     """
-    structured = client_name is not None or contact_name is not None
-    if structured and text is not None:
-        raise ToolArgumentError("usa text o client_name/contact_name, no ambos")
-    if not structured and text is None:
-        raise ToolArgumentError("indica text, client_name o contact_name")
-    for value, name in ((text, "text"), (client_name, "client_name"), (contact_name, "contact_name")):
+    if client_name is None and contact_name is None:
+        raise ToolArgumentError("indica client_name, contact_name o ambos")
+    for value, name in ((client_name, "client_name"), (contact_name, "contact_name")):
         _check_text(value, name)
-
-    if structured:
-        client_mention, contact_mention = client_name, contact_name
-    else:
-        analysis = analyze_text(text)
-        client_mention, contact_mention = analysis["cliente"], analysis["contacto"]
+    client_mention, contact_mention = client_name, contact_name
 
     resolution = resolve_client_and_contact(client_mention, contact_mention)
     resolution = _with_partial_matches(resolution, client_mention, contact_mention)

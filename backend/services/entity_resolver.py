@@ -151,37 +151,6 @@ def resolve_client(cliente_raw: str):
     return match["id"], match["score"]
 
 
-def _contains_phrase(tokens: list[str], phrase: list[str]) -> bool:
-    n = len(phrase)
-    return any(tokens[i:i + n] == phrase for i in range(len(tokens) - n + 1))
-
-
-def find_client_in_text(text: str) -> dict:
-    """
-    Cliente nombrado literalmente en un texto completo (alias o razón social,
-    sin distinguir mayúsculas ni tildes). Solo coincidencias exactas de
-    palabras completas: nada de fuzzy sobre todo el mensaje.
-    Devuelve el resultado de un match más "mention" (el nombre encontrado).
-    """
-    tokens = normalize_text(text).split()
-    found = []  # (longitud de la mención, cliente, texto original)
-
-    for c in _load_clients():
-        mentioned = [(len(name), original) for name, original in _client_names(c).items()
-                     if len(name) >= 3 and _contains_phrase(tokens, name.split())]
-        if mentioned:
-            length, original = max(mentioned)
-            found.append((length, {"id": c["id"], "name": c["razon_social"], "score": 100.0}, original))
-
-    if not found:
-        return {**_result("unresolved"), "mention": None}
-
-    found.sort(key=lambda f: -f[0])  # la mención más larga primero; a igualdad, menor id
-    candidates = [f[1] for f in found]
-    status = "exact" if len(found) == 1 else "ambiguous"
-    return {**_result(status, candidates[0], candidates, 100.0), "mention": found[0][2]}
-
-
 # =====================================================================
 # Contactos
 # =====================================================================
@@ -249,7 +218,7 @@ def _contact_client(contact_id: int):
 
 def resolve_client_and_contact(cliente_raw: str | None, contacto_raw: str | None) -> dict:
     """
-    Resolución contextual cliente↔contacto (F.2), común a /process-audio y
+    Resolución contextual cliente↔contacto (F.2), común al Action Engine y
     a las herramientas del chat:
     - con cliente resuelto, el contacto se busca solo dentro de ese cliente;
       si existe pero en otro cliente, el contacto queda en "conflict";
@@ -307,58 +276,6 @@ def resolve_client_and_contact(cliente_raw: str | None, contacto_raw: str | None
             "candidates": contact_candidates,
         },
     }
-
-
-def find_contact_in_text(text: str, markers=("con", "a", "para")) -> str | None:
-    """
-    Contacto del catálogo nombrado en un texto (sin depender de mayúsculas):
-    su nombre completo en cualquier posición, o su nombre de pila justo
-    después de un marcador ("con", "a", "para"). Devuelve el texto tal como
-    aparece en el mensaje; la resolución (y la ambigüedad) es de match_contact.
-    """
-    tokens = normalize_text(text).split()
-    names = [normalize_text(c["nombre"]).split() for c in _load_contacts()]
-
-    positions = []
-    for name in names:
-        n = len(name)
-        for i in range(len(tokens) - n + 1):
-            if n > 1 and tokens[i:i + n] == name:
-                positions.append((i, n))
-            elif i > 0 and tokens[i - 1] in markers and tokens[i] == name[0]:
-                positions.append((i, 1))
-
-    if not positions:
-        return None
-
-    start, length = min(positions, key=lambda p: (p[0], -p[1]))
-    words = re.findall(r"\w+", text)
-    # Mismas palabras que los tokens normalizados (la normalización no las une ni separa)
-    return " ".join(words[start:start + length]) if len(words) == len(tokens) else " ".join(
-        tokens[start:start + length])
-
-
-# =====================================================================
-# Tipos de actividad
-# =====================================================================
-
-def resolve_activity_type(accion_raw: str):
-    if not accion_raw:
-        return None
-
-    conn = get_connection()
-    try:
-        types = conn.execute("SELECT id, accion FROM activity_types ORDER BY id").fetchall()
-    finally:
-        conn.close()
-
-    accion_norm = normalize_text(accion_raw)
-
-    for t in types:
-        if normalize_text(t["accion"]) == accion_norm:
-            return t["id"]
-
-    return None
 
 
 # =====================================================================

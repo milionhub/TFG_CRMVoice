@@ -152,7 +152,7 @@ class _MobileLayout extends StatelessWidget {
         elevation: 1,
         title: const AppLogo(size: 28),
       ),
-      drawer: const MobileDrawer(),
+      drawer: const MobileDrawer(currentIndex: 0),
       body: const SafeArea(
         child: HomeContent(),
       ),
@@ -185,17 +185,9 @@ class SidebarState extends State<Sidebar> {
       selectedIndex = index;
     });
 
-    final Widget screen = switch (index) {
-      1 => const ClientsScreen(),
-      2 => const CalendarScreen(),
-      3 => const HistoryScreen(),
-      4 => const ChatScreen(),
-      _ => const HomeScreen(),
-    };
-
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => screen),
+      MaterialPageRoute(builder: (_) => sectionScreen(index)),
     );
   }
 
@@ -335,11 +327,43 @@ class _PremiumSidebarItemState extends State<_PremiumSidebarItem> {
   }
 }
 
+/// Secciones principales, en el mismo orden que la barra lateral.
+Widget sectionScreen(int index) => switch (index) {
+      1 => const ClientsScreen(),
+      2 => const CalendarScreen(),
+      3 => const HistoryScreen(),
+      4 => const ChatScreen(),
+      _ => const HomeScreen(),
+    };
+
+/// Menú lateral en móvil. Igual que la barra lateral de escritorio: cada
+/// sección SUSTITUYE a la pila (no se acumulan pantallas al usar el menú) y
+/// se crea de nuevo, así que carga datos actuales del CRM. Elegir la sección
+/// en la que ya se está solo cierra el menú.
 class MobileDrawer extends StatelessWidget {
-  const MobileDrawer();
+  final int currentIndex;
+
+  const MobileDrawer({super.key, required this.currentIndex});
+
+  void _go(BuildContext context, int index) {
+    final navigator = Navigator.of(context);
+    navigator.pop(); // cierra el menú
+    if (index == currentIndex) return;
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => sectionScreen(index)),
+      (_) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    const items = [
+      (Icons.home, "Inicio"),
+      (Icons.business, "Clientes"),
+      (Icons.calendar_month, "Calendario"),
+      (Icons.menu_book, "Histórico"),
+      (Icons.chat_bubble_outline, "Chat IA"),
+    ];
     return Drawer(
       child: Column(
         children: [
@@ -347,53 +371,13 @@ class MobileDrawer extends StatelessWidget {
           const AppLogo(size: 40),
           const SizedBox(height: 40),
 
-          ListTile(
-            leading: const Icon(Icons.home),
-            title: const Text("Inicio"),
-            onTap: () {
-              Navigator.pop(context);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.business),
-            title: const Text("Clientes"),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ClientsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.calendar_month),
-            title: const Text("Calendario"),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CalendarScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.menu_book),
-            title: const Text("Histórico"),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const HistoryScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.chat_bubble_outline),
-            title: const Text("Chat IA"),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ChatScreen()),
-              );
-            },
-          ),
+          for (var i = 0; i < items.length; i++)
+            ListTile(
+              leading: Icon(items[i].$1),
+              title: Text(items[i].$2),
+              selected: i == currentIndex,
+              onTap: () => _go(context, i),
+            ),
           const Spacer(),
           ListTile(
             leading: const Icon(Icons.logout),

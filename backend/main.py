@@ -21,7 +21,6 @@ from api.routers import (
     crm as crm_router,
     sales as sales_router,
     system as system_router,
-    voice as voice_router,
 )
 
 
@@ -57,7 +56,6 @@ app.include_router(activities_router.router)
 app.include_router(sales_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(actions_router.router)
-app.include_router(voice_router.router)
 app.include_router(chat_router.router)
 
 # Errores de dominio (services/writes) -> HTTP, en un solo sitio

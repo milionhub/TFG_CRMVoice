@@ -61,7 +61,7 @@ def resolve_client_contact(client_name: str | None, contact_name: str | None, sa
     client_name, contact_name = _clean(client_name), _clean(contact_name)
     if not client_name and not contact_name:
         return None, None
-    found = find_entities(None, salesperson_id, client_name=client_name, contact_name=contact_name)
+    found = find_entities(salesperson_id, client_name=client_name, contact_name=contact_name)
     c, k = found["client"], found["contact"]
 
     client = None

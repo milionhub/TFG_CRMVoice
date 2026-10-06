@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import '../models/chat_message.dart';
 import '../models/action_draft.dart';
@@ -91,30 +90,6 @@ class ApiService {
 
 }
 
-Future<Map<String, dynamic>> getActivity(int id) async {
-  final response = await http.get(
-    Uri.parse("$baseUrl/activities/$id"),
-    headers: _headers(),
-  );
-
-  if (response.statusCode == 200) {
-    return jsonDecode(response.body);
-  } else {
-    throw Exception("Error cargando actividad");
-  }
-}
-
-Future<Map<String, dynamic>> createActivity(
-    Map<String, dynamic> data) async {
-
-  final response = await http.post(
-    Uri.parse("$baseUrl/activities"),
-    headers: _headers(),
-    body: jsonEncode(data),
-  );
-
-  return jsonDecode(response.body);
-}
 Future<List<dynamic>> getClients() async {
   final response = await http.get(
     Uri.parse("$baseUrl/clients"),
@@ -234,23 +209,6 @@ Future<List<dynamic>> getProducts() async {
     return data["products"];
   } else {
     throw Exception("Error cargando productos");
-  }
-}
-
-Future<bool> updateActivity(int id, Map<String, dynamic> data) async {
-  final response = await http.put(
-    Uri.parse("$baseUrl/activities/$id"),
-    headers: _headers(),
-    body: jsonEncode(data),
-  );
-
-  
-  if (response.statusCode == 200) {
-    final json = jsonDecode(response.body);
-    return json["success"] == true;
-  } else {
-    debugPrint(response.body);
-    return false;
   }
 }
 
