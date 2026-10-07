@@ -49,7 +49,7 @@ class _CRMVoiceAppState extends State<CRMVoiceApp> {
       // pantallas anteriores (Histórico, Calendario...) encima de AuthScreen
       key: ValueKey(auth.isAuthenticated),
       debugShowCheckedModeBanner: false,
-      title: "CRM Voice",
+      title: "CRMVoice",
       theme: ThemeData.dark(),
       // Recarga de las métricas de Home al volver a ella (H.5.2)
       navigatorObservers: [crmRouteObserver],

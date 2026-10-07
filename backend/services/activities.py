@@ -86,7 +86,7 @@ def list_activities(
 
         for r in rows:
 
-            # 🔹 Obtener productos de la actividad
+            # Productos de la actividad
             # Nombre oficial (name) además de lo dicho (product_raw): un producto
             # elegido a mano en un borrador no tiene product_raw, y uno
             # resuelto por aproximación tiene el texto mal transcrito (H4-01)
@@ -114,12 +114,12 @@ def list_activities(
                 "id": r["id"],
                 "fecha": r["datetime_iso"],
 
-                # 🔹 IDs reales
+                # IDs reales
                 "client_id": r["client_id"],
                 "contact_id": r["contact_id"],
                 "activity_type_id": r["activity_type_id"],
 
-                # 🔹 Datos visibles
+                # Datos visibles
                 "cliente": r["cliente"],
                 "contacto": r["contacto"],
                 "accion": r["accion"],

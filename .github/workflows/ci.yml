@@ -4,9 +4,9 @@ name: CI
 
 on:
   push:
-    branches: [develop, refactor/portfolio-v2]
+    branches: [main, develop, refactor/portfolio-v2]
   pull_request:
-    branches: [develop]
+    branches: [main, develop]
 
 # Solo lectura: el workflow no necesita escribir en el repositorio
 permissions:
@@ -77,9 +77,8 @@ jobs:
       - name: Install dependencies
         run: flutter pub get --enforce-lockfile
 
-      # Falla con warnings y errores. Los "info" (sobre todo deprecaciones de
-      # withOpacity) no bloquean: corregirlos exige cambios masivos de UI que
-      # se harán en la fase de UI/UX.
+      # Falla con warnings y errores; los avisos de nivel "info" se muestran
+      # pero no bloquean.
       - name: Analyze
         run: flutter analyze --no-fatal-infos
 

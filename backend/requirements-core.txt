@@ -7,7 +7,7 @@
 # --- API ---
 fastapi==0.124.0
 uvicorn[standard]==0.38.0
-python-multipart==0.0.20        # UploadFile / File en /process-audio
+python-multipart==0.0.20        # UploadFile / File en /actions/interpret-audio
 pydantic==2.12.5
 python-dotenv==1.2.1
 

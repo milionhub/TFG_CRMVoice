@@ -12,9 +12,9 @@ DB_PATH = Path(os.getenv("CRMVOICE_DB_PATH") or Path(__file__).parent / "crm.db"
 
 logger = logging.getLogger("crmvoice")
 
-# Datos de referencia (no de demostración): son las acciones que devuelve
-# detect_action() en main.py y deben existir para poder resolver el tipo
-# de actividad. Si se cambia una, cambiar también detect_action().
+# Datos de referencia (no de demostración): los tipos de actividad que el
+# Action Engine sabe interpretar. Si se cambia uno, cambiar también
+# schemas.actions.ActivityTypeName (un test comprueba que coinciden).
 ACTIVITY_TYPES = (
     "Concertar reunión",
     "Enviar presupuesto",
@@ -121,7 +121,7 @@ def init_db(now=None):
         );
     """)
 
-    # NUEVA TABLA: alias de productos
+    # Alias de productos
     cur.execute("""
         CREATE TABLE IF NOT EXISTS product_aliases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,7 +195,7 @@ def init_db(now=None):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_client ON activities(client_id);")
 
     # =====================================================
-    # NUEVA TABLA: RELACIÓN N:M ACTIVIDAD-PRODUCTO
+    # Relación N:M actividad-producto
     # =====================================================
 
     cur.execute("""

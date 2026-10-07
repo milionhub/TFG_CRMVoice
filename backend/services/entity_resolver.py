@@ -214,7 +214,7 @@ def _contact_scores(contact_norm: str, client_id: int | None = None):
         elif contact_norm == first_name:
             first_name_matches.append({**candidate, "score": 100.0})
 
-        # 🔹 nombre completo y 🔹 solo el nombre de pila
+        # Parecido con el nombre completo y con solo el nombre de pila
         score = max(fuzz.token_sort_ratio(contact_norm, nombre_norm), fuzz.ratio(contact_norm, first_name))
         scored.append({**candidate, "score": score})
 
