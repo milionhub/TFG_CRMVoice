@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/crm.dart';
 import '../../services/api_service.dart';
+import '../ui/cv_feedback.dart';
 import 'crm_ui.dart';
 import 'form_shell.dart';
 
@@ -89,18 +90,11 @@ class _ClientFormState extends State<ClientForm> {
         // Ya está guardado: el aviso no debe dejar el botón en "Guardando..."
         // ni permitir un segundo envío (el formulario se cierra al aceptar)
         setState(() => _saving = false);
-        await showDialog<void>(
-          context: context,
-          builder: (dialogContext) => CrmTheme(
-            child: AlertDialog(
-              icon: const Icon(Icons.info_outline, color: Color(0xFFB45309)),
-              title: const Text('Cliente guardado con un aviso'),
-              content: Text(result.warnings.map((w) => w.message).join('\n')),
-              actions: [
-                FilledButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Entendido')),
-              ],
-            ),
-          ),
+        await showCvNotice(
+          context,
+          tone: CvFeedbackTone.warning,
+          title: 'Cliente guardado con un aviso',
+          message: result.warnings.map((w) => w.message).join('\n'),
         );
         if (!mounted) return;
       }
@@ -121,7 +115,7 @@ class _ClientFormState extends State<ClientForm> {
       busy: _saving,
       title: _isEdit ? 'Editar cliente' : 'Nuevo cliente',
       actions: [
-        TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancelar')),
+        FormCancelButton(onPressed: _saving ? null : () => Navigator.pop(context)),
         SaveButton(saving: _saving, onPressed: _save, label: _isEdit ? 'Guardar cambios' : 'Crear cliente'),
       ],
       body: Form(
@@ -130,7 +124,7 @@ class _ClientFormState extends State<ClientForm> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (error != null)
-              FormErrorBanner(
+              FormErrorNotice(
                 message: error.message,
                 details: error.issueMessages,
                 action: error.kind == ApiErrorKind.duplicate && error.existingId != null
@@ -138,86 +132,98 @@ class _ClientFormState extends State<ClientForm> {
                         style: const TextStyle(fontSize: 13))
                     : null,
               ),
-            TextFormField(
-              controller: _name,
-              decoration: InputDecoration(
-                labelText: 'Razón social *',
-                prefixIcon: const Icon(Icons.business),
-                errorText: _serverError('name'),
-              ),
-              textInputAction: TextInputAction.next,
-              validator: (v) {
-                final text = v?.trim() ?? '';
-                if (text.isEmpty) return 'La razón social es obligatoria';
-                if (text.length < 2) return 'Mínimo 2 caracteres';
-                return maxLength(120)(v);
-              },
+            FormSections(
+              children: [
+                FormSection(
+                  title: 'Datos principales',
+                  children: [
+                    TextFormField(
+                      controller: _name,
+                      decoration: InputDecoration(
+                        labelText: 'Razón social *',
+                        prefixIcon: const Icon(Icons.business_outlined),
+                        errorText: _serverError('name'),
+                      ),
+                      textInputAction: TextInputAction.next,
+                      validator: (v) {
+                        final text = v?.trim() ?? '';
+                        if (text.isEmpty) return 'La razón social es obligatoria';
+                        if (text.length < 2) return 'Mínimo 2 caracteres';
+                        return maxLength(120)(v);
+                      },
+                    ),
+                    TextFormField(
+                      controller: _alias,
+                      decoration: InputDecoration(
+                        labelText: 'Alias / nombre comercial',
+                        errorText: _serverError('alias'),
+                      ),
+                      validator: maxLength(60),
+                    ),
+                  ],
+                ),
+                FormSection(
+                  title: 'Ubicación',
+                  children: [
+                    FieldPair(
+                      first: TextFormField(
+                        controller: _city,
+                        decoration: InputDecoration(labelText: 'Población', errorText: _serverError('city')),
+                        validator: maxLength(80),
+                      ),
+                      second: TextFormField(
+                        controller: _province,
+                        decoration: InputDecoration(labelText: 'Provincia', errorText: _serverError('province')),
+                        validator: maxLength(80),
+                      ),
+                    ),
+                  ],
+                ),
+                FormSection(
+                  title: 'Contacto',
+                  children: [
+                    FieldPair(
+                      first: TextFormField(
+                        controller: _phone,
+                        keyboardType: TextInputType.phone,
+                        decoration: InputDecoration(
+                            labelText: 'Teléfono',
+                            prefixIcon: const Icon(Icons.phone_outlined),
+                            errorText: _serverError('phone')),
+                        validator: validateOptionalPhone,
+                      ),
+                      second: TextFormField(
+                        controller: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: InputDecoration(
+                            labelText: 'Email',
+                            prefixIcon: const Icon(Icons.email_outlined),
+                            errorText: _serverError('email')),
+                        validator: validateOptionalEmail,
+                      ),
+                    ),
+                  ],
+                ),
+                FormSection(
+                  title: 'Información fiscal',
+                  children: [
+                    TextFormField(
+                      controller: _cif,
+                      decoration: InputDecoration(labelText: 'CIF', errorText: _serverError('cif')),
+                      validator: maxLength(20),
+                    ),
+                    if (widget.client?.groupName != null)
+                      ReadOnlyField(label: 'Grupo', value: widget.client!.groupName!, icon: Icons.account_tree_outlined),
+                  ],
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _alias,
-              decoration: InputDecoration(
-                labelText: 'Alias / nombre comercial',
-                errorText: _serverError('alias'),
-              ),
-              validator: maxLength(60),
-            ),
-            const SizedBox(height: 12),
-            _pair(
-              TextFormField(
-                controller: _city,
-                decoration: InputDecoration(labelText: 'Población', errorText: _serverError('city')),
-                validator: maxLength(80),
-              ),
-              TextFormField(
-                controller: _province,
-                decoration: InputDecoration(labelText: 'Provincia', errorText: _serverError('province')),
-                validator: maxLength(80),
-              ),
-            ),
-            const SizedBox(height: 12),
-            _pair(
-              TextFormField(
-                controller: _phone,
-                keyboardType: TextInputType.phone,
-                decoration: InputDecoration(
-                    labelText: 'Teléfono', prefixIcon: const Icon(Icons.phone), errorText: _serverError('phone')),
-                validator: validateOptionalPhone,
-              ),
-              TextFormField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                    labelText: 'Email', prefixIcon: const Icon(Icons.email_outlined), errorText: _serverError('email')),
-                validator: validateOptionalEmail,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _cif,
-              decoration: InputDecoration(labelText: 'CIF', errorText: _serverError('cif')),
-              validator: maxLength(20),
-            ),
-            if (widget.client?.groupName != null) ...[
-              const SizedBox(height: 12),
-              ReadOnlyField(label: 'Grupo', value: widget.client!.groupName!, icon: Icons.account_tree_outlined),
-            ],
           ],
         ),
       ),
     );
   }
 }
-
-/// Dos campos en fila si hay anchura; uno debajo de otro si no.
-Widget _pair(Widget a, Widget b) => LayoutBuilder(
-      builder: (context, constraints) => constraints.maxWidth < 440
-          ? Column(children: [a, const SizedBox(height: 12), b])
-          : Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [Expanded(child: a), const SizedBox(width: 12), Expanded(child: b)],
-            ),
-    );
 
 // =====================================================================
 // Contactos
@@ -286,9 +292,9 @@ class _ContactFormState extends State<ContactForm> {
     return CrmFormShell(
       busy: _saving,
       title: _isEdit ? 'Editar contacto' : 'Nuevo contacto',
-      maxWidth: 520,
+      maxWidth: 540,
       actions: [
-        TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancelar')),
+        FormCancelButton(onPressed: _saving ? null : () => Navigator.pop(context)),
         SaveButton(saving: _saving, onPressed: _save, label: _isEdit ? 'Guardar cambios' : 'Crear contacto'),
       ],
       body: Form(
@@ -296,46 +302,57 @@ class _ContactFormState extends State<ContactForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (error != null) FormErrorBanner(message: error.message, details: error.issueMessages),
-            ReadOnlyField(label: 'Cliente', value: widget.clientName, icon: Icons.business),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _name,
-              decoration: InputDecoration(
-                labelText: 'Nombre *',
-                prefixIcon: const Icon(Icons.person_outline),
-                errorText: error?.messageFor('name') ?? error?.messageFor('contact'),
-              ),
-              validator: (v) {
-                final text = v?.trim() ?? '';
-                if (text.isEmpty) return 'El nombre es obligatorio';
-                if (text.length < 2) return 'Mínimo 2 caracteres';
-                return maxLength(80)(v);
-              },
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _role,
-              decoration: InputDecoration(labelText: 'Cargo', errorText: error?.messageFor('role')),
-              validator: maxLength(80),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _phone,
-              keyboardType: TextInputType.phone,
-              decoration: InputDecoration(
-                  labelText: 'Teléfono', prefixIcon: const Icon(Icons.phone), errorText: error?.messageFor('phone')),
-              validator: validateOptionalPhone,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _email,
-              keyboardType: TextInputType.emailAddress,
-              decoration: InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: const Icon(Icons.email_outlined),
-                  errorText: error?.messageFor('email')),
-              validator: validateOptionalEmail,
+            if (error != null) FormErrorNotice(message: error.message, details: error.issueMessages),
+            FormSections(
+              children: [
+                ReadOnlyField(label: 'Cliente', value: widget.clientName, icon: Icons.business_outlined),
+                FormSection(
+                  title: 'Datos del contacto',
+                  children: [
+                    TextFormField(
+                      controller: _name,
+                      decoration: InputDecoration(
+                        labelText: 'Nombre *',
+                        prefixIcon: const Icon(Icons.person_outline),
+                        errorText: error?.messageFor('name') ?? error?.messageFor('contact'),
+                      ),
+                      validator: (v) {
+                        final text = v?.trim() ?? '';
+                        if (text.isEmpty) return 'El nombre es obligatorio';
+                        if (text.length < 2) return 'Mínimo 2 caracteres';
+                        return maxLength(80)(v);
+                      },
+                    ),
+                    TextFormField(
+                      controller: _role,
+                      decoration: InputDecoration(
+                        labelText: 'Cargo',
+                        prefixIcon: const Icon(Icons.badge_outlined),
+                        errorText: error?.messageFor('role'),
+                      ),
+                      validator: maxLength(80),
+                    ),
+                    TextFormField(
+                      controller: _phone,
+                      keyboardType: TextInputType.phone,
+                      decoration: InputDecoration(
+                          labelText: 'Teléfono',
+                          prefixIcon: const Icon(Icons.phone_outlined),
+                          errorText: error?.messageFor('phone')),
+                      validator: validateOptionalPhone,
+                    ),
+                    TextFormField(
+                      controller: _email,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: const Icon(Icons.email_outlined),
+                          errorText: error?.messageFor('email')),
+                      validator: validateOptionalEmail,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ],
         ),

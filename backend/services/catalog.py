@@ -9,26 +9,17 @@ from services.entity_resolver import normalize_text
 
 
 def list_products() -> list[dict]:
+    """
+    Catálogo de productos (id, name, price), por nombre. Es la ÚNICA lista de
+    productos de la app: la usan los selectores de actividades y ventas y la
+    pantalla Productos (I.8), así que un producto nuevo aparece en todas.
+    """
     conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT id, nombre, precio
-        FROM products
-        ORDER BY nombre ASC
-    """)
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [
-        {
-            "id": r["id"],
-            "name": r["nombre"],
-            "price": r["precio"]
-        }
-        for r in rows
-    ]
+    try:
+        rows = conn.execute("SELECT id, nombre, precio FROM products ORDER BY nombre ASC").fetchall()
+    finally:
+        conn.close()
+    return [{"id": r["id"], "name": r["nombre"], "price": r["precio"]} for r in rows]
 
 
 def list_clients(q: str | None = None) -> list[dict]:

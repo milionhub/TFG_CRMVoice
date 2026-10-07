@@ -178,7 +178,7 @@ void main() {
             await tester.pumpAndSettle();
             await tester.tap(find.text('Concertar reunión').last);
             await tester.pumpAndSettle();
-            await tapText(tester, 'Aplicar');
+            await tapText(tester, 'Aplicar filtros');
 
             expect(backend.calls('GET', '/activities').last.url.queryParameters['action_id'], '1');
             expect(find.text('Filtros (1)'), findsOneWidget);

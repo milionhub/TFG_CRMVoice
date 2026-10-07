@@ -136,12 +136,55 @@ def _m005_consistency_triggers(conn: sqlite3.Connection, now: datetime) -> None:
             """)
 
 
+DRAFT_ACTION_TYPES_V6 = ("create_activity", "create_client", "create_contact", "create_sale",
+                         "create_product", "update_product")
+_DRAFT_COLUMNS = ("id, public_id, salesperson_id, action_type, status, revision, source, source_text, "
+                  "interpretation, payload, issues, result, created_at, updated_at, expires_at")
+
+
+def _m006_product_drafts(conn: sqlite3.Connection, now: datetime) -> None:
+    """
+    Productos en el Action Engine (I.8): los borradores admiten create_product
+    y update_product. La tabla products NO cambia (nombre y PVP, como siempre).
+
+    El CHECK de action_drafts.action_type no se puede ampliar con ALTER TABLE
+    en SQLite: la tabla se reconstruye (nueva, copia de TODAS las filas tal
+    cual, se borra la vieja, se renombra y se rehace su índice), todo en la
+    transacción de esta migración. Nada referencia a action_drafts.
+    """
+    allowed = ", ".join(f"'{t}'" for t in DRAFT_ACTION_TYPES_V6)
+    conn.execute(f"""
+        CREATE TABLE action_drafts_v6 (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            public_id       TEXT NOT NULL UNIQUE,
+            salesperson_id  INTEGER NOT NULL REFERENCES salespeople(id) ON DELETE CASCADE,
+            action_type     TEXT NOT NULL CHECK (action_type IN ({allowed})),
+            status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'executed', 'cancelled')),
+            revision        INTEGER NOT NULL DEFAULT 1,
+            source          TEXT NOT NULL CHECK (source IN ('voice', 'text', 'chat')),
+            source_text     TEXT NOT NULL CHECK (length(source_text) <= 2000),
+            interpretation  TEXT NOT NULL,
+            payload         TEXT NOT NULL,
+            issues          TEXT NOT NULL,
+            result          TEXT,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at      TEXT NOT NULL
+        )
+    """)
+    conn.execute(f"INSERT INTO action_drafts_v6 ({_DRAFT_COLUMNS}) SELECT {_DRAFT_COLUMNS} FROM action_drafts")
+    conn.execute("DROP TABLE action_drafts")
+    conn.execute("ALTER TABLE action_drafts_v6 RENAME TO action_drafts")
+    conn.execute("CREATE INDEX idx_action_drafts_owner ON action_drafts(salesperson_id, status)")
+
+
 MIGRATIONS = (
     (1, "m001_activity_status", _m001_activity_status),
     (2, "m002_audit_columns", _m002_audit_columns),
     (3, "m003_sales", _m003_sales),
     (4, "m004_action_drafts", _m004_action_drafts),
     (5, "m005_consistency_triggers", _m005_consistency_triggers),
+    (6, "m006_product_drafts", _m006_product_drafts),
 )
 
 LATEST_VERSION = MIGRATIONS[-1][0]

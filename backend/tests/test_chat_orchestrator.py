@@ -396,6 +396,9 @@ def test_politica_de_respuesta_en_el_prompt():
         "15.232 €",                                         # importes
         "Separa los hechos del CRM de tu interpretación",
         "No muestres teléfonos ni emails",
+        "Emojis sobrios, uno por bloque y no por dato",     # I.5.1: emojis para marcar bloques
+        "ni en la primera frase ni en cada viñeta",
+        "Nunca decorativos",
         "Si necesitas algo más",                            # cierre genérico prohibido
         "facturas históricas de todos los comerciales",     # H.5.2: facturas != ventas registradas
         "no las sumes sin decirlo",
@@ -435,7 +438,7 @@ def test_politica_de_respuesta_en_el_prompt():
         assert fragment in prompt, fragment
     # H.5.2: la afirmación obsoleta (antes de H.2 no había estados) ya no está
     assert "todavía no guarda si una actividad está hecha" not in prompt
-    assert len(prompt) < 6500                               # sigue siendo un prompt acotado (~1,5k tokens)
+    assert len(prompt) < 6800                               # acotado (~1,6k tokens; I.5.1 añade la regla de emojis)
 
 
 # =====================================================================

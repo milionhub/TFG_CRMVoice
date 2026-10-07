@@ -121,5 +121,49 @@ def capitalize_first(value: str | None) -> str | None:
     return value[0].upper() + value[1:]
 
 
+# Palabras de enlace que van en minúscula dentro de un nombre propio ("Ayuntamiento de Valle Alto")
+_NAME_CONNECTORS = frozenset({"de", "del", "la", "las", "el", "los", "y", "e", "o", "u", "en", "a", "al",
+                              "para", "por", "con", "da", "do", "dos", "das", "i"})
+# Formas jurídicas: van en mayúsculas, con o sin puntos ("sl" -> "SL", "s.l." -> "S.L.")
+_LEGAL_FORMS = frozenset({"sl", "sa", "slu", "sll", "sc", "scp", "cb", "sau", "slp"})
+
+
+def _name_word(word: str, first: bool) -> str:
+    if word != word.lower() or not word[:1].isalpha():
+        return word                      # ya tiene mayúsculas (NASA, CRMVoice, IT, iPhone) o empieza por cifra
+    if word.replace(".", "") in _LEGAL_FORMS:
+        return word.upper()
+    if word in _NAME_CONNECTORS and not first:
+        return word
+    # "castilla-la" -> "Castilla-La"; "l'hospitalet" -> "L'Hospitalet"
+    return re.sub(r"(^|[-'’])(\w)", lambda m: m.group(1) + m.group(2).upper(), word)
+
+
+def name_case(value: str | None) -> str | None:
+    """
+    Mayúsculas profesionales para NOMBRES PROPIOS dictados (razón social,
+    alias, población, provincia, nombre de una persona o de un producto),
+    centralizado aquí junto a capitalize_first (I.8). Política conservadora:
+
+    - SOLO si el valor llega ENTERO en minúsculas (casing pobre del ASR):
+      "academia oasis" -> "Academia Oasis", "santa pola" -> "Santa Pola";
+    - si ya trae alguna mayúscula, se respeta TAL CUAL (casing significativo:
+      "NASA Academia", "NOVA digital", "CRMVoice", "IT soluciones", "S.L."),
+      aunque alguna palabra vaya en minúscula; el usuario puede editarlo;
+    - palabras de enlace en minúscula salvo al principio:
+      "ayuntamiento de valle alto" -> "Ayuntamiento de Valle Alto";
+    - formas jurídicas en mayúsculas: "rivera sl" -> "Rivera SL", "s.l." -> "S.L.";
+    - lo que empieza por cifra o símbolo no se toca. Nada de .title().
+
+    NO es para cargos ni frases (eso es capitalize_first), ni para emails,
+    CIF, teléfonos o texto libre. Solo cambia mayúsculas: el contenido dicho
+    se conserva (nunca se sustituye un nombre nuevo por uno parecido).
+    """
+    if not value or value != value.lower():
+        return value
+    words = value.split(" ")
+    return " ".join(_name_word(w, i == 0) if w else w for i, w in enumerate(words))
+
+
 def iso_now(now: datetime) -> str:
     return now.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")

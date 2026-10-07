@@ -140,6 +140,26 @@ void main() {
     expect(request.headers.containsKey('Authorization'), isFalse);
   });
 
+  test('I.6.3: la sesión caducada deja un aviso de un solo uso que un login correcto descarta', () async {
+    stubSession(backend, userId: 9, nombre: 'Ana Test');
+    final auth = AuthProvider();
+    await backend.run(() => auth.login('ana@crmvoice.test', 'secreta', false));
+    expect(auth.takeSessionExpiredNotice(), isFalse);
+
+    await auth.expireSession();
+    expect(auth.isAuthenticated, isFalse);
+    expect(auth.takeSessionExpiredNotice(), isTrue);
+    expect(auth.takeSessionExpiredNotice(), isFalse, reason: 'solo una vez');
+
+    await auth.expireSession(); // sin sesión: no vuelve a avisar
+    expect(auth.takeSessionExpiredNotice(), isFalse);
+
+    await backend.run(() => auth.login('ana@crmvoice.test', 'secreta', false));
+    await auth.expireSession();
+    await backend.run(() => auth.login('ana@crmvoice.test', 'secreta', false));
+    expect(auth.takeSessionExpiredNotice(), isFalse, reason: 'un login correcto lo descarta');
+  });
+
   test('login con rememberMe persiste el token; sin rememberMe no', () async {
     stubSession(backend);
 

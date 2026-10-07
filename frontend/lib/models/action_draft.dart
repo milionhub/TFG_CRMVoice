@@ -18,7 +18,10 @@ enum ActionType {
   createActivity('create_activity', 'Nueva actividad'),
   createClient('create_client', 'Nuevo cliente'),
   createContact('create_contact', 'Nuevo contacto'),
-  createSale('create_sale', 'Nueva venta');
+  createSale('create_sale', 'Nueva venta'),
+  // I.8: catálogo de productos (nombre y PVP; sin stock)
+  createProduct('create_product', 'Nuevo producto'),
+  updateProduct('update_product', 'Cambio de producto');
 
   final String api;
   final String label;

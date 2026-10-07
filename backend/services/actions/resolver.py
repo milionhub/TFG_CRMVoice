@@ -17,13 +17,24 @@ Resolvedor determinista del Action Engine (H.2).
   crear el borrador, al editarlo y otra vez al confirmarlo.
 - write_input() convierte un borrador sin issues bloqueantes en la MISMA
   entrada tipada que usan los formularios (ActivityIn, ClientIn...).
+
+I.7 (lenguaje natural y resolución de entidades):
+- valores estructurados (teléfono, email, CIF) normalizados de forma
+  determinista y conservadora (core.structured_values), al crear y al editar;
+- el día de una actividad o venta sale de la expresión dicha (date_said) con
+  core.relative_dates; la fecha del intérprete solo se usa si no se reconoce;
+- cliente ↔ contacto sincronizados al editar (_edit_client_contact): elegir
+  un contacto deduce su cliente si no había uno firme; cambiar el cliente
+  vuelve a resolver el contacto dentro del nuevo cliente.
 """
 import sqlite3
 from datetime import datetime
 
 from pydantic import BaseModel, ValidationError
 
-from core.formats import FormatError, capitalize_first, iso_now, parse_date, parse_money_cents, parse_time
+from core.formats import FormatError, capitalize_first, iso_now, name_case, parse_date, parse_money_cents, parse_time
+from core.relative_dates import resolve_day, resolve_time
+from core.structured_values import is_tax_id, normalize_email, normalize_phone, normalize_tax_id, phone_review_message
 from schemas.actions import (DRAFT_MODELS, EDIT_MODELS, ActivityDraft, ClientDraft, ContactDraft, Interpretation,
                              ResolvedRef, SaleDraft, SaleLineDraft)
 from schemas.crm import ActivityIn, ClientIn, ContactIn, SaleCreate, SaleLineIn, cents_to_text
@@ -40,8 +51,11 @@ from services.writes.contacts import contact_issues
 from services.writes.sales import sale_issues
 
 MAX_NAME = 120
-RESOLVED_CLIENT = ("exact", "fuzzy", "partial", "inherited")
-RESOLVED_CONTACT = ("exact", "fuzzy", "partial")
+RESOLVED_CLIENT = ("exact", "fuzzy", "partial", "inherited", "contextual")
+RESOLVED_CONTACT = ("exact", "fuzzy", "partial", "contextual")
+# Un cliente así se puede sustituir por el del contacto que elija el usuario:
+# no tenía id o solo se había deducido de otro contacto (evidencia débil)
+_WEAK_CLIENT = (None, "inherited")
 
 
 def _clean(value: str | None, limit: int = MAX_NAME) -> str | None:
@@ -65,7 +79,11 @@ def resolve_client_contact(client_name: str | None, contact_name: str | None, sa
     c, k = found["client"], found["contact"]
 
     client = None
-    if c["id"] and c["status"] in RESOLVED_CLIENT:
+    if c["id"] and c["status"] == "contextual":
+        # Nivel 4: aproximado pero respaldado por el contacto; se muestra como parecido, con el porqué
+        client = ResolvedRef(id=c["id"], label=c["name"], match="fuzzy", said=client_name,
+                             evidence=f"es el cliente de {k['name']}" if k["name"] else None)
+    elif c["id"] and c["status"] in RESOLVED_CLIENT:
         client = ResolvedRef(id=c["id"], label=c["name"], match=c["status"],
                              said=None if c["status"] == "inherited" else client_name)
     elif c["status"] == "ambiguous" and client_name:
@@ -79,7 +97,10 @@ def resolve_client_contact(client_name: str | None, contact_name: str | None, sa
         client = ResolvedRef(said=client_name, problem="not_found")
 
     contact = None
-    if k["id"] and k["status"] in RESOLVED_CONTACT:
+    if k["id"] and k["status"] == "contextual":
+        contact = ResolvedRef(id=k["id"], label=k["name"], said=contact_name, match="fuzzy",
+                              evidence=f"es el único con ese nombre en {c['name']}" if c["name"] else None)
+    elif k["id"] and k["status"] in RESOLVED_CONTACT:
         contact = ResolvedRef(id=k["id"], label=k["name"], said=contact_name, match=k["status"])
     elif k["status"] in ("ambiguous", "conflict") and contact_name:
         contact = ResolvedRef(said=contact_name, problem=k["status"], candidates=[
@@ -115,6 +136,60 @@ def resolve_product_ref(conn: sqlite3.Connection, name: str) -> ResolvedRef:
         return ResolvedRef(said=said, problem="ambiguous", candidates=[
             Candidate(id=f["product_id"], label=_name_of(conn, "products", "nombre", f["product_id"])) for f in fuzzy])
     return ResolvedRef(said=said, problem="not_found")
+
+
+def _overlaps(a: str | None, b: str | None) -> bool:
+    a, b = normalize_text(a or ""), normalize_text(b or "")
+    return bool(a and b) and (a in b or b in a)
+
+
+def merge_text_products(conn, refs: list[ResolvedRef], source_text: str,
+                        exclude: tuple[str | None, ...] = ()) -> list[ResolvedRef]:
+    """
+    Productos del catálogo que aparecen en el texto dicho aunque el intérprete
+    no los pusiera en `products` (se quedaban solo en el comentario). Usa el
+    detector determinista de frases del catálogo (entity_resolver.resolve_products,
+    umbral de la Fase F, números de modelo obligatorios):
+    - un producto ya presente (mismo id) no se repite;
+    - una mención del intérprete SIN resolver que se solapa con lo encontrado
+      se sustituye por el producto encontrado ("portátil Campo 27" -> Monitor Campo 27,
+      visible como parecido);
+    - si una mención resuelta ya cubre ese trozo del texto, manda la mención;
+    - varios productos en el MISMO trozo del texto -> ambiguo (elige el usuario);
+    - trozos que son el nombre del cliente o del contacto no cuentan.
+    Nunca inventa: sin coincidencia segura en el catálogo no añade nada.
+    """
+    hits = [h for h in resolve_products(source_text or "") if not any(_overlaps(h["said"], x) for x in exclude if x)]
+    by_window: dict[str, list[dict]] = {}
+    for hit in hits:
+        by_window.setdefault(hit["said"], []).append(hit)
+
+    result = list(refs)
+    present = {r.id for r in result if r.id is not None}
+    for window, group in by_window.items():
+        group = [h for h in group if h["product_id"] not in present]
+        if not group or any(r.id is not None and _overlaps(r.said, window) for r in result):
+            continue
+        if len(group) == 1:
+            hit = group[0]
+            label = _name_of(conn, "products", "nombre", hit["product_id"])
+            ref = ResolvedRef(id=hit["product_id"], label=label, said=window,
+                              match="exact" if normalize_text(label) == window or hit["confidence"] == 100 else "fuzzy")
+        else:
+            ref = ResolvedRef(said=window, problem="ambiguous", candidates=[
+                Candidate(id=h["product_id"], label=_name_of(conn, "products", "nombre", h["product_id"]))
+                for h in group])
+        unresolved = next((i for i, r in enumerate(result) if r.id is None and _overlaps(r.said, window)), None)
+        if unresolved is not None:
+            # La mención del intérprete era este producto: se conserva lo que dijo el usuario
+            ref.said = result[unresolved].said
+            if ref.id is not None and ref.match == "exact" and normalize_text(ref.said) not in _product_names(conn, ref.id):
+                ref.match = "fuzzy"
+            result[unresolved] = ref
+        else:
+            result.append(ref)
+        present |= {h["product_id"] for h in group}
+    return result
 
 
 def _product_names(conn, product_id: int) -> set[str]:
@@ -171,23 +246,41 @@ def resolve(interpretation: Interpretation, source_text: str, salesperson_id: in
     kind = interpretation.action_type
     if kind == "unsupported":
         reason = _clean(interpretation.unsupported_reason, 300) or "Esa petición no es una acción que pueda preparar."
-        message = (f"{reason} Puedo preparar: una actividad, un cliente, un contacto o una venta. "
+        message = (f"{reason} Puedo preparar: una actividad, un cliente, un contacto, una venta, un producto "
+                   "nuevo o un cambio de nombre o PVP de un producto. "
                    "Para consultar datos usa el Chat IA; para cambiar o completar algo, la pantalla correspondiente.")
         raise ValidationFailed([issue("unsupported", "action", message)], message)
     with open_connection() as conn:
+        if (product_action := _product_action(kind)) is not None:
+            return kind, product_action.draft(conn, interpretation, source_text, now)
         if kind == "create_activity":
             return kind, _activity_draft(conn, interpretation, source_text, salesperson_id, now)
         if kind == "create_client":
             return kind, _client_draft(conn, interpretation)
         if kind == "create_contact":
             return kind, _contact_draft(interpretation, salesperson_id)
-        return kind, _sale_draft(conn, interpretation, salesperson_id, now)
+        return kind, _sale_draft(conn, interpretation, source_text, salesperson_id, now)
+
+
+def _said_day(it: Interpretation, source_text: str, now: datetime, *, completed: bool) -> str | None:
+    """
+    Día de la expresión dicha (core.relative_dates, determinista) o None.
+    - con date_said: solo esa expresión (si no es relativa, p. ej. "el 15 de
+      octubre", manda la fecha del intérprete);
+    - sin date_said (el modelo no la copió: "El Sábado a las doce…"): la
+      expresión relativa del TEXTO original, solo si hay exactamente una.
+    """
+    said = it.date_said if _clean(it.date_said) else source_text
+    day = resolve_day(said, now.date(), completed=completed)
+    return day.isoformat() if day else None
 
 
 def _activity_draft(conn, it: Interpretation, source_text: str, salesperson_id: int, now: datetime) -> ActivityDraft:
     client, contact = resolve_client_contact(it.client_name, it.contact_name, salesperson_id)
-    day = _clean(it.date, 20)
-    hour = _normalize_time(it.time)
+    # La expresión dicha manda sobre la aritmética del modelo; si no se reconoce, la fecha del intérprete
+    day = _said_day(it, source_text, now, completed=it.status == "completed") or _clean(it.date, 20)
+    # Hora: una expresión inequívoca del texto ("a las 5 de la tarde") manda; si no, la del intérprete
+    hour = resolve_time(source_text) or _normalize_time(it.time)
     status = it.status
     defaulted = False
     today = now.date().isoformat()
@@ -202,35 +295,54 @@ def _activity_draft(conn, it: Interpretation, source_text: str, salesperson_id: 
     return ActivityDraft(
         client=client, contact=contact, activity_type=_activity_type_ref(conn, it.activity_type),
         date=day, time=hour, time_defaulted=defaulted, status=status,
-        products=[resolve_product_ref(conn, p) for p in it.products[:MAX_PRODUCTS + 1]],
+        products=merge_text_products(conn, [resolve_product_ref(conn, p) for p in it.products[:MAX_PRODUCTS + 1]],
+                                     source_text, exclude=(it.client_name, it.contact_name))[:MAX_PRODUCTS + 1],
         comment=_clean(it.comment, 2000) or _clean(source_text, 2000),
     )
 
 
+def _phone(value) -> str | None:
+    return normalize_phone(_clean(value, 30))
+
+
+def _email(value) -> str | None:
+    return normalize_email(_clean(value, 120))
+
+
+def _tax_id(value) -> str | None:
+    return normalize_tax_id(_clean(value, 20))
+
+
 def _client_draft(conn, it: Interpretation) -> ClientDraft:
+    # Entidad NUEVA: se normalizan las mayúsculas (name_case) pero se conserva lo dicho; nunca se
+    # resuelve contra un cliente existente (los parecidos solo son un aviso de client_issues)
     new = it.new_client
-    return ClientDraft(name=_clean(new.name if new and new.name else it.client_name),
-                       alias=_clean(new.alias, 60) if new else None,
-                       city=_clean(new.city, 80) if new else None,
-                       province=_clean(new.province, 80) if new else None,
-                       group=_group_ref(conn, new.group_name) if new else None)
+    return ClientDraft(name=name_case(_clean(new.name if new and new.name else it.client_name)),
+                       alias=name_case(_clean(new.alias, 60)) if new else None,
+                       city=name_case(_clean(new.city, 80)) if new else None,
+                       province=name_case(_clean(new.province, 80)) if new else None,
+                       group=_group_ref(conn, new.group_name) if new else None,
+                       phone=_phone(new.phone) if new else None,
+                       email=_email(new.email) if new else None,
+                       cif=_tax_id(new.cif) if new else None)
 
 
 def _contact_draft(it: Interpretation, salesperson_id: int) -> ContactDraft:
     new = it.new_contact
     client, _ = resolve_client_contact(it.client_name, None, salesperson_id)  # el contacto es NUEVO: no se busca
-    return ContactDraft(client=client, name=_clean(new.name if new and new.name else it.contact_name, 80),
+    return ContactDraft(client=client, name=name_case(_clean(new.name if new and new.name else it.contact_name, 80)),
                         role=capitalize_first(_clean(new.role, 80)) if new else None,
-                        email=_clean(new.email, 120) if new else None,
-                        phone=_clean(new.phone, 30) if new else None)
+                        email=_email(new.email) if new else None,
+                        phone=_phone(new.phone) if new else None)
 
 
-def _sale_draft(conn, it: Interpretation, salesperson_id: int, now: datetime) -> SaleDraft:
+def _sale_draft(conn, it: Interpretation, source_text: str, salesperson_id: int, now: datetime) -> SaleDraft:
     client, contact = resolve_client_contact(it.client_name, it.contact_name, salesperson_id)
     lines = [_sale_line(conn, line.product_name, line.concept, line.quantity, line.amount, line.amount_is_unit_price)
              for line in it.sale_lines[:MAX_SALE_LINES + 1]]
-    return SaleDraft(client=client, contact=contact, sale_date=_clean(it.sale_date, 20) or now.date().isoformat(),
-                     lines=lines)
+    # Una venta ya ocurrió: "el lunes" es el último lunes
+    sale_date = _said_day(it, source_text, now, completed=True) or _clean(it.sale_date, 20) or now.date().isoformat()
+    return SaleDraft(client=client, contact=contact, sale_date=sale_date, lines=lines)
 
 
 def _sale_line(conn, product_name, concept, quantity, amount, is_unit: bool = False) -> SaleLineDraft:
@@ -287,7 +399,9 @@ def apply_edits(action_type: str, fields: BaseModel, raw_edits: dict, salesperso
         raise ValidationFailed([issue("missing", "edits", "No hay cambios.")], "No hay cambios.")
     updated = fields.model_copy(deep=True)
     with open_connection() as conn:
-        if action_type == "create_activity":
+        if (product_action := _product_action(action_type)) is not None:
+            product_action.edit(conn, updated, edits, changed)
+        elif action_type == "create_activity":
             _edit_activity(conn, updated, edits, changed, salesperson_id)
         elif action_type == "create_client":
             _edit_client(conn, updated, edits, changed)
@@ -298,7 +412,60 @@ def apply_edits(action_type: str, fields: BaseModel, raw_edits: dict, salesperso
     return updated
 
 
+def _client_is_weak(client: ResolvedRef | None) -> bool:
+    """Sin cliente firme: no hay, no tiene id o solo se dedujo de otro contacto."""
+    return client is None or client.id is None or client.match in _WEAK_CLIENT
+
+
+def _owner_of(conn, contact_id: int) -> ResolvedRef | None:
+    row = conn.execute("""
+        SELECT c.id, c.razon_social FROM contacts ct JOIN clients c ON c.id = ct.client_id WHERE ct.id = ?
+    """, (contact_id,)).fetchone()
+    return ResolvedRef(id=row["id"], label=row["razon_social"], match="inherited") if row else None
+
+
+def _sync_client_from_contact(conn, target) -> None:
+    """
+    El usuario ha elegido un contacto: si no había un cliente firme, el
+    cliente es el del contacto ("Deducido del contacto"). Un cliente firme
+    (dicho y resuelto, o elegido) NO se sustituye: si no encaja, issues_for
+    lo marca como conflicto. Tampoco se sustituye un cliente ambiguo o en
+    conflicto cuyos candidatos no incluyen al del contacto (contradiría lo dicho).
+    """
+    if target.contact is None or target.contact.id is None or not _client_is_weak(target.client):
+        return
+    owner = _owner_of(conn, target.contact.id)
+    if owner is None:
+        return
+    previous = target.client
+    if previous is not None and previous.candidates and owner.id not in {c.id for c in previous.candidates}:
+        return
+    target.client = owner
+
+
+def _recheck_contact(conn, client: ResolvedRef | None, contact: ResolvedRef, salesperson_id: int
+                     ) -> ResolvedRef | None:
+    """
+    El cliente ha cambiado: el contacto se conserva si es de ese cliente; si
+    no (o estaba sin resolver), se vuelve a resolver su nombre DENTRO del
+    nuevo cliente. Si no está en él, queda en conflicto (bloquea), nunca se
+    descarta ni se cambia en silencio.
+    """
+    if client is None or client.id is None:
+        return contact
+    if contact.id is not None:
+        owner = conn.execute("SELECT client_id FROM contacts WHERE id = ?", (contact.id,)).fetchone()
+        if owner is not None and owner["client_id"] == client.id:
+            return contact
+    name = contact.said or contact.label
+    if not name:
+        return None
+    _, rechecked = resolve_client_contact(client.label, name, salesperson_id)
+    return rechecked
+
+
 def _edit_client_contact(conn, target, edits, changed, salesperson_id, *, with_contact: bool):
+    client_changed = bool({"client_id", "client_name"} & changed)
     if "client_id" in changed:
         target.client = ref_by_id(conn, "clients", "razon_social", edits.client_id) if edits.client_id else None
     elif "client_name" in changed:
@@ -307,14 +474,16 @@ def _edit_client_contact(conn, target, edits, changed, salesperson_id, *, with_c
         return
     if "contact_id" in changed:
         target.contact = ref_by_id(conn, "contacts", "nombre", edits.contact_id) if edits.contact_id else None
+        _sync_client_from_contact(conn, target)
     elif "contact_name" in changed:
         if edits.contact_name:
             client_label = target.client.label if target.client and target.client.id else None
-            client, target.contact = resolve_client_contact(client_label, edits.contact_name, salesperson_id)
-            if target.client is None and client is not None and client.match == "inherited":
-                target.client = client
+            _, target.contact = resolve_client_contact(client_label, edits.contact_name, salesperson_id)
+            _sync_client_from_contact(conn, target)
         else:
             target.contact = None
+    elif client_changed and target.contact is not None:
+        target.contact = _recheck_contact(conn, target.client, target.contact, salesperson_id)
 
 
 def _edit_activity(conn, f: ActivityDraft, e, changed, salesperson_id):
@@ -335,19 +504,25 @@ def _edit_activity(conn, f: ActivityDraft, e, changed, salesperson_id):
         f.comment = _clean(e.comment, 2000)
 
 
-def _edit_client(conn, f: ClientDraft, e, changed):
-    for name in ("name", "alias", "city", "province"):
+# Campos estructurados: la misma normalización conservadora al crear y al editar
+_STRUCTURED = {"phone": _phone, "email": _email, "cif": _tax_id}
+
+
+def _set_text(f, e, changed, names) -> None:
+    for name in names:
         if name in changed:
-            setattr(f, name, _clean(getattr(e, name)))
+            setattr(f, name, _STRUCTURED.get(name, _clean)(getattr(e, name)))
+
+
+def _edit_client(conn, f: ClientDraft, e, changed):
+    _set_text(f, e, changed, ("name", "alias", "city", "province", "phone", "email", "cif"))
     if "group_id" in changed:
         f.group = ref_by_id(conn, "client_groups", "name", e.group_id) if e.group_id else None
 
 
 def _edit_contact(conn, f: ContactDraft, e, changed, salesperson_id):
     _edit_client_contact(conn, f, e, changed, salesperson_id, with_contact=False)
-    for name in ("name", "role", "email", "phone"):
-        if name in changed:
-            setattr(f, name, _clean(getattr(e, name)))
+    _set_text(f, e, changed, ("name", "role", "email", "phone"))
     if "role" in changed:
         f.role = capitalize_first(f.role)        # misma política que el formulario (H4-03)
 
@@ -396,10 +571,17 @@ def _ref_issues(ref: ResolvedRef | None, field: str, kind: str, *, required: boo
         said = f" «{ref.said}»" if ref.said else ""
         return [issue("not_found", field, f"No encuentro {label}{said} en el CRM.", blocking=not_found_blocking)]
     if ref.match in ("fuzzy", "partial"):
-        return [issue("fuzzy_match", field, f"Has dicho «{ref.said}»: {ref.label}.", blocking=False)]
+        why = f" ({ref.evidence})" if ref.evidence else ""
+        return [issue("fuzzy_match", field, f"Has dicho «{ref.said}»: {ref.label}{why}.", blocking=False)]
     if ref.match == "inherited":
         return [issue("fuzzy_match", field, f"Cliente deducido del contacto: {ref.label}.", blocking=False)]
     return []
+
+
+def _phone_review(phone: str | None) -> list[Issue]:
+    """Teléfono con un número de cifras raro: aviso visible (no bloquea; nunca se corrige solo)."""
+    message = phone_review_message(phone)
+    return [issue("invalid", "phone", message, blocking=False)] if message else []
 
 
 def _date_issue(value: str | None, field: str, now: datetime) -> Issue | None:
@@ -414,15 +596,30 @@ def _date_issue(value: str | None, field: str, now: datetime) -> Issue | None:
 
 def issues_for(action_type: str, fields: BaseModel, salesperson_id: int, now: datetime,
                conn: sqlite3.Connection) -> list[Issue]:
+    if (product_action := _product_action(action_type)) is not None:
+        issues = product_action.issues(fields)
+        if has_blocking(issues):
+            return issues
+        try:
+            data, _ = write_input(action_type, fields, now)
+        except ValidationFailed as error:
+            return issues + error.issues
+        return issues + product_action.business_issues(conn, data, fields)
     if action_type == "create_activity":
         issues = _activity_issues(fields, now)
     elif action_type == "create_client":
         issues = [] if fields.name else [issue("missing", "name", "Falta el nombre del cliente.")]
         issues += _ref_issues(fields.group, "group", "group", required=False, not_found_blocking=False)
+        if fields.cif and not is_tax_id(fields.cif):
+            # El CRM acepta cualquier texto como CIF (como el formulario): solo se avisa
+            issues.append(issue("invalid", "cif", f"«{fields.cif}» no parece un CIF/NIF válido: revísalo.",
+                                blocking=False))
+        issues += _phone_review(fields.phone)
     elif action_type == "create_contact":
         issues = _ref_issues(fields.client, "client", "client", required=True)
         if not fields.name:
             issues.append(issue("missing", "name", "Falta el nombre del contacto."))
+        issues += _phone_review(fields.phone)
     else:
         issues = _sale_issues(fields, now)
     if has_blocking(issues):
@@ -498,6 +695,8 @@ def _sale_issues(f: SaleDraft, now: datetime) -> list[Issue]:
 def write_input(action_type: str, fields: BaseModel, now: datetime) -> tuple[BaseModel, dict]:
     """(entrada tipada, provenance). Lanza ValidationFailed si los campos no forman una entrada válida."""
     try:
+        if (product_action := _product_action(action_type)) is not None:
+            return product_action.write_input(fields), {}
         if action_type == "create_activity":
             f: ActivityDraft = fields
             data = ActivityIn(
@@ -511,7 +710,7 @@ def write_input(action_type: str, fields: BaseModel, now: datetime) -> tuple[Bas
         if action_type == "create_client":
             f: ClientDraft = fields
             return ClientIn(name=f.name, alias=f.alias, city=f.city, province=f.province,
-                            group_id=f.group.id if f.group else None), {}
+                            group_id=f.group.id if f.group else None, phone=f.phone, email=f.email, cif=f.cif), {}
         if action_type == "create_contact":
             f: ContactDraft = fields
             return ContactIn(client_id=f.client.id, name=f.name, role=f.role, email=f.email, phone=f.phone), {}
@@ -527,6 +726,12 @@ def write_input(action_type: str, fields: BaseModel, now: datetime) -> tuple[Bas
 
 def load_fields(action_type: str, payload_json: str) -> BaseModel:
     return DRAFT_MODELS[action_type].model_validate_json(payload_json)
+
+
+def _product_action(action_type: str):
+    """Acciones del catálogo de productos (I.8): ProductAction o None (import diferido: product_actions usa este módulo)."""
+    from services.actions.product_actions import PRODUCT_ACTIONS
+    return PRODUCT_ACTIONS.get(action_type)
 
 
 __all__ = ["resolve", "apply_edits", "issues_for", "write_input", "load_fields"]

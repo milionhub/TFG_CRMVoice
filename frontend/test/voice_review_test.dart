@@ -34,7 +34,10 @@ void main() {
   }
 
   Finder confirmButton() => find.byKey(const Key('voice-confirm'));
-  bool confirmEnabled(WidgetTester tester) => tester.widget<ButtonStyleButton>(confirmButton()).enabled;
+  // I.6.4: la key está en el CvPrimaryButton; el botón Material va dentro
+  bool confirmEnabled(WidgetTester tester) => tester
+      .widget<ButtonStyleButton>(find.descendant(of: confirmButton(), matching: find.byWidgetPredicate((w) => w is ButtonStyleButton)))
+      .enabled;
 
   Future<void> tapConfirm(WidgetTester tester) async {
     await tester.ensureVisible(confirmButton());
@@ -50,7 +53,7 @@ void main() {
         (tester) => backend.run(() async {
               await pumpReview(tester, activityDraft());
 
-              expect(find.text('Nueva actividad · revisión'), findsOneWidget);
+              expect(find.text('Nueva actividad'), findsOneWidget);
               expect(find.text('«Mañana a las diez tengo que llamar a Ana de Rivera para hablar del portátil Luna 13.»'),
                   findsOneWidget);
               expect(find.text('Construcciones Rivera S.L.'), findsOneWidget);
@@ -62,7 +65,7 @@ void main() {
               expect(find.text('10:00'), findsOneWidget);
               expect(find.text('Portátil Luna 13'), findsOneWidget);
               expect(find.text('Has dicho «Rivera»: Construcciones Rivera S.L.'), findsOneWidget); // aviso no bloqueante
-              expect(find.text('Listo para confirmar. Revisa los datos antes de guardar.'), findsOneWidget);
+              expect(find.text('Listo para guardar'), findsOneWidget);
               expect(confirmEnabled(tester), isTrue);
             }));
 
@@ -118,7 +121,7 @@ void main() {
               backend.json('PATCH', '/actions/drf_act', activityDraft(revision: 2));
               await pumpReview(tester, ambiguous);
 
-              expect(find.text('Ambiguo: elige uno'), findsOneWidget);
+              expect(find.text('Varias coincidencias'), findsOneWidget);
               expect(find.textContaining('Para poder confirmar'), findsOneWidget);
               expect(confirmEnabled(tester), isFalse);
 
@@ -177,7 +180,7 @@ void main() {
           });
           await pumpReview(tester, clientDraft());
 
-          expect(find.text('Nuevo cliente · revisión'), findsOneWidget);
+          expect(find.text('Nuevo cliente'), findsOneWidget);
           expect(find.text('Construcciones Mediterráneo'), findsOneWidget);
           await tester.tap(find.byTooltip('Cambiar provincia'));
           await tester.pumpAndSettle();
@@ -201,7 +204,7 @@ void main() {
               await pumpReview(tester, contactDraftAmbiguous());
 
               expect(find.text('«Rivera»'), findsOneWidget);
-              expect(find.text('Ambiguo: elige uno'), findsOneWidget);
+              expect(find.text('Varias coincidencias'), findsOneWidget);
               expect(find.textContaining('Hay varios clientes que encajan con «Rivera»'), findsWidgets);
               expect(confirmEnabled(tester), isFalse);
 
@@ -234,7 +237,7 @@ void main() {
     testWidgets('líneas con cantidad, producto, importe en EUR (céntimos) y total; PVP solo orientativo',
         (tester) => backend.run(() async {
               await pumpReview(tester, saleDraft());
-              expect(find.text('Nueva venta · revisión'), findsOneWidget);
+              expect(find.text('Nueva venta'), findsOneWidget);
               expect(find.text('Portátil Luna 13'), findsOneWidget);
               expect(find.text('Dijiste «portátiles Luna 13»'), findsOneWidget);
               expect(find.text('Cantidad: 2'), findsOneWidget);
@@ -267,6 +270,8 @@ void main() {
 
               expect(find.text('No encontrado'), findsOneWidget);
               expect(confirmEnabled(tester), isFalse);
+              await tester.ensureVisible(find.byTooltip('Buscar producto en el CRM'));
+              await tester.pumpAndSettle();
               await tester.tap(find.byTooltip('Buscar producto en el CRM'));
               await tester.pumpAndSettle();
               await tapText(tester, 'Portátil Luna 13');
@@ -382,11 +387,11 @@ void main() {
 
               expect(find.text('El asistente no está disponible ahora mismo.'), findsOneWidget);
               expect(find.text(corrected), findsOneWidget); // el texto corregido sigue ahí
-              expect(find.text('Nueva actividad · revisión'), findsOneWidget);
+              expect(find.text('Nueva actividad'), findsOneWidget);
 
               await tapText(tester, 'Reinterpretar');
               expect(lastJson(backend, 'POST', '/actions/interpret'), {"text": corrected});
-              expect(find.text('Nuevo cliente · revisión'), findsOneWidget);
+              expect(find.text('Nuevo cliente'), findsOneWidget);
               expect(backend.calls('POST', '/actions/drf_act/cancel'), hasLength(1));
             }));
 

@@ -5,19 +5,28 @@
 // coincidencias aproximadas), calcula los issues y decide si es confirmable.
 // Aquí solo se muestran y se envían ediciones TIPADAS (PATCH con la
 // revisión vista). Confirmar envía únicamente {revision}.
+//
+// I.6.4: presentación propia de «revisar antes de guardar» (review_parts.dart):
+// identidad de onda, transcripción, estado global, filas de lo que se
+// guardará con su coincidencia y candidatos. La lógica no cambia.
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/app_colors.dart';
+import '../../core/design/cv_theme.dart';
+import '../../core/design/cv_tokens.dart';
 import '../../core/money.dart';
 import '../../models/action_draft.dart';
 import '../../models/crm.dart';
 import '../../services/api_service.dart';
 import '../crm/crm_ui.dart';
 import '../crm/form_shell.dart';
-import '../crm/sale_form.dart' show maxSaleLines;
+import '../crm/sale_form.dart' show maxSaleLines, SaleTotalBar;
+import '../chat/chat_identity.dart' show ChatWaves;
+import '../ui/cv_components.dart';
+import '../ui/cv_feedback.dart';
+import 'review_parts.dart';
 
 enum VoiceNavTarget { clientDetail, history }
 
@@ -245,12 +254,8 @@ class _DraftReviewState extends State<DraftReview> {
   }
 
   Future<String?> _askText(String label, String? current, {int maxLength = 120, bool multiline = false}) =>
-      showDialog<String>(
-        context: context,
-        builder: (_) => CrmTheme(
-          child: _TextEditDialog(label: label, initial: current, maxLength: maxLength, multiline: multiline),
-        ),
-      );
+      openCrmForm<String>(
+          context, _TextEditDialog(label: label, initial: current, maxLength: maxLength, multiline: multiline));
 
   Future<void> _editText(String key, String label, {int maxLength = 120, bool multiline = false}) async {
     final value = await _askText(label, _draft.text(key), maxLength: maxLength, multiline: multiline);
@@ -327,10 +332,8 @@ class _DraftReviewState extends State<DraftReview> {
   Future<void> _editLine(int? index) async {
     final lines = _lineEdits();
     final current = index == null ? null : _draft.lines[index];
-    final edited = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (_) => CrmTheme(child: _SaleLineDialog(line: current, loadProducts: _api.productItems)),
-    );
+    final edited = await openCrmForm<Map<String, dynamic>>(
+        context, _SaleLineDialog(line: current, loadProducts: _api.productItems));
     if (edited == null || !mounted) return;
     if (index == null) {
       lines.add(edited);
@@ -361,27 +364,42 @@ class _DraftReviewState extends State<DraftReview> {
   }
 
   // ------------------------------------------------------------------
-  // UI
+  // UI (I.6.4)
   // ------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
     final title = switch (_phase) {
-      _Phase.success => 'Guardado',
+      _Phase.success => 'Guardado en CRM',
       _Phase.closed => 'Acción no disponible',
-      _ => '${_draft.type.label} · revisión',
+      _ => 'Revisar antes de guardar',
     };
     return CrmFormShell(
       title: title,
       maxWidth: 720,
       busy: _busy,
       onClose: _requestClose,
+      leading: _phase == _Phase.success || _phase == _Phase.closed
+          ? null
+          : TextButton(
+              onPressed: _busy ? null : _requestClose,
+              style: TextButton.styleFrom(
+                foregroundColor: CvColors.textSecondary,
+                minimumSize: const Size(0, 42),
+                padding: const EdgeInsets.symmetric(horizontal: CvSpace.sm),
+              ),
+              child: const Text('Descartar'),
+            ),
       actions: _actions(),
-      body: switch (_phase) {
-        _Phase.success => _successView(),
-        _Phase.closed => _closedView(),
-        _ => _reviewView(),
-      },
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOut,
+        child: switch (_phase) {
+          _Phase.success => KeyedSubtree(key: const ValueKey('success'), child: _successView()),
+          _Phase.closed => KeyedSubtree(key: const ValueKey('closed'), child: _closedView()),
+          _ => KeyedSubtree(key: const ValueKey('review'), child: _reviewView()),
+        },
+      ),
     );
   }
 
@@ -390,38 +408,45 @@ class _DraftReviewState extends State<DraftReview> {
       final r = _result!;
       return [
         if (r.entity == 'activity')
-          OutlinedButton.icon(
+          CvSecondaryButton(
+            label: 'Ver en Actividades',
+            icon: Icons.event_note_outlined,
             onPressed: () => Navigator.pop(context, VoiceReviewOutcome(r, target: VoiceNavTarget.history)),
-            icon: const Icon(Icons.event_note_outlined),
-            label: const Text('Ver en Actividades'),
           ),
         if (r.clientId != null)
-          OutlinedButton.icon(
+          CvSecondaryButton(
+            label: 'Abrir ficha del cliente',
+            icon: Icons.business_outlined,
             onPressed: () => Navigator.pop(context, VoiceReviewOutcome(r, target: VoiceNavTarget.clientDetail)),
-            icon: const Icon(Icons.business),
-            label: const Text('Abrir ficha del cliente'),
           ),
-        FilledButton(onPressed: () => Navigator.pop(context, VoiceReviewOutcome(r)), child: const Text('Hecho')),
+        CvPrimaryButton(label: 'Hecho', onPressed: () => Navigator.pop(context, VoiceReviewOutcome(r))),
       ];
     }
     if (_phase == _Phase.closed) {
-      return [FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar'))];
+      return [CvPrimaryButton(label: 'Cerrar', onPressed: () => Navigator.pop(context))];
     }
     final confirming = _phase == _Phase.confirming;
     return [
-      TextButton(onPressed: _busy ? null : _requestClose, child: const Text('Descartar')),
-      FilledButton.icon(
+      CvPrimaryButton(
         key: const Key('voice-confirm'),
+        label: confirming ? 'Guardando...' : 'Confirmar y guardar',
+        icon: Icons.check_rounded,
+        loading: confirming,
         onPressed: _busy || !_draft.confirmable || _editingTranscript ? null : _confirm,
-        icon: confirming
-            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-            : const Icon(Icons.check),
-        label: Text(confirming ? 'Guardando...' : 'Confirmar y guardar'),
       ),
     ];
   }
 
-  Widget _closedView() => EmptyView(icon: Icons.timer_off_outlined, message: _closedMessage ?? 'Acción no disponible.');
+  /// Cerrada (caducada, inexistente o cancelada): el motivo es el que dio el
+  /// servidor; no se inventan otros.
+  Widget _closedView() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: CvSpace.sm),
+        child: CvStatePanel(
+          icon: const Icon(Icons.timer_off_outlined),
+          title: 'Esta acción ya no se puede revisar',
+          message: _closedMessage ?? 'Acción no disponible.',
+        ),
+      );
 
   Widget _successView() {
     final r = _result!;
@@ -430,6 +455,7 @@ class _DraftReviewState extends State<DraftReview> {
       'client' => 'Cliente creado',
       'contact' => 'Contacto creado',
       'sale' => r.ids.length > 1 ? 'Venta registrada (${r.ids.length} líneas)' : 'Venta registrada',
+      'product' => _draft.type == ActionType.updateProduct ? 'Producto actualizado' : 'Producto creado',
       _ => 'Acción guardada',
     };
     final data = r.data;
@@ -445,101 +471,188 @@ class _DraftReviewState extends State<DraftReview> {
       final total = data.whereType<Map>().fold<int>(0, (s, l) => s + ((l['amount_cents'] as num?)?.toInt() ?? 0));
       detail = [if (r.clientName != null) r.clientName!, formatEuros(total)].join(' · ');
     }
-    return Column(
-      children: [
-        const Icon(Icons.check_circle, size: 56, color: Color(0xFF15803D)),
-        const SizedBox(height: 12),
-        Text(what, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-        if (detail != null && detail.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Text(detail, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSecondary)),
-        ],
-        const SizedBox(height: 8),
-        const Text('Guardado en el CRM tras tu confirmación.',
-            style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-      ],
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOut,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(offset: Offset(0, 6 * (1 - t)), child: child),
+      ),
+      child: Semantics(
+        liveRegion: true,
+        container: true,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: CvSpace.lg),
+          child: Column(
+            children: [
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  const ChatWaves(height: 72),
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: CvColors.surface,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: CvFeedbackTone.success.border),
+                      boxShadow: const [BoxShadow(color: Color(0x0D172033), blurRadius: 18, offset: Offset(0, 6))],
+                    ),
+                    child: Icon(Icons.check_rounded, size: 28, color: CvFeedbackTone.success.color),
+                  ),
+                ],
+              ),
+              const SizedBox(height: CvSpace.md),
+              Text(what, textAlign: TextAlign.center, style: CvText.heading.copyWith(fontSize: 20, letterSpacing: -0.3)),
+              if (detail != null && detail.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(detail, textAlign: TextAlign.center, style: CvText.body.copyWith(fontSize: 14.5)),
+              ],
+              const SizedBox(height: CvSpace.sm),
+              Text('Guardado en el CRM tras tu confirmación.',
+                  textAlign: TextAlign.center, style: CvText.helper.copyWith(fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
+  /// Texto del proceso en curso (estados que ya existen).
+  String? get _progressText => switch (_phase) {
+        _Phase.patching => 'Actualizando la revisión…',
+        _Phase.reinterpreting => 'Interpretando tu solicitud…',
+        _Phase.cancelling => 'Descartando…',
+        _ => null,
+      };
+
   Widget _reviewView() {
     final d = _draft;
+    final progress = _progressText;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_busy && _phase != _Phase.confirming) const LinearProgressIndicator(minHeight: 2),
+        ReviewIntro(actionLabel: d.type.label),
+        const SizedBox(height: CvSpace.lg),
         _transcriptCard(),
-        const SizedBox(height: 12),
-        if (_error != null) FormErrorBanner(message: _error!, details: _errorDetails),
+        const SizedBox(height: CvSpace.md),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          alignment: Alignment.topCenter,
+          child: progress == null
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(bottom: CvSpace.sm),
+                  child: Semantics(
+                    liveRegion: true,
+                    label: progress,
+                    excludeSemantics: true,
+                    child: Row(
+                      children: [
+                        const SizedBox.square(dimension: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                        const SizedBox(width: CvSpace.xs),
+                        Text(progress, style: CvText.helper.copyWith(fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                ),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: CvSpace.md),
+            child: CvInlineAlert(message: _error!, details: _errorDetails),
+          ),
         _issuesSummary(d),
-        ...switch (d.type) {
-          ActionType.createActivity => _activityFields(d),
-          ActionType.createClient => _clientFields(d),
-          ActionType.createContact => _contactFields(d),
-          ActionType.createSale => _saleFields(d),
-        },
+        const SizedBox(height: CvSpace.xl),
+        const ReviewEyebrow('Esto se guardará'),
+        const SizedBox(height: CvSpace.xxs),
+        ReviewGroup(
+          children: switch (d.type) {
+            ActionType.createActivity => _activityFields(d),
+            ActionType.createClient => _clientFields(d),
+            ActionType.createContact => _contactFields(d),
+            ActionType.createSale => _saleFields(d),
+            ActionType.createProduct => _productFields(d),
+            ActionType.updateProduct => _productUpdateFields(d),
+          },
+        ),
       ],
     );
   }
 
   Widget _transcriptCard() {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 14),
       decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(12),
+        color: CvColors.background,
+        borderRadius: BorderRadius.circular(CvRadius.control + 2),
+        border: Border.all(color: CvColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.record_voice_over_outlined, size: 18, color: AppColors.primary),
-              const SizedBox(width: 6),
-              const Expanded(
-                child: Text('Has dicho', style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.primary)),
-              ),
-              if (!_editingTranscript)
-                TextButton.icon(
-                  onPressed: _busy ? null : () => setState(() => _editingTranscript = true),
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  label: const Text('Corregir texto'),
-                ),
-            ],
+          ReviewEyebrow(
+            'Has dicho',
+            trailing: _editingTranscript
+                ? null
+                : ReviewEditButton(
+                    tooltip: 'Corregir lo que se ha entendido',
+                    label: 'Corregir texto',
+                    onPressed: _busy ? null : () => setState(() => _editingTranscript = true),
+                  ),
           ),
           if (_editingTranscript) ...[
-            TextField(
-              key: const Key('voice-transcript-field'),
-              controller: _transcript,
-              minLines: 2,
-              maxLines: 5,
-              maxLength: 2000,
-              enabled: !_busy,
-              decoration: const InputDecoration(helperText: 'Corrige lo que se haya entendido mal y reinterpreta.'),
+            const SizedBox(height: CvSpace.xs),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextField(
+                key: const Key('voice-transcript-field'),
+                controller: _transcript,
+                minLines: 2,
+                maxLines: 5,
+                maxLength: 2000,
+                enabled: !_busy,
+                decoration: const InputDecoration(
+                  helperText: 'Corrige lo que se haya entendido mal: CRMVoice volverá a interpretarlo.',
+                ),
+              ),
             ),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: _busy
-                      ? null
-                      : () => setState(() {
-                            _editingTranscript = false;
-                            _transcript.text = _draft.sourceText;
-                          }),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _busy ? null : _reinterpret,
-                  icon: _phase == _Phase.reinterpreting
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.auto_fix_high),
-                  label: const Text('Reinterpretar'),
-                ),
-              ],
+            const SizedBox(height: CvSpace.xs),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: CvSpace.xs,
+                runSpacing: CvSpace.xs,
+                children: [
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() {
+                              _editingTranscript = false;
+                              _transcript.text = _draft.sourceText;
+                            }),
+                    style: TextButton.styleFrom(foregroundColor: CvColors.textSecondary, minimumSize: const Size(0, 40)),
+                    child: const Text('Cancelar'),
+                  ),
+                  CvSecondaryButton(
+                    label: 'Reinterpretar',
+                    icon: Icons.refresh_rounded,
+                    tooltip: 'Volver a interpretar el texto corregido',
+                    onPressed: _busy ? null : _reinterpret,
+                  ),
+                ],
+              ),
             ),
           ] else
-            SelectableText('«${_draft.sourceText}»', style: const TextStyle(fontStyle: FontStyle.italic)),
+            Padding(
+              padding: const EdgeInsets.only(top: 4, right: 8),
+              child: SelectableText(
+                '«${_draft.sourceText}»',
+                style: const TextStyle(fontSize: 15.5, height: 1.5, fontStyle: FontStyle.italic, color: CvColors.textPrimary),
+              ),
+            ),
         ],
       ),
     );
@@ -548,37 +661,17 @@ class _DraftReviewState extends State<DraftReview> {
   Widget _issuesSummary(ActionDraft d) {
     final blocking = d.blockingIssues;
     if (blocking.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.only(bottom: 12),
-        child: Row(
-          children: [
-            Icon(Icons.verified_outlined, color: Color(0xFF15803D), size: 20),
-            SizedBox(width: 6),
-            Expanded(child: Text('Listo para confirmar. Revisa los datos antes de guardar.')),
-          ],
-        ),
+      return const ReviewStatusPanel(
+        ready: true,
+        title: 'Listo para guardar',
+        message: 'CRMVoice ha encontrado toda la información necesaria. Revisa los datos antes de guardar.',
       );
     }
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFB91C1C).withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFB91C1C).withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Para poder confirmar, resuelve ${blocking.length == 1 ? 'esto' : 'estos ${blocking.length} puntos'}:',
-              style: const TextStyle(color: Color(0xFFB91C1C), fontWeight: FontWeight.w600)),
-          for (final i in blocking)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text('• ${describeIssue(i)}', style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 13)),
-            ),
-        ],
-      ),
+    return ReviewStatusPanel(
+      ready: false,
+      title: 'Necesita tu revisión',
+      message: 'Para poder confirmar, resuelve ${blocking.length == 1 ? 'esto' : 'estos ${blocking.length} puntos'}:',
+      points: [for (final i in blocking) describeIssue(i)],
     );
   }
 
@@ -619,7 +712,7 @@ class _DraftReviewState extends State<DraftReview> {
         issues: d.issuesFor('date'),
         enabled: !_busy,
         onEdit: () => _pickDate('date'),
-        editIcon: Icons.calendar_today,
+        editIcon: Icons.calendar_today_outlined,
       ),
       _ValueRow(
         label: 'Hora',
@@ -627,54 +720,61 @@ class _DraftReviewState extends State<DraftReview> {
         issues: d.issuesFor('time'),
         enabled: !_busy,
         onEdit: _pickTime,
-        editIcon: Icons.access_time,
+        editIcon: Icons.access_time_rounded,
       ),
-      _FieldBlock(
+      ReviewRow(
         label: 'Estado',
-        issues: d.issuesFor('status'),
-        child: Wrap(
-          spacing: 8,
-          children: [
-            for (final s in const [('pending', 'Pendiente'), ('completed', 'Completada')])
-              ChoiceChip(
-                label: Text(s.$2),
-                selected: status == s.$1,
-                onSelected: _busy || status == s.$1 ? null : (_) => _patch({'status': s.$1}),
-              ),
-          ],
+        value: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            emptySelectionAllowed: true,
+            segments: const [
+              ButtonSegment(value: 'pending', label: Text('Pendiente')),
+              ButtonSegment(value: 'completed', label: Text('Completada')),
+            ],
+            selected: {?status},
+            onSelectionChanged: _busy
+                ? null
+                : (v) {
+                    if (v.isNotEmpty && v.first != status) _patch({'status': v.first});
+                  },
+          ),
         ),
+        below: [for (final i in d.issuesFor('status')) _IssueText(i)],
       ),
-      _FieldBlock(
+      ReviewRow(
         label: 'Productos',
-        issues: d.issuesFor('products'),
-        trailing: TextButton.icon(
-          onPressed: _busy || products.length >= 10 ? null : _addProduct,
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('Añadir'),
-        ),
-        child: products.isEmpty
-            ? const Text('Sin productos', style: TextStyle(color: AppColors.textSecondary))
-            : Column(
-                children: [
-                  for (var i = 0; i < products.length; i++)
-                    _RefRow(
-                      label: 'Producto ${i + 1}',
-                      ref: products[i],
-                      issues: d.issuesFor('products[$i]'),
-                      enabled: !_busy,
-                      dense: true,
-                      onCandidate: (c) => _setProduct(i, c),
-                      onSearch: () => _search('Producto', _api.productItems, (p) => _setProduct(i, p)),
-                      onClear: () => _removeProduct(i),
-                    ),
-                ],
-              ),
+        value: products.isEmpty ? const ReviewValue(null) : const SizedBox.shrink(),
+        actions: [
+          ReviewEditButton(
+            tooltip: 'Añadir producto',
+            label: 'Añadir',
+            icon: Icons.add_rounded,
+            onPressed: _busy || products.length >= 10 ? null : _addProduct,
+          ),
+        ],
+        below: [
+          for (var i = 0; i < products.length; i++)
+            _RefRow(
+              label: 'Producto ${i + 1}',
+              ref: products[i],
+              issues: d.issuesFor('products[$i]'),
+              enabled: !_busy,
+              dense: true,
+              onCandidate: (c) => _setProduct(i, c),
+              onSearch: () => _search('Producto', _api.productItems, (p) => _setProduct(i, p)),
+              onClear: () => _removeProduct(i),
+            ),
+          for (final i in d.issuesFor('products')) _IssueText(i),
+        ],
       ),
       _ValueRow(
         label: 'Comentario',
         value: d.text('comment') ?? '—',
         issues: d.issuesFor('comment'),
         enabled: !_busy,
+        strong: false,
         onEdit: () => _editText('comment', 'Comentario', maxLength: 2000, multiline: true),
       ),
       ..._otherIssues(d, const {'client', 'contact', 'activity_type', 'date', 'time', 'status', 'products', 'comment'}),
@@ -684,13 +784,21 @@ class _DraftReviewState extends State<DraftReview> {
   List<Widget> _clientFields(ActionDraft d) {
     final group = d.ref('group');
     return [
-      for (final f in const [('name', 'Razón social'), ('alias', 'Alias'), ('city', 'Población'), ('province', 'Provincia')])
+      for (final f in const [
+        ('name', 'Razón social', 120),
+        ('alias', 'Alias', 60),
+        ('city', 'Población', 80),
+        ('province', 'Provincia', 80),
+        ('phone', 'Teléfono', 30),
+        ('email', 'Email', 120),
+        ('cif', 'CIF', 20),
+      ])
         _ValueRow(
           label: f.$2,
           value: d.text(f.$1) ?? '—',
           issues: d.issuesFor(f.$1),
           enabled: !_busy,
-          onEdit: () => _editText(f.$1, f.$2, maxLength: f.$1 == 'alias' ? 60 : (f.$1 == 'name' ? 120 : 80)),
+          onEdit: () => _editText(f.$1, f.$2, maxLength: f.$3),
         ),
       if (group != null)
         _RefRow(
@@ -701,7 +809,7 @@ class _DraftReviewState extends State<DraftReview> {
           onClear: () => _patch({'group_id': null}),
           note: 'El grupo solo se puede quitar aquí (la app aún no tiene selector de grupos).',
         ),
-      ..._otherIssues(d, const {'name', 'alias', 'city', 'province', 'group'}),
+      ..._otherIssues(d, const {'name', 'alias', 'city', 'province', 'phone', 'email', 'cif', 'group'}),
     ];
   }
 
@@ -712,6 +820,7 @@ class _DraftReviewState extends State<DraftReview> {
         ref: d.ref('client'),
         issues: d.issuesFor('client'),
         enabled: !_busy,
+        note: 'El contacto se añadirá a este cliente.',
         onCandidate: (c) => _patch({'client_id': c.id}),
         onSearch: _pickClient,
       ),
@@ -754,42 +863,45 @@ class _DraftReviewState extends State<DraftReview> {
         issues: d.issuesFor('sale_date'),
         enabled: !_busy,
         onEdit: () => _pickDate('sale_date'),
-        editIcon: Icons.calendar_today,
-      ),
-      _FieldBlock(
-        label: 'Líneas (${lines.length})',
-        issues: d.issuesFor('lines'),
-        trailing: TextButton.icon(
-          onPressed: _busy || lines.length >= maxSaleLines ? null : () => _editLine(null),
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('Añadir línea'),
-        ),
-        child: Column(
-          children: [
-            for (var i = 0; i < lines.length; i++) _saleLine(d, i, lines[i], canRemove: lines.length > 1),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  const Expanded(child: Text('Total', style: TextStyle(fontWeight: FontWeight.w700))),
-                  Text(total == null ? 'Falta algún importe' : formatEuros(total),
-                      key: const Key('voice-sale-total'), style: const TextStyle(fontWeight: FontWeight.w700)),
-                ],
-              ),
-            ),
-          ],
-        ),
+        editIcon: Icons.calendar_today_outlined,
       ),
       _ValueRow(
         label: 'Notas',
         value: d.text('notes') ?? '—',
         issues: d.issuesFor('notes'),
         enabled: !_busy,
+        strong: false,
         onEdit: () => _editText('notes', 'Notas', maxLength: 500, multiline: true),
+      ),
+      Padding(
+        padding: const EdgeInsets.only(top: CvSpace.md, bottom: CvSpace.xxs),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ReviewEyebrow(
+              'Líneas (${lines.length})',
+              trailing: ReviewEditButton(
+                tooltip: 'Añadir una línea',
+                label: 'Añadir línea',
+                icon: Icons.add_rounded,
+                onPressed: _busy || lines.length >= maxSaleLines ? null : () => _editLine(null),
+              ),
+            ),
+            for (final i in d.issuesFor('lines')) _IssueText(i),
+            for (var i = 0; i < lines.length; i++) ...[
+              if (i > 0) const Divider(height: 1, thickness: 1, color: CvColors.border),
+              _saleLine(d, i, lines[i], canRemove: lines.length > 1),
+            ],
+            const SizedBox(height: CvSpace.sm),
+            SaleTotalBar(
+              label: 'Total',
+              detail: '${lines.length} ${lines.length == 1 ? 'línea' : 'líneas'}',
+              total: total,
+              missing: 'Falta algún importe',
+              totalKey: const Key('voice-sale-total'),
+            ),
+          ],
+        ),
       ),
       ..._otherIssues(d, const {'client', 'contact', 'sale_date', 'lines', 'notes'}, prefix: 'lines['),
     ];
@@ -798,64 +910,151 @@ class _DraftReviewState extends State<DraftReview> {
   Widget _saleLine(ActionDraft d, int i, SaleLineDraft line, {required bool canRemove}) {
     final p = line.product;
     final amountIssues = d.issuesFor('lines[$i].amount');
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(10, 6, 4, 8),
-      decoration: BoxDecoration(border: Border.all(color: AppColors.border), borderRadius: BorderRadius.circular(10)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: CvSpace.xs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(child: Text('Línea ${i + 1}', style: const TextStyle(fontWeight: FontWeight.w700))),
-              IconButton(
-                tooltip: 'Editar línea ${i + 1}',
-                icon: const Icon(Icons.edit_outlined, size: 20),
-                onPressed: _busy ? null : () => _editLine(i),
-              ),
-              IconButton(
-                tooltip: 'Quitar línea ${i + 1}',
-                icon: const Icon(Icons.remove_circle_outline, size: 20),
-                onPressed: _busy || !canRemove ? null : () => _removeLine(i),
-              ),
-            ],
-          ),
-          if (p != null)
-            _RefRow(
-              label: 'Producto',
-              ref: p,
-              issues: d.issuesFor('lines[$i].product'),
-              enabled: !_busy,
-              dense: true,
-              onCandidate: (c) => _setLineProduct(i, c),
-              onSearch: () => _search('Producto', _api.productItems, (c) => _setLineProduct(i, c)),
-            )
-          else
-            _ValueRow(
-              label: 'Concepto',
-              value: line.concept ?? '—',
-              issues: d.issuesFor('lines[$i].product'),
-              enabled: !_busy,
-              onEdit: () => _editLine(i),
+          Padding(
+            padding: const EdgeInsets.only(top: 14),
+            child: Container(
+              width: 24,
+              height: 24,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(color: CvColors.primarySoft, shape: BoxShape.circle),
+              child: Text('${i + 1}', style: CvText.label.copyWith(fontSize: 12, color: CvColors.primaryDark)),
             ),
-          Wrap(
-            spacing: 16,
-            runSpacing: 4,
-            children: [
-              Text('Cantidad: ${line.quantity ?? '—'}'),
-              Text(
-                'Importe: ${line.amountCents != null ? formatEuros(line.amountCents!) : (line.amountSaid ?? '—')}',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              if (line.referenceTotalCents != null)
-                Text('PVP de catálogo: ${formatEuros(line.referenceTotalCents!)} (solo orientativo)',
-                    style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-            ],
           ),
-          for (final issue in amountIssues) _IssueText(issue),
+          const SizedBox(width: CvSpace.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (p != null)
+                  _RefRow(
+                    label: 'Producto',
+                    ref: p,
+                    issues: d.issuesFor('lines[$i].product'),
+                    enabled: !_busy,
+                    dense: true,
+                    onCandidate: (c) => _setLineProduct(i, c),
+                    onSearch: () => _search('Producto', _api.productItems, (c) => _setLineProduct(i, c)),
+                  )
+                else
+                  ReviewRow(
+                    label: 'Concepto',
+                    dense: true,
+                    value: ReviewValue(line.concept),
+                    below: [for (final issue in d.issuesFor('lines[$i].product')) _IssueText(issue)],
+                  ),
+                Wrap(
+                  spacing: CvSpace.md,
+                  runSpacing: 2,
+                  children: [
+                    Text('Cantidad: ${line.quantity ?? '—'}', style: CvText.body.copyWith(fontSize: 14)),
+                    Text(
+                      'Importe: ${line.amountCents != null ? formatEuros(line.amountCents!) : (line.amountSaid ?? '—')}',
+                      style: CvText.label.copyWith(fontSize: 14),
+                    ),
+                  ],
+                ),
+                if (line.referenceTotalCents != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text('PVP de catálogo: ${formatEuros(line.referenceTotalCents!)} (solo orientativo)',
+                        style: CvText.helper.copyWith(fontSize: 12.5)),
+                  ),
+                for (final issue in amountIssues) _IssueText(issue),
+              ],
+            ),
+          ),
+          ReviewIconButton(
+            tooltip: 'Editar línea ${i + 1}',
+            icon: Icons.edit_outlined,
+            onPressed: _busy ? null : () => _editLine(i),
+          ),
+          ReviewIconButton(
+            tooltip: 'Quitar línea ${i + 1}',
+            icon: Icons.delete_outline_rounded,
+            onPressed: _busy || !canRemove ? null : () => _removeLine(i),
+          ),
         ],
       ),
     );
+  }
+
+  // ---------- I.8: catálogo de productos (nombre y PVP; sin stock) ----------
+
+  String _priceText(ActionDraft d) {
+    final cents = d.number('price_cents');
+    return cents != null ? formatEuros(cents) : (d.text('price_said') ?? '—');
+  }
+
+  /// PVP: se edita como texto y lo interpreta el servidor (mismas reglas que los importes).
+  Future<void> _editPrice(ActionDraft d) async {
+    final cents = d.number('price_cents');
+    final value = await _askText('PVP', cents != null ? centsToInput(cents) : d.text('price_said'), maxLength: 20);
+    if (value == null || !mounted || value.trim().isEmpty) return;
+    await _patch({'price': value.trim()});
+  }
+
+  List<Widget> _productFields(ActionDraft d) {
+    return [
+      _ValueRow(
+        label: 'Nombre',
+        value: d.text('name') ?? '—',
+        issues: d.issuesFor('name'),
+        enabled: !_busy,
+        onEdit: () => _editText('name', 'Nombre', maxLength: 100),
+      ),
+      _ValueRow(
+        label: 'PVP',
+        value: _priceText(d),
+        issues: d.issuesFor('price'),
+        enabled: !_busy,
+        onEdit: () => _editPrice(d),
+      ),
+      ..._otherIssues(d, const {'name', 'price'}),
+    ];
+  }
+
+  /// Cambio de producto: el producto (resuelto por el servidor) y SOLO lo que
+  /// cambia, como «antes → después»; lo que no cambia se indica como tal.
+  List<Widget> _productUpdateFields(ActionDraft d) {
+    final currentName = d.text('current_name');
+    final currentPrice = d.number('current_price_cents');
+    final newName = d.text('name');
+    final priceChanges = d.number('price_cents') != null || d.text('price_said') != null;
+    String change(String? before, String? after) =>
+        after == null ? 'Sin cambios${before != null ? ' ($before)' : ''}' : '${before ?? '—'} → $after';
+    void pick(CatalogItem c) => _patch({'product_id': c.id});
+    return [
+      _RefRow(
+        label: 'Producto',
+        ref: d.ref('product'),
+        issues: d.issuesFor('product'),
+        enabled: !_busy,
+        onCandidate: pick,
+        onSearch: () => _search('Producto', _api.productItems, pick),
+      ),
+      _ValueRow(
+        label: 'PVP',
+        value: change(currentPrice != null ? formatEuros(currentPrice) : null, priceChanges ? _priceText(d) : null),
+        strong: priceChanges,
+        issues: d.issuesFor('price'),
+        enabled: !_busy,
+        onEdit: () => _editPrice(d),
+      ),
+      _ValueRow(
+        label: 'Nombre',
+        value: change(currentName, newName),
+        strong: newName != null,
+        issues: d.issuesFor('name'),
+        enabled: !_busy,
+        onEdit: () => _editText('name', 'Nombre', maxLength: 100),
+      ),
+      ..._otherIssues(d, const {'product', 'price', 'name'}),
+    ];
   }
 
   /// Issues que no corresponden a ningún campo mostrado (p. ej. duplicados).
@@ -866,18 +1065,18 @@ class _DraftReviewState extends State<DraftReview> {
         .toList();
     if (rest.isEmpty) return const [];
     return [
-      _FieldBlock(label: 'Otros avisos', issues: rest, child: const SizedBox.shrink()),
+      ReviewRow(
+        label: 'Otros avisos',
+        value: const SizedBox.shrink(),
+        below: [for (final i in rest) _IssueText(i)],
+      ),
     ];
   }
 }
 
 // =====================================================================
-// Piezas de la revisión
+// Piezas de la revisión (datos del borrador → piezas de review_parts.dart)
 // =====================================================================
-
-const _red = Color(0xFFB91C1C);
-const _amber = Color(0xFFB45309);
-const _green = Color(0xFF15803D);
 
 class _IssueText extends StatelessWidget {
   final ApiIssue issue;
@@ -885,54 +1084,7 @@ class _IssueText extends StatelessWidget {
   const _IssueText(this.issue);
 
   @override
-  Widget build(BuildContext context) {
-    final color = issue.blocking ? _red : _amber;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(issue.blocking ? Icons.error_outline : Icons.info_outline, size: 16, color: color),
-          const SizedBox(width: 4),
-          Expanded(child: Text(issue.message, style: TextStyle(fontSize: 12.5, color: color))),
-        ],
-      ),
-    );
-  }
-}
-
-class _FieldBlock extends StatelessWidget {
-  final String label;
-  final List<ApiIssue> issues;
-  final Widget child;
-  final Widget? trailing;
-
-  const _FieldBlock({required this.label, required this.issues, required this.child, this.trailing});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.border))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(label,
-                    style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-              ),
-              ?trailing,
-            ],
-          ),
-          const SizedBox(height: 4),
-          child,
-          for (final i in issues) _IssueText(i),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => ReviewIssueText(message: issue.message, blocking: issue.blocking);
 }
 
 class _ValueRow extends StatelessWidget {
@@ -942,6 +1094,7 @@ class _ValueRow extends StatelessWidget {
   final bool enabled;
   final VoidCallback onEdit;
   final IconData editIcon;
+  final bool strong;
 
   const _ValueRow({
     required this.label,
@@ -950,23 +1103,22 @@ class _ValueRow extends StatelessWidget {
     required this.enabled,
     required this.onEdit,
     this.editIcon = Icons.edit_outlined,
+    this.strong = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    return _FieldBlock(
+    return ReviewRow(
       label: label,
-      issues: issues,
-      child: Row(
-        children: [
-          Expanded(child: Text(value, style: const TextStyle(fontSize: 15))),
-          IconButton(
-            tooltip: 'Cambiar ${label.toLowerCase()}',
-            icon: Icon(editIcon, size: 20),
-            onPressed: enabled ? onEdit : null,
-          ),
-        ],
-      ),
+      value: ReviewValue(value, strong: strong),
+      actions: [
+        ReviewEditButton(
+          tooltip: 'Cambiar ${label.toLowerCase()}',
+          icon: editIcon,
+          onPressed: enabled ? onEdit : null,
+        ),
+      ],
+      below: [for (final i in issues) _IssueText(i)],
     );
   }
 }
@@ -996,22 +1148,24 @@ class _RefRow extends StatelessWidget {
     this.note,
   });
 
-  static (String, Color)? badge(ResolvedRef r) {
+  /// Insignia del estado de la coincidencia (misma lógica que antes; solo
+  /// cambia la presentación).
+  static (String, ResolutionKind)? badge(ResolvedRef r) {
     switch (r.problem) {
       case 'ambiguous':
-        return ('Ambiguo: elige uno', _red);
+        return ('Varias coincidencias', ResolutionKind.ambiguous);
       case 'not_found':
-        return ('No encontrado', _red);
+        return ('No encontrado', ResolutionKind.missing);
       case 'conflict':
-        return ('No encaja', _red);
+        return ('No encaja', ResolutionKind.missing);
     }
-    if (r.id == null) return ('Sin resolver', _red);
+    if (r.id == null) return ('Sin resolver', ResolutionKind.missing);
     return switch (r.match) {
-      'exact' => ('Coincidencia exacta', _green),
-      'fuzzy' || 'partial' => ('Coincidencia aproximada', _amber),
-      'inherited' => ('Deducido del contacto', _amber),
-      'user_selected' => ('Elegido por ti', _green),
-      'new' => ('Nuevo', _green),
+      'exact' => ('Coincidencia exacta', ResolutionKind.confirmed),
+      'fuzzy' || 'partial' => ('Coincidencia aproximada', ResolutionKind.approximate),
+      'inherited' => ('Deducido del contacto', ResolutionKind.derived),
+      'user_selected' => ('Elegido por ti', ResolutionKind.confirmed),
+      'new' => ('Nuevo', ResolutionKind.created),
       _ => null,
     };
   }
@@ -1020,79 +1174,55 @@ class _RefRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final r = ref;
     final b = r == null ? null : badge(r);
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    r == null ? '—' : (r.resolved ? r.display : '«${r.display}»'),
-                    style: TextStyle(fontSize: 15, fontWeight: r?.resolved == true ? FontWeight.w600 : FontWeight.w400),
-                  ),
-                  if (b != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: b.$2.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(b.$1, style: TextStyle(fontSize: 11.5, color: b.$2, fontWeight: FontWeight.w600)),
-                    ),
-                ],
-              ),
-            ),
-            if (onSearch != null)
-              IconButton(
-                tooltip: 'Buscar ${label.toLowerCase()} en el CRM',
-                icon: const Icon(Icons.search, size: 20),
-                onPressed: enabled ? onSearch : null,
-              ),
-            if (onClear != null)
-              IconButton(
-                tooltip: 'Quitar ${label.toLowerCase()}',
-                icon: const Icon(Icons.close, size: 20),
-                onPressed: enabled ? onClear : null,
-              ),
-          ],
-        ),
-        if (r != null && r.resolved && r.saidDiffers)
-          Text('Dijiste «${r.said}»', style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary)),
-        if (r != null && r.candidates.isNotEmpty && !r.resolved && onCandidate != null) ...[
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 6,
-            runSpacing: 4,
-            children: [
-              for (final c in r.candidates)
-                ActionChip(
-                  avatar: const Icon(Icons.touch_app_outlined, size: 16),
-                  label: Text(c.name),
-                  onPressed: enabled ? () => onCandidate!(c) : null,
-                ),
-            ],
+    final showCandidates = r != null && r.candidates.isNotEmpty && !r.resolved && onCandidate != null;
+    return ReviewRow(
+      label: label,
+      dense: dense,
+      value: r == null
+          ? const ReviewValue(null)
+          : ReviewValue(r.resolved ? r.display : '«${r.display}»', strong: r.resolved, quoted: !r.resolved),
+      actions: [
+        if (onSearch != null)
+          ReviewIconButton(
+            tooltip: 'Buscar ${label.toLowerCase()} en el CRM',
+            icon: Icons.search_rounded,
+            onPressed: enabled ? onSearch : null,
           ),
-        ],
+        if (onClear != null)
+          ReviewIconButton(
+            tooltip: 'Quitar ${label.toLowerCase()}',
+            icon: Icons.close_rounded,
+            onPressed: enabled ? onClear : null,
+          ),
+      ],
+      below: [
+        if (b != null || (r != null && r.resolved && r.saidDiffers))
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(
+              spacing: CvSpace.xs,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (b != null) ResolutionBadge(label: b.$1, kind: b.$2),
+                if (r != null && r.resolved && r.saidDiffers)
+                  Text('Dijiste «${r.said}»', style: CvText.helper.copyWith(fontSize: 12.5)),
+              ],
+            ),
+          ),
+        if (showCandidates)
+          CandidateOptions(
+            labels: [for (final c in r.candidates) c.name],
+            onSelected: enabled ? (i) => onCandidate!(r.candidates[i]) : null,
+          ),
         if (note != null)
-          Text(note!, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(note!, style: CvText.helper.copyWith(fontSize: 12.5)),
+          ),
+        for (final i in issues) _IssueText(i),
       ],
     );
-    if (dense) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [content, for (final i in issues) _IssueText(i)],
-        ),
-      );
-    }
-    return _FieldBlock(label: label, issues: issues, child: content);
   }
 }
 
@@ -1120,23 +1250,22 @@ class _TextEditDialogState extends State<_TextEditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.label),
-      content: SizedBox(
-        width: 420,
-        child: TextField(
-          controller: _controller,
-          autofocus: true,
-          maxLength: widget.maxLength,
-          minLines: widget.multiline ? 3 : 1,
-          maxLines: widget.multiline ? 6 : 1,
-          onSubmitted: widget.multiline ? null : (v) => Navigator.pop(context, v),
-        ),
-      ),
+    return CrmFormShell(
+      title: widget.label,
+      maxWidth: 480,
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        FilledButton(onPressed: () => Navigator.pop(context, _controller.text), child: const Text('Aplicar')),
+        FormCancelButton(onPressed: () => Navigator.pop(context)),
+        CvPrimaryButton(label: 'Aplicar', onPressed: () => Navigator.pop(context, _controller.text)),
       ],
+      body: TextField(
+        controller: _controller,
+        autofocus: true,
+        maxLength: widget.maxLength,
+        minLines: widget.multiline ? 3 : 1,
+        maxLines: widget.multiline ? 6 : 1,
+        decoration: InputDecoration(labelText: widget.label, alignLabelWithHint: widget.multiline),
+        onSubmitted: widget.multiline ? null : (v) => Navigator.pop(context, v),
+      ),
     );
   }
 }
@@ -1203,77 +1332,75 @@ class _SaleLineDialogState extends State<_SaleLineDialog> {
   @override
   Widget build(BuildContext context) {
     final cents = parseEuroCents(_amount.text);
-    return AlertDialog(
-      title: Text(widget.line == null ? 'Nueva línea' : 'Editar línea'),
-      content: SizedBox(
-        width: 440,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (_product != null)
-                  InputDecorator(
-                    decoration: InputDecoration(
-                      labelText: 'Producto',
-                      suffixIcon: IconButton(
-                        tooltip: 'Quitar producto (usar concepto)',
-                        icon: const Icon(Icons.close),
-                        onPressed: () => setState(() => _product = null),
-                      ),
-                    ),
-                    child: Text(_product!.name),
-                  )
-                else
-                  TextFormField(
-                    controller: _concept,
-                    maxLength: 200,
-                    decoration: InputDecoration(
-                      labelText: 'Concepto *',
-                      helperText: 'Texto libre, o elige un producto del catálogo',
-                      suffixIcon: IconButton(
-                        tooltip: 'Elegir producto del catálogo',
-                        icon: const Icon(Icons.inventory_2_outlined),
-                        onPressed: _pickProduct,
-                      ),
-                    ),
-                    validator: (v) => (v?.trim().isEmpty ?? true) ? 'Indica un producto o un concepto' : null,
+    return CrmFormShell(
+      title: widget.line == null ? 'Nueva línea' : 'Editar línea',
+      maxWidth: 520,
+      actions: [
+        FormCancelButton(onPressed: () => Navigator.pop(context)),
+        CvPrimaryButton(label: 'Aplicar', onPressed: _apply),
+      ],
+      body: Form(
+        key: _formKey,
+        child: FormSection(
+          children: [
+            if (_product != null)
+              InputDecorator(
+                decoration: InputDecoration(
+                  labelText: 'Producto',
+                  prefixIcon: const Icon(Icons.inventory_2_outlined),
+                  suffixIcon: IconButton(
+                    tooltip: 'Quitar producto (usar concepto)',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => setState(() => _product = null),
                   ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _quantity,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Cantidad'),
-                  validator: (v) {
-                    final t = v?.trim() ?? '';
-                    if (t.isEmpty) return null;
-                    final n = int.tryParse(t);
-                    return n == null || n < 1 || n > 100000 ? 'Entero entre 1 y 100.000' : null;
-                  },
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _amount,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: InputDecoration(
-                    labelText: 'Importe total de la línea *',
-                    suffixText: '€',
-                    helperText: cents != null ? '= ${formatEuros(cents)}' : 'Ej.: 1500, 1.500 o 1.500,00',
+                child: Text(_product!.name, style: const TextStyle(fontSize: 15, color: CvColors.textPrimary)),
+              )
+            else
+              TextFormField(
+                controller: _concept,
+                maxLength: 200,
+                decoration: InputDecoration(
+                  labelText: 'Concepto *',
+                  helperText: 'Texto libre, o elige un producto del catálogo',
+                  suffixIcon: IconButton(
+                    tooltip: 'Elegir producto del catálogo',
+                    icon: const Icon(Icons.search_rounded),
+                    onPressed: _pickProduct,
                   ),
-                  onChanged: (_) => setState(() {}),
-                  validator: validateEuroAmount,
                 ),
-              ],
+                validator: (v) => (v?.trim().isEmpty ?? true) ? 'Indica un producto o un concepto' : null,
+              ),
+            FieldPair(
+              minWidth: 400,
+              firstFlex: 2,
+              secondFlex: 3,
+              first: TextFormField(
+                controller: _quantity,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Cantidad'),
+                validator: (v) {
+                  final t = v?.trim() ?? '';
+                  if (t.isEmpty) return null;
+                  final n = int.tryParse(t);
+                  return n == null || n < 1 || n > 100000 ? 'Entero entre 1 y 100.000' : null;
+                },
+              ),
+              second: TextFormField(
+                controller: _amount,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Importe total de la línea *',
+                  suffixText: '€',
+                  helperText: cents != null ? '= ${formatEuros(cents)}' : 'Ej.: 1500, 1.500 o 1.500,00',
+                ),
+                onChanged: (_) => setState(() {}),
+                validator: validateEuroAmount,
+              ),
             ),
-          ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        FilledButton(onPressed: _apply, child: const Text('Aplicar')),
-      ],
     );
   }
 }

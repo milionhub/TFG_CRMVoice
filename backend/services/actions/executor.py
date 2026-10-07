@@ -39,7 +39,9 @@ from services.writes import sales as sale_writes
 
 
 def _execute(action_type: str, data, provenance: dict, salesperson_id: int, conn: sqlite3.Connection,
-             now: datetime, source_text: str) -> dict:
+             now: datetime, source_text: str, fields) -> dict:
+    if (product_action := resolver._product_action(action_type)) is not None:
+        return product_action.execute(data, fields, salesperson_id, conn, now)   # I.8: catálogo de productos
     if action_type == "create_activity":
         created = activity_writes.create_activity(data, salesperson_id, conn=conn, now=now,
                                                   provenance={**provenance, "transcription": source_text})
@@ -112,7 +114,7 @@ def confirm(public_id: str, salesperson_id: int, revision: int, *, now: datetime
 
         data, provenance = resolver.write_input(action_type, fields, now)
         try:
-            result = _execute(action_type, data, provenance, salesperson_id, conn, now, row["source_text"])
+            result = _execute(action_type, data, provenance, salesperson_id, conn, now, row["source_text"], fields)
         except (Duplicate, ValidationFailed) as error:
             blocked_issues = error.issues            # carrera: algo cambió entre la revalidación y la escritura
             raise

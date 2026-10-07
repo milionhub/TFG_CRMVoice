@@ -1,4 +1,5 @@
 // Tema propio del chat (G.5): tokens, ThemeData claro y hoja de estilos Markdown.
+// I.5.1: los tokens apuntan al sistema CRMVoice (CvColors); no es otra paleta.
 //
 // La app usa ThemeData.dark() globalmente (deuda de la fase I) mientras las
 // pantallas pintan superficies claras a mano. El chat se envuelve en este tema
@@ -7,29 +8,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
+import '../../core/design/cv_tokens.dart';
+
 class ChatColors {
-  static const background = Color(0xFFF8FAFC);
-  static const surface = Colors.white;
-  static const border = Color(0xFFE5E7EB);
-  static const textPrimary = Color(0xFF1E293B);
-  static const textSecondary = Color(0xFF64748B);
+  static const background = CvColors.background;
+  static const surface = CvColors.surface;
+  static const border = CvColors.border;
+  static const textPrimary = CvColors.textPrimary;
+  static const textSecondary = CvColors.textSecondary;
 
-  /// Pizarra oscura: texto blanco sobre ella 5,3:1 (el #6F8FA3 de la marca da 3,4:1).
-  static const accent = Color(0xFF4F6F84);
-  static const accentSoft = Color(0xFFEEF3F6);
+  /// primaryDark: texto blanco sobre él 5,2:1.
+  static const accent = CvColors.primaryDark;
+  static const accentSoft = CvColors.primarySoft;
 
-  static const noticeBackground = Color(0xFFFFF8EB);
-  static const noticeBorder = Color(0xFFF3D9A6);
-  static const noticeText = Color(0xFF7C4A03);
+  static const noticeBackground = CvColors.warningSoft;
+  static const noticeBorder = Color(0xFFF0DDBA);
+  static const noticeText = Color(0xFF7A4E0C);
 
-  static const codeBackground = Color(0xFFF1F5F9);
+  static const codeBackground = Color(0xFFF1F4F7);
 
   /// Texto de error sobre blanco (contraste > 4,5:1).
-  static const error = Color(0xFFB42318);
+  static const error = CvColors.danger;
 }
 
 class ChatLayout {
-  static const maxColumnWidth = 820.0;
+  /// Columna de lectura de la conversación (centrada en el eje de página).
+  static const maxColumnWidth = 760.0;
   static const radius = 12.0;
 
   /// Margen lateral de la columna según el ancho disponible.
@@ -61,9 +65,15 @@ ThemeData chatTheme() {
 
 /// Hoja de estilos completa para las respuestas del asistente.
 MarkdownStyleSheet chatMarkdownStyle() {
-  const body = TextStyle(fontSize: 15, height: 1.5, color: ChatColors.textPrimary);
+  // Cifras tabulares: importes, fechas y cantidades alinean y se leen mejor
+  const body = TextStyle(
+    fontSize: 15,
+    height: 1.6,
+    color: ChatColors.textPrimary,
+    fontFeatures: [FontFeature.tabularFigures()],
+  );
   const heading = TextStyle(color: ChatColors.textPrimary, fontWeight: FontWeight.w600, height: 1.35);
-  const headingPadding = EdgeInsets.only(top: 8, bottom: 2);
+  const headingPadding = EdgeInsets.only(top: 10, bottom: 2);
   return MarkdownStyleSheet(
     p: body,
     pPadding: EdgeInsets.zero,
@@ -80,6 +90,7 @@ MarkdownStyleSheet chatMarkdownStyle() {
     h6: heading.copyWith(fontSize: 15),
     h6Padding: headingPadding,
     strong: const TextStyle(fontWeight: FontWeight.w600, color: ChatColors.textPrimary),
+    listBulletPadding: const EdgeInsets.only(right: 6),
     em: const TextStyle(fontStyle: FontStyle.italic, color: ChatColors.textPrimary),
     del: const TextStyle(decoration: TextDecoration.lineThrough, color: ChatColors.textSecondary),
     a: const TextStyle(color: ChatColors.accent, decoration: TextDecoration.underline),
@@ -101,15 +112,16 @@ MarkdownStyleSheet chatMarkdownStyle() {
     ),
     listBullet: body.copyWith(color: ChatColors.textSecondary),
     listIndent: 20,
-    listBulletPadding: const EdgeInsets.only(right: 4),
-    blockSpacing: 10,
+    blockSpacing: 12,
     horizontalRuleDecoration: const BoxDecoration(
       border: Border(top: BorderSide(color: ChatColors.border)),
     ),
-    tableHead: const TextStyle(fontWeight: FontWeight.w600, color: ChatColors.textPrimary, fontSize: 14),
-    tableBody: const TextStyle(color: ChatColors.textPrimary, fontSize: 14),
-    tableBorder: TableBorder.all(color: ChatColors.border),
-    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    tableHead: const TextStyle(fontWeight: FontWeight.w600, color: ChatColors.textPrimary, fontSize: 13.5),
+    tableBody: const TextStyle(
+        color: ChatColors.textPrimary, fontSize: 14, fontFeatures: [FontFeature.tabularFigures()]),
+    tableBorder: TableBorder.symmetric(inside: const BorderSide(color: ChatColors.border)),
+    tableHeadAlign: TextAlign.left,
+    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
     checkbox: const TextStyle(color: ChatColors.textSecondary),
   );
 }

@@ -22,6 +22,18 @@ class AuthProvider extends ChangeNotifier {
   Map<String, dynamic>? get user => _user;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _token != null;
+
+  /// I.6.3: la última sesión terminó por caducidad (401). La pantalla de
+  /// acceso lo muestra UNA vez ([takeSessionExpiredNotice]); un login
+  /// correcto lo descarta. Solo presentación: no cambia la expiración.
+  bool _sessionExpiredNotice = false;
+
+  /// Devuelve si hay que avisar de la sesión caducada y lo consume.
+  bool takeSessionExpiredNotice() {
+    final pending = _sessionExpiredNotice;
+    _sessionExpiredNotice = false;
+    return pending;
+  }
   final String baseUrl = ApiService.baseUrl;
 
   /// Tras un logout explícito no se vuelve a entrar automáticamente con Google.
@@ -202,6 +214,7 @@ class AuthProvider extends ChangeNotifier {
   Future<void> expireSession() async {
     if (_token == null) return;
     _clearSession();
+    _sessionExpiredNotice = true;
     _isLoading = false;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
@@ -235,6 +248,7 @@ class AuthProvider extends ChangeNotifier {
   /// ==========================
   void _setToken(String token) {
     _token = token;
+    _sessionExpiredNotice = false;
 
     try {
       _user = _decodePayload(token);

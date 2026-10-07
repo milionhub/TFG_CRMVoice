@@ -207,3 +207,27 @@ class SaleUpdate(StrictModel):
     @property
     def amount_cents(self) -> int:
         return self._amount_cents
+
+
+# =====================================================================
+# Productos (I.8): catálogo COMPARTIDO (como clientes y contactos): nombre y PVP
+# =====================================================================
+
+class ProductIn(StrictModel):
+    """Alta y edición (PUT = sustitución completa). Sin stock: CRMVoice no gestiona inventario."""
+    name: str = Field(min_length=2, max_length=100)
+    price: StrictInt | StrictStr                             # PVP en euros: 89 · "89" · "89,00" · "1.190,00"
+
+    _price_cents: int = PrivateAttr()
+
+    @model_validator(mode="after")
+    def _parse_price(self):
+        try:
+            self._price_cents = parse_money_cents(self.price)
+        except FormatError as error:
+            raise ValueError(str(error).replace("importe", "precio").replace("Importe", "Precio")) from None
+        return self
+
+    @property
+    def price_cents(self) -> int:
+        return self._price_cents

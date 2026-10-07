@@ -196,17 +196,7 @@ class _ClientsContentState extends State<ClientsContent> {
           icon: const Icon(Icons.cloud_off_outlined),
           title: 'No se pudieron cargar los clientes.',
           message: _error,
-          action: OutlinedButton.icon(
-            onPressed: _load,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: CvColors.textPrimary,
-              side: const BorderSide(color: CvColors.borderStrong),
-              minimumSize: const Size(0, 42),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.control)),
-            ),
-            icon: const Icon(Icons.refresh_rounded, size: 18),
-            label: const Text('Reintentar'),
-          ),
+          action: CvSecondaryButton(label: 'Reintentar', icon: Icons.refresh_rounded, onPressed: _load),
         ),
       );
     }

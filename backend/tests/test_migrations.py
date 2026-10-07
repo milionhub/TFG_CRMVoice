@@ -75,7 +75,7 @@ def test_v0_a_la_ultima_conserva_los_datos(v0_db):
 
     db.init_db(now=NOW)
 
-    assert _version(v0_db) == migrations.LATEST_VERSION == 5
+    assert _version(v0_db) == migrations.LATEST_VERSION == 6
     after = _dump(v0_db, BUSINESS)
     # Clientes y contactos ganan columnas de auditoría (NULL): sus datos de antes, intactos
     for table in BUSINESS:
@@ -164,7 +164,7 @@ def test_segunda_inicializacion_no_hace_nada(v0_db):
 
     db.init_db(now=datetime(2027, 6, 1))   # otra "hora": no se vuelve a calcular ningún estado
 
-    assert _version(v0_db) == 5
+    assert _version(v0_db) == 6
     assert _dump(v0_db, BUSINESS + ("activities",)) == before
     assert _query(v0_db, "SELECT name, sql FROM sqlite_master ORDER BY name") == schema
 
@@ -212,7 +212,7 @@ def test_una_migracion_fallida_no_avanza_la_version_ni_deja_ddl(v0_db, monkeypat
     monkeypatch.undo()
     monkeypatch.setattr(db, "DB_PATH", v0_db)
     db.init_db(now=NOW)                         # al reintentar, continúa desde la versión 2
-    assert _version(v0_db) == 5
+    assert _version(v0_db) == 6
 
 
 def test_los_tests_nunca_usan_la_base_real(isolated_backend):
@@ -220,3 +220,39 @@ def test_los_tests_nunca_usan_la_base_real(isolated_backend):
 
     assert isolated_backend.resolve() != REAL_DB.resolve()
     assert db.DB_PATH == isolated_backend
+
+
+def test_m006_borradores_de_productos_conservando_los_existentes(v0_db, monkeypatch):
+    # Base en v5 con un borrador abierto (como la BD real antes de I.8)
+    with monkeypatch.context() as m:
+        m.setattr(migrations, "MIGRATIONS", migrations.MIGRATIONS[:5])
+        db.init_db(now=NOW)
+    conn = sqlite3.connect(v0_db)
+    conn.execute("""INSERT INTO action_drafts (public_id, salesperson_id, action_type, revision, source, source_text,
+                                               interpretation, payload, issues, expires_at)
+                    VALUES ('abc', 1, 'create_sale', 3, 'voice', 'vendí', '{}', '{}', '[]', '2026-10-01T10:00:00')""")
+    conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("""INSERT INTO action_drafts (public_id, salesperson_id, action_type, source, source_text,
+                        interpretation, payload, issues, expires_at)
+                        VALUES ('x', 1, 'create_product', 'text', 't', '{}', '{}', '[]', '2026-10-01')""")
+    conn.close()
+    products_before = _query(v0_db, "PRAGMA table_info(products)")
+
+    db.init_db(now=NOW)
+
+    assert _version(v0_db) == 6
+    assert _query(v0_db, "SELECT public_id, action_type, revision, source FROM action_drafts") == [
+        ("abc", "create_sale", 3, "voice")]
+    assert _query(v0_db, "SELECT name FROM sqlite_master WHERE name = 'idx_action_drafts_owner'")
+    assert _query(v0_db, "PRAGMA table_info(products)") == products_before      # el catálogo no cambia: sin stock
+    conn = sqlite3.connect(v0_db)
+    for kind in ("create_product", "update_product"):
+        conn.execute("""INSERT INTO action_drafts (public_id, salesperson_id, action_type, source, source_text,
+                        interpretation, payload, issues, expires_at)
+                        VALUES (?, 1, ?, 'text', 't', '{}', '{}', '[]', '2026-10-01')""", (kind, kind))
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("""INSERT INTO action_drafts (public_id, salesperson_id, action_type, source, source_text,
+                        interpretation, payload, issues, expires_at)
+                        VALUES ('y', 1, 'adjust_stock', 'text', 't', '{}', '{}', '[]', '2026-10-01')""")
+    conn.close()

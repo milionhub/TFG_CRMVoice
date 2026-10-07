@@ -22,7 +22,11 @@ import '../screens/client_detail_screen.dart';
 import '../screens/history_screen.dart';
 import '../services/api_service.dart';
 import 'brand/crm_voice_brand.dart';
+import 'chat/chat_identity.dart' show AssistantMark;
 import 'crm/crm_ui.dart';
+import 'crm/form_shell.dart';
+import 'ui/cv_components.dart';
+import 'ui/cv_feedback.dart';
 import 'shell/app_shell.dart';
 import 'voice/draft_review.dart';
 
@@ -222,10 +226,7 @@ class _RecorderCardState extends State<RecorderCard> {
     if (_state == VoiceState.recording || _state == VoiceState.uploading || _state == VoiceState.requestingPermission) {
       return;
     }
-    final draft = await showDialog<ActionDraft>(
-      context: context,
-      builder: (_) => CrmTheme(child: _TextActionDialog(initialText: _errorTranscript)),
-    );
+    final draft = await openCrmForm<ActionDraft>(context, _TextActionDialog(initialText: _errorTranscript));
     if (draft == null || !mounted) return;
     setState(() {
       _state = VoiceState.idle;
@@ -377,30 +378,12 @@ class _RecorderCardState extends State<RecorderCard> {
             label: const Text('Cancelar grabación'),
           ),
         if (failed && _canRetryUpload)
-          FilledButton.icon(
-            onPressed: _upload,
-            style: FilledButton.styleFrom(
-              backgroundColor: CvColors.primaryDark,
-              minimumSize: const Size(0, 44),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.control)),
-            ),
-            icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('Reintentar envío'),
-          ),
+          CvPrimaryButton(label: 'Reintentar envío', icon: Icons.refresh_rounded, onPressed: _upload),
         if (!recording && !busy)
-          OutlinedButton.icon(
+          CvSecondaryButton(
+            label: _errorTranscript != null ? 'Corregir el texto' : 'Escribir la acción',
+            icon: Icons.keyboard_outlined,
             onPressed: _writeAction,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: CvColors.textPrimary,
-              backgroundColor: CvColors.surface,
-              minimumSize: const Size(0, 44),
-              padding: const EdgeInsets.symmetric(horizontal: CvSpace.md),
-              side: const BorderSide(color: CvColors.borderStrong),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.control)),
-              textStyle: CvText.button.copyWith(fontSize: 14),
-            ),
-            icon: const Icon(Icons.keyboard_outlined, size: 18),
-            label: Text(_errorTranscript != null ? 'Corregir el texto' : 'Escribir la acción'),
           ),
       ],
     );
@@ -410,7 +393,8 @@ class _RecorderCardState extends State<RecorderCard> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: CvSpace.md),
-              FormErrorBanner(message: _error!),
+              CvInlineAlert(message: _error!),
+              const SizedBox(height: CvSpace.xs),
               if (_errorTranscript != null)
                 Text('Se ha entendido: «$_errorTranscript»',
                     textAlign: TextAlign.center,
@@ -694,40 +678,66 @@ class _TextActionDialogState extends State<_TextActionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Escribir la acción'),
-      content: SizedBox(
-        width: 480,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_error != null) FormErrorBanner(message: _error!),
-            TextField(
-              key: const Key('voice-text-field'),
-              controller: _text,
-              autofocus: true,
-              enabled: !_busy,
-              minLines: 2,
-              maxLines: 5,
-              maxLength: 2000,
-              decoration: const InputDecoration(
-                hintText: 'Ej.: Mañana a las diez llamar a Ana de Rivera por el portátil Luna 13',
-              ),
-            ),
-          ],
-        ),
-      ),
+    return CrmFormShell(
+      title: 'Escribir una acción',
+      maxWidth: 560,
+      busy: _busy,
       actions: [
-        TextButton(onPressed: _busy ? null : () => Navigator.pop(context), child: const Text('Cancelar')),
-        FilledButton.icon(
-          onPressed: _busy ? null : _submit,
-          icon: _busy
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.auto_fix_high),
-          label: Text(_busy ? 'Interpretando...' : 'Interpretar'),
+        FormCancelButton(onPressed: _busy ? null : () => Navigator.pop(context)),
+        CvPrimaryButton(
+          label: _busy ? 'Interpretando...' : 'Interpretar',
+          icon: Icons.arrow_forward_rounded,
+          loading: _busy,
+          onPressed: _submit,
         ),
       ],
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const AssistantMark(size: 32),
+              const SizedBox(width: CvSpace.sm),
+              Expanded(
+                child: Text('Describe qué quieres hacer en tu CRM, como si lo dijeras en voz alta.',
+                    style: CvText.body.copyWith(fontSize: 14.5)),
+              ),
+            ],
+          ),
+          const SizedBox(height: CvSpace.lg),
+          if (_error != null) FormErrorNotice(message: _error!),
+          TextField(
+            key: const Key('voice-text-field'),
+            controller: _text,
+            autofocus: true,
+            enabled: !_busy,
+            minLines: 3,
+            maxLines: 6,
+            maxLength: 2000,
+            decoration: const InputDecoration(
+              hintText: 'Ej.: Mañana a las diez llamar a Ana de Rivera por el portátil Luna 13',
+            ),
+          ),
+          const SizedBox(height: CvSpace.xs),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(Icons.lock_outline_rounded, size: 15, color: CvColors.textSecondary),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'CRMVoice la interpretará y podrás revisarla antes de guardar nada.',
+                  style: CvText.helper.copyWith(fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

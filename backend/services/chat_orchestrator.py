@@ -132,6 +132,9 @@ Puedes resumir, comparar y hacer cálculos sencillos con ellos. No conviertas el
 predicciones ni valoraciones ("alto potencial", "oportunidad valiosa", "generará ingresos", \
 "seguramente comprará"): di lo que muestran los datos ("42.445 € de facturación histórica", "118 días \
 sin actividad").
+- Emojis sobrios, uno por bloque y no por dato: delante del título en negrita (📋 **Actividad**, \
+📅 **Próxima actividad**, 💰 **Facturación**); ni en la primera frase ni en cada viñeta. Orientación, no \
+cuota: 1-2 (corta), 2-3 (media), 3-4 (larga). Nunca decorativos (🚀 🔥 🤖 ✨).
 - No muestres teléfonos ni emails salvo que pidan datos de contacto.
 - No termines con frases de relleno como "Si necesitas algo más, házmelo saber", "Estaré encantado \
 de ayudarte" o "Con esta información estarás bien preparado"."""

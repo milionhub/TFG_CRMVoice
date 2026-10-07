@@ -12,6 +12,7 @@ import '../services/google_auth_service.dart';
 import '../widgets/auth/auth_components.dart';
 import '../widgets/brand/crm_voice_brand.dart';
 import '../widgets/brand/crm_voice_wave_background.dart';
+import '../widgets/ui/cv_feedback.dart';
 
 /// Login / Register (I.1.1). Composición centrada: marca + eslogan, panel
 /// con el formulario y enlace para cambiar de modo. En móvil el formulario
@@ -37,6 +38,10 @@ class _AuthScreenState extends State<AuthScreen>
   /// Error de autenticación mostrado en línea sobre el CTA
   String? _authError;
 
+  /// Aviso de sesión caducada (I.6.3): se toma una sola vez al abrir el
+  /// acceso y desaparece al escribir, cambiar de modo o intentar entrar.
+  bool _sessionExpired = false;
+
   final _nombreController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -53,6 +58,7 @@ class _AuthScreenState extends State<AuthScreen>
   @override
   void initState() {
     super.initState();
+    _sessionExpired = context.read<AuthProvider>().takeSessionExpiredNotice();
 
     _googleUserSubscription =
         GoogleAuthService().onCurrentUserChanged.listen(_onGoogleAccount);
@@ -134,6 +140,7 @@ class _AuthScreenState extends State<AuthScreen>
     setState(() {
       isLogin = login;
       _authError = null;
+      _sessionExpired = false;
       _obscurePassword = true;
       _obscureConfirmPassword = true;
 
@@ -145,7 +152,12 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   void _clearAuthError(String _) {
-    if (_authError != null) setState(() => _authError = null);
+    if (_authError != null || _sessionExpired) {
+      setState(() {
+        _authError = null;
+        _sessionExpired = false;
+      });
+    }
   }
 
   Future<void> _submit(BuildContext formContext) async {
@@ -156,7 +168,10 @@ class _AuthScreenState extends State<AuthScreen>
 
     if (!Form.of(formContext).validate()) return;
 
-    setState(() => _authError = null);
+    setState(() {
+      _authError = null;
+      _sessionExpired = false;
+    });
 
     bool success;
 
@@ -509,6 +524,13 @@ class _AuthScreenState extends State<AuthScreen>
 
               if (_authError != null) ...[
                 AuthErrorBanner(message: _authError!),
+                const SizedBox(height: CvSpace.md),
+              ] else if (_sessionExpired) ...[
+                const CvInlineAlert(
+                  key: Key('session-expired'),
+                  tone: CvFeedbackTone.info,
+                  message: 'Tu sesión ha caducado. Inicia sesión de nuevo.',
+                ),
                 const SizedBox(height: CvSpace.md),
               ],
 

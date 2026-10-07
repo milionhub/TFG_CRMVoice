@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../models/chat_message.dart';
 import '../models/action_draft.dart';
 import '../models/crm.dart';
+import '../models/product.dart';
 import '../providers/auth_provider.dart';
 import 'api_errors.dart';
 
@@ -289,6 +290,20 @@ Future<void> deleteActivity(int id) async {
 
   Future<List<CatalogItem>> productItems() async =>
       CatalogItem.listFrom(_object(await _send('GET', '/products'))['products']);
+
+  // ---------- Productos (I.8): catálogo comercial, la misma lista que productItems ----------
+
+  Future<List<Product>> products() async => Product.listFrom(_object(await _send('GET', '/products'))['products']);
+
+  Future<Product> createProduct(ProductInput input) async =>
+      Product.fromJson(await _send('POST', '/products', body: input.toJson()))!;
+
+  Future<Product> updateProduct(int productId, ProductInput input) async =>
+      Product.fromJson(await _send('PUT', '/products/$productId', body: input.toJson()))!;
+
+  Future<void> deleteProduct(int productId) async {
+    await _send('DELETE', '/products/$productId');
+  }
 
   // ---------- Clientes y contactos ----------
 

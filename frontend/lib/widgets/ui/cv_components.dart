@@ -250,7 +250,11 @@ class CvPrimaryButton extends StatelessWidget {
   final IconData? icon;
   final VoidCallback? onPressed;
 
-  const CvPrimaryButton({super.key, required this.label, this.icon, this.onPressed});
+  /// En curso (p. ej. guardando): spinner en lugar del icono, sin acción y
+  /// con el color completo (no parece desactivado).
+  final bool loading;
+
+  const CvPrimaryButton({super.key, required this.label, this.icon, this.onPressed, this.loading = false});
 
   @override
   Widget build(BuildContext context) {
@@ -270,6 +274,7 @@ class CvPrimaryButton extends StatelessWidget {
       iconSize: const WidgetStatePropertyAll(19),
       overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (loading) return CvColors.primaryDark;
         if (states.contains(WidgetState.disabled)) {
           return CvColors.primaryDark.withValues(alpha: 0.5);
         }
@@ -282,9 +287,21 @@ class CvPrimaryButton extends StatelessWidget {
           : BorderSide.none),
     );
     final text = Text(label, maxLines: 1, overflow: TextOverflow.ellipsis);
+    final action = loading ? null : onPressed;
+    if (loading) {
+      return FilledButton.icon(
+        style: style.copyWith(foregroundColor: const WidgetStatePropertyAll(Colors.white)),
+        onPressed: action,
+        icon: const SizedBox.square(
+          dimension: 16,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+        ),
+        label: text,
+      );
+    }
     return icon == null
-        ? FilledButton(style: style, onPressed: onPressed, child: text)
-        : FilledButton.icon(style: style, onPressed: onPressed, icon: Icon(icon), label: text);
+        ? FilledButton(style: style, onPressed: action, child: text)
+        : FilledButton.icon(style: style, onPressed: action, icon: Icon(icon), label: text);
   }
 }
 
@@ -296,6 +313,7 @@ class CvSearchField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
   final VoidCallback? onClear;
+  final bool autofocus;
 
   const CvSearchField({
     super.key,
@@ -304,6 +322,7 @@ class CvSearchField extends StatelessWidget {
     this.onChanged,
     this.onSubmitted,
     this.onClear,
+    this.autofocus = false,
   });
 
   static OutlineInputBorder _border(Color color, [double width = 1]) => OutlineInputBorder(
@@ -317,6 +336,7 @@ class CvSearchField extends StatelessWidget {
       valueListenable: controller,
       builder: (context, value, _) => TextField(
         controller: controller,
+        autofocus: autofocus,
         onChanged: onChanged,
         onSubmitted: onSubmitted,
         textInputAction: TextInputAction.search,

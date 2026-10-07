@@ -127,7 +127,8 @@ def find_entities(salesperson_id: int, *, client_name: str | None = None,
     """
     Cliente y contacto nombrados en client_name/contact_name (nombres ya
     extraídos). Nunca elige ante la ambigüedad: id solo con status exact,
-    fuzzy, partial o inherited.
+    fuzzy, partial, inherited o contextual (I.7: cliente y contacto dichos
+    juntos solo encajan con una pareja; ver entity_resolver).
     """
     if client_name is None and contact_name is None:
         raise ToolArgumentError("indica client_name, contact_name o ambos")

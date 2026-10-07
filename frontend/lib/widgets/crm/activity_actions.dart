@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/crm.dart';
 import '../../services/api_service.dart';
+import '../ui/cv_feedback.dart';
 import 'crm_ui.dart';
 
 /// PATCH /activities/{id}. Devuelve la actividad actualizada o null si falla
@@ -43,7 +44,15 @@ Future<bool> deleteActivityWithConfirmation(BuildContext context, CrmActivity ac
 
 enum _MenuAction { edit, delete }
 
-/// Menú "⋮" de una actividad: editar, cambios de estado permitidos y borrar.
+/// Icono de la acción que lleva a ese estado.
+IconData _statusActionIcon(ActivityStatus status) => switch (status) {
+      ActivityStatus.pending => Icons.schedule_rounded,
+      ActivityStatus.completed => Icons.check_circle_outline_rounded,
+      ActivityStatus.cancelled => Icons.block_rounded,
+    };
+
+/// Menú "⋮" de una actividad: editar, cambios de estado permitidos y borrar
+/// (I.6.3: menú contextual común CvContextMenu).
 class ActivityActionsMenu extends StatelessWidget {
   final CrmActivity activity;
   final VoidCallback onEdit;
@@ -53,9 +62,7 @@ class ActivityActionsMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<Object>(
-      tooltip: 'Acciones',
-      icon: const Icon(Icons.more_vert),
+    return CvContextMenu<Object>(
       onSelected: (value) async {
         if (value == _MenuAction.edit) {
           onEdit();
@@ -65,28 +72,16 @@ class ActivityActionsMenu extends StatelessWidget {
           if (await changeActivityStatus(context, activity, value) != null) onChanged();
         }
       },
-      itemBuilder: (_) => [
-        const PopupMenuItem(
-          value: _MenuAction.edit,
-          child: ListTile(dense: true, leading: Icon(Icons.edit_outlined), title: Text('Editar')),
-        ),
+      entries: [
+        const CvMenuEntry(value: _MenuAction.edit, label: 'Editar', icon: Icons.edit_outlined),
         for (final status in activity.allowedTransitions)
-          PopupMenuItem(
-            value: status,
-            child: ListTile(
-              dense: true,
-              leading: Icon(statusIcon(status), color: statusColor(status)),
-              title: Text(statusActionLabel(status)),
-            ),
-          ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
+          CvMenuEntry(value: status, label: statusActionLabel(status), icon: _statusActionIcon(status)),
+        const CvMenuEntry(
           value: _MenuAction.delete,
-          child: ListTile(
-            dense: true,
-            leading: Icon(Icons.delete_outline, color: Color(0xFFB91C1C)),
-            title: Text('Eliminar actividad'),
-          ),
+          label: 'Eliminar actividad',
+          icon: Icons.delete_outline_rounded,
+          danger: true,
+          dividerBefore: true,
         ),
       ],
     );

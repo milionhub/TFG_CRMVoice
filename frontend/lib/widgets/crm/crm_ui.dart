@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/app_colors.dart';
 import '../../models/crm.dart';
+import '../../core/design/cv_tokens.dart';
+import '../ui/cv_components.dart';
+import '../ui/cv_feedback.dart';
 
 /// Tema claro de las pantallas del CRM. La app arranca con ThemeData.dark()
 /// y las pantallas existentes fijan sus colores a mano; las nuevas usan este
@@ -89,9 +92,10 @@ Color getActivityColor(String type) {
 }
 
 Color statusColor(ActivityStatus status) => switch (status) {
+      // Ámbar oscuro: CvColors.warning no llega a 4,5:1 en texto de 11,5 px
       ActivityStatus.pending => const Color(0xFFB45309),
-      ActivityStatus.completed => const Color(0xFF15803D),
-      ActivityStatus.cancelled => const Color(0xFF64748B),
+      ActivityStatus.completed => CvColors.success,
+      ActivityStatus.cancelled => CvColors.textSecondary,
     };
 
 IconData statusIcon(ActivityStatus status) => switch (status) {
@@ -122,7 +126,7 @@ class StatusBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = status;
     if (s == null) return const SizedBox.shrink();
-    final color = overdue ? const Color(0xFFB91C1C) : statusColor(s);
+    final color = overdue ? CvColors.danger : statusColor(s);
     final text = overdue ? 'Pendiente · vencida' : s.label;
     if (compact) {
       return Semantics(
@@ -176,10 +180,17 @@ class LoadingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Center(
-        child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()),
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: SizedBox.square(
+            dimension: 22,
+            child: CircularProgressIndicator(strokeWidth: 2, color: CvColors.primaryDark),
+          ),
+        ),
       );
 }
 
+/// Error de página o sección con «Reintentar» (I.6.3: CvStatePanel).
 class ErrorView extends StatelessWidget {
   final String message;
   final VoidCallback? onRetry;
@@ -191,22 +202,12 @@ class ErrorView extends StatelessWidget {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 40, color: Color(0xFFB91C1C)),
-            const SizedBox(height: 12),
-            Text(message,
-                textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textPrimary)),
-            if (onRetry != null) ...[
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Reintentar'),
-              ),
-            ],
-          ],
+        child: CvStatePanel(
+          icon: const Icon(Icons.cloud_off_outlined),
+          title: message,
+          action: onRetry == null
+              ? null
+              : CvSecondaryButton(label: 'Reintentar', icon: Icons.refresh_rounded, onPressed: onRetry),
         ),
       ),
     );
@@ -240,7 +241,8 @@ class EmptyView extends StatelessWidget {
   }
 }
 
-/// Recuadro de errores del servidor dentro de un formulario.
+/// Error en línea dentro de una sección o formulario (I.6.3: base común
+/// CvInlineAlert; misma API que antes).
 class FormErrorBanner extends StatelessWidget {
   final String message;
   final List<String> details;
@@ -250,38 +252,9 @@ class FormErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const color = Color(0xFFB91C1C);
-    final extra = details.where((d) => d != message).toList();
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.error_outline, color: color, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(message, style: const TextStyle(color: color, fontWeight: FontWeight.w600)),
-              ),
-            ],
-          ),
-          for (final d in extra)
-            Padding(
-              padding: const EdgeInsets.only(left: 28, top: 4),
-              child: Text('• $d', style: const TextStyle(color: color, fontSize: 13)),
-            ),
-          if (action != null) Padding(padding: const EdgeInsets.only(left: 20, top: 4), child: action!),
-        ],
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: CvInlineAlert(message: message, details: details, action: action),
     );
   }
 }
@@ -329,45 +302,24 @@ class SectionCard extends StatelessWidget {
 // =====================================================================
 
 /// Confirmación de una acción destructiva. true solo si el usuario confirma.
+/// I.6.3: diálogo común CRMVoice (showCvConfirm).
 Future<bool> confirmDestructive(
   BuildContext context, {
   required String title,
   required String message,
   String confirmLabel = 'Eliminar',
-}) async {
-  final result = await showDialog<bool>(
-    context: context,
-    builder: (dialogContext) => CrmTheme(
-      child: AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancelar')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB91C1C)),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(confirmLabel),
-          ),
-        ],
-      ),
-    ),
-  );
-  return result == true;
-}
+}) =>
+    showCvConfirm(context, title: title, message: message, confirmLabel: confirmLabel);
 
-void showSuccess(BuildContext context, String message) {
-  ScaffoldMessenger.maybeOf(context)
-    ?..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(message), backgroundColor: const Color(0xFF15803D)));
-}
+/// Feedback de éxito de una acción puntual (toast CRMVoice).
+void showSuccess(BuildContext context, String message) => showCvToast(context, message);
 
-void showFailure(BuildContext context, String message) {
-  ScaffoldMessenger.maybeOf(context)
-    ?..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(message), backgroundColor: const Color(0xFFB91C1C)));
-}
+/// Feedback de error de una acción puntual (toast CRMVoice).
+void showFailure(BuildContext context, String message) =>
+    showCvToast(context, message, tone: CvFeedbackTone.danger);
 
 /// Botón principal de guardado con estado "guardando" (evita el doble envío).
+/// I.6.2: es el botón primario CRMVoice (CvPrimaryButton).
 class SaveButton extends StatelessWidget {
   final bool saving;
   final VoidCallback? onPressed;
@@ -376,13 +328,6 @@ class SaveButton extends StatelessWidget {
   const SaveButton({super.key, required this.saving, required this.onPressed, this.label = 'Guardar'});
 
   @override
-  Widget build(BuildContext context) {
-    return FilledButton.icon(
-      onPressed: saving ? null : onPressed,
-      icon: saving
-          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-          : const Icon(Icons.check),
-      label: Text(saving ? 'Guardando...' : label),
-    );
-  }
+  Widget build(BuildContext context) =>
+      CvPrimaryButton(label: saving ? 'Guardando...' : label, loading: saving, onPressed: onPressed);
 }

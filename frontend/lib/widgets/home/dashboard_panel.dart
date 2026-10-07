@@ -127,13 +127,12 @@ class _DashboardPanelState extends State<DashboardPanel> with RouteAware {
           if (data == null && _loading)
             const SizedBox(height: 96, child: LoadingView())
           else if (data == null && _error != null)
-            FormErrorBanner(
-              message: 'No se pudo cargar el resumen: $_error',
-              action: TextButton.icon(
-                onPressed: _load,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Reintentar'),
-              ),
+            // Error de sección (I.6.3): mismo panel de estado que el resto
+            CvStatePanel(
+              icon: const Icon(Icons.cloud_off_outlined),
+              title: 'No se pudo cargar el resumen.',
+              message: _error,
+              action: CvSecondaryButton(label: 'Reintentar', icon: Icons.refresh_rounded, onPressed: _load),
             )
           else if (data != null) ...[
             if (_error != null)

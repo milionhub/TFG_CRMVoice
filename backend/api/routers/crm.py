@@ -1,6 +1,7 @@
 """
 CRM (H.2): catálogo compartido (productos, clientes, contactos, tipos),
-ficha de cliente y altas/ediciones de clientes y contactos.
+ficha de cliente y altas/ediciones de clientes y contactos. I.8: catálogo de
+productos (alta, edición y baja segura; services/writes/products).
 
 Clientes y contactos son de TODOS los comerciales: cualquiera los ve y los
 edita (el creador solo se guarda como auditoría). Las rutas son finas: la
@@ -11,12 +12,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, status
 
 from api.deps import get_current_user
-from schemas.crm import ClientIn, ContactIn, ContactUpdate
+from schemas.crm import ClientIn, ContactIn, ContactUpdate, ProductIn
 from services import catalog
 from services.client_detail import client_detail
 from services.context import build_context
 from services.writes import clients as client_writes
 from services.writes import contacts as contact_writes
+from services.writes import products as product_writes
 
 router = APIRouter(tags=["crm"])
 
@@ -24,6 +26,28 @@ router = APIRouter(tags=["crm"])
 @router.get("/products")
 def get_products(current_user: dict = Depends(get_current_user)):
     return {"products": catalog.list_products()}
+
+
+
+@router.get("/products/{product_id}")
+def get_product(product_id: int, current_user: dict = Depends(get_current_user)):
+    return product_writes.get_product(product_id)
+
+
+@router.post("/products", status_code=status.HTTP_201_CREATED)
+def create_product(body: ProductIn, current_user: dict = Depends(get_current_user)):
+    return product_writes.create_product(body, current_user["user_id"])
+
+
+@router.put("/products/{product_id}")
+def update_product(product_id: int, body: ProductIn, current_user: dict = Depends(get_current_user)):
+    return product_writes.update_product(product_id, body, current_user["user_id"])
+
+
+
+@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(product_id: int, current_user: dict = Depends(get_current_user)):
+    product_writes.delete_product(product_id, current_user["user_id"])
 
 
 @router.get("/clients")

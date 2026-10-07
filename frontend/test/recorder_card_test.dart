@@ -95,7 +95,7 @@ void main() {
             expect(String.fromCharCodes(upload.bodyBytes), contains('filename="grabacion.m4a"'));
             expect(backend.calls('POST', '/process-audio'), isEmpty); // nunca el flujo anterior
             expect(find.byType(DraftReview), findsOneWidget);
-            expect(find.text('Nueva actividad · revisión'), findsOneWidget);
+            expect(find.text('Revisar antes de guardar'), findsOneWidget);
           }));
 
   testWidgets('durante la subida no se puede volver a grabar ni subir dos veces', (tester) => backend.run(() async {
@@ -164,7 +164,7 @@ void main() {
             await tapText(tester, 'Interpretar');
             expect(lastJson(backend, 'POST', '/actions/interpret'),
                 {"text": "Crea un cliente llamado Construcciones Mediterráneo en Alicante."});
-            expect(find.text('Nuevo cliente · revisión'), findsOneWidget);
+            expect(find.text('Revisar antes de guardar'), findsOneWidget);
           }));
 
   testWidgets('servicio no disponible (503): Reintentar envío reutiliza el mismo audio', (tester) => backend.run(() async {

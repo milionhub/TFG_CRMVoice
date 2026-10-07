@@ -651,7 +651,7 @@ def h2_crm(factory, user_a, user_b):
     )
 
 
-BUSINESS_TABLES = ("clients", "contacts", "activities", "activity_products", "sales")
+BUSINESS_TABLES = ("clients", "contacts", "products", "activities", "activity_products", "sales")
 
 
 @pytest.fixture

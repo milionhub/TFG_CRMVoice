@@ -16,6 +16,7 @@ import '../../screens/chat_screen.dart';
 import '../../screens/clients_screen.dart';
 import '../../screens/history_screen.dart';
 import '../../screens/home_screen.dart';
+import '../../screens/products_screen.dart';
 import '../brand/crm_voice_brand.dart';
 
 /// Destino de la navegación principal.
@@ -41,6 +42,8 @@ const shellDestinations = [
     Icons.event_note_outlined,
     Icons.event_note_rounded,
   ),
+  // I.8: catálogo comercial (nombre y PVP)
+  ShellDestination('Productos', Icons.sell_outlined, Icons.sell_rounded),
   ShellDestination(
     'Chat IA',
     Icons.chat_bubble_outline_rounded,
@@ -53,7 +56,8 @@ Widget sectionScreen(int index) => switch (index) {
   1 => const ClientsScreen(),
   2 => const CalendarScreen(),
   3 => const HistoryScreen(),
-  4 => const ChatScreen(),
+  4 => const ProductsScreen(),
+  5 => const ChatScreen(),
   _ => const HomeScreen(),
 };
 

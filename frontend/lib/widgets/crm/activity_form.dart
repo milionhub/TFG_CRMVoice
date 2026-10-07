@@ -5,10 +5,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/app_colors.dart';
+import '../../core/design/cv_theme.dart';
+import '../../core/design/cv_tokens.dart';
 import '../../models/crm.dart';
 import '../../services/api_service.dart';
 import 'activity_actions.dart';
+import '../ui/cv_components.dart';
 import 'crm_ui.dart';
 import 'form_shell.dart';
 
@@ -241,14 +243,10 @@ class _ActivityFormState extends State<ActivityForm> {
     return CrmFormShell(
       busy: _saving,
       title: _isEdit ? 'Editar actividad' : 'Nueva actividad',
+      maxWidth: 640,
+      leading: _isEdit && !_loading ? FormDeleteButton(onPressed: _saving ? null : _delete) : null,
       actions: [
-        if (_isEdit && !_loading)
-          TextButton.icon(
-            onPressed: _saving ? null : _delete,
-            icon: const Icon(Icons.delete_outline, color: Color(0xFFB91C1C)),
-            label: const Text('Eliminar', style: TextStyle(color: Color(0xFFB91C1C))),
-          ),
-        TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancelar')),
+        FormCancelButton(onPressed: _saving ? null : () => Navigator.pop(context)),
         SaveButton(
           saving: _saving,
           onPressed: _loading || _loadError != null ? null : _save,
@@ -256,9 +254,9 @@ class _ActivityFormState extends State<ActivityForm> {
         ),
       ],
       body: _loading
-          ? const LoadingView()
+          ? const FormLoadState.loading()
           : _loadError != null
-              ? ErrorView(message: _loadError!, onRetry: _load)
+              ? FormLoadState.error(error: _loadError!, onRetry: _load)
               : _buildForm(),
     );
   }
@@ -270,189 +268,184 @@ class _ActivityFormState extends State<ActivityForm> {
       ..._contacts.map((c) => DropdownMenuItem<int?>(value: c.id, child: Text(c.name, overflow: TextOverflow.ellipsis))),
     ];
     final typeKnown = _typeId == null || _types.any((t) => t.id == _typeId);
+    final statusMessage = _server('status') ?? _statusProblem;
 
     return Form(
       key: _formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (error != null) FormErrorBanner(message: error.message, details: error.issueMessages),
-
-          // CLIENTE
-          if (widget.fixedClient != null)
-            ReadOnlyField(label: 'Cliente', value: widget.fixedClient!.name, icon: Icons.business)
-          else
-            InkWell(
-              key: const Key('activity-client-field'),
-              onTap: _saving ? null : _pickClient,
-              borderRadius: BorderRadius.circular(10),
-              child: InputDecorator(
-                decoration: InputDecoration(
-                  labelText: 'Cliente *',
-                  prefixIcon: const Icon(Icons.business),
-                  suffixIcon: const Icon(Icons.search),
-                  errorText: _server('client') ??
-                      (_submitted && _client == null ? 'Selecciona un cliente' : null),
-                ),
-                child: Text(_client?.name ?? 'Seleccionar cliente',
-                    style: TextStyle(color: _client == null ? AppColors.textSecondary : AppColors.textPrimary)),
-              ),
-            ),
-          const SizedBox(height: 12),
-
-          // CONTACTO (siempre del cliente elegido)
-          DropdownButtonFormField<int?>(
-            key: ValueKey('contact-${_client?.id}-${_contacts.length}'),
-            initialValue: _contactId,
-            isExpanded: true,
-            items: contactItems,
-            onChanged: _client == null || _loadingContacts ? null : (v) => setState(() => _contactId = v),
-            decoration: InputDecoration(
-              labelText: 'Contacto',
-              prefixIcon: const Icon(Icons.person_outline),
-              helperText: _client == null
-                  ? 'Elige antes el cliente'
-                  : _loadingContacts
-                      ? 'Cargando contactos...'
-                      : (_contacts.isEmpty ? 'Este cliente no tiene contactos' : null),
-              errorText: _server('contact'),
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          // TIPO
-          DropdownButtonFormField<int>(
-            key: const Key('activity-type-field'),
-            initialValue: typeKnown ? _typeId : null,
-            isExpanded: true,
-            items: _types
-                .map((t) => DropdownMenuItem<int>(value: t.id, child: Text(t.name, overflow: TextOverflow.ellipsis)))
-                .toList(),
-            onChanged: (v) => setState(() => _typeId = v),
-            validator: (v) => v == null ? 'Selecciona el tipo de actividad' : null,
-            decoration: InputDecoration(
-              labelText: 'Tipo de actividad *',
-              prefixIcon: const Icon(Icons.flash_on_outlined),
-              errorText: _server('activity_type'),
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          // FECHA + HORA
-          Row(
+          if (error != null) FormErrorNotice(message: error.message, details: error.issueMessages),
+          FormSections(
             children: [
-              Expanded(
-                child: InkWell(
-                  key: const Key('activity-date-field'),
-                  onTap: _pickDate,
-                  child: InputDecorator(
+              FormSection(
+                title: 'Cliente y contacto',
+                children: [
+                  if (widget.fixedClient != null)
+                    ReadOnlyField(label: 'Cliente', value: widget.fixedClient!.name, icon: Icons.business_outlined)
+                  else
+                    TapField(
+                      key: const Key('activity-client-field'),
+                      label: 'Cliente *',
+                      value: _client?.name,
+                      placeholder: 'Seleccionar cliente',
+                      icon: Icons.business_outlined,
+                      trailingIcon: Icons.search_rounded,
+                      errorText: _server('client') ?? (_submitted && _client == null ? 'Selecciona un cliente' : null),
+                      onTap: _saving ? null : _pickClient,
+                    ),
+                  // CONTACTO (siempre del cliente elegido)
+                  DropdownButtonFormField<int?>(
+                    key: ValueKey('contact-${_client?.id}-${_contacts.length}'),
+                    initialValue: _contactId,
+                    isExpanded: true,
+                    icon: cvSelectChevron,
+                    items: contactItems,
+                    onChanged: _client == null || _loadingContacts ? null : (v) => setState(() => _contactId = v),
                     decoration: InputDecoration(
-                      labelText: 'Fecha *',
-                      prefixIcon: const Icon(Icons.calendar_today, size: 20),
+                      labelText: 'Contacto',
+                      prefixIcon: const Icon(Icons.person_outline),
+                      helperText: _client == null
+                          ? 'Elige antes el cliente'
+                          : _loadingContacts
+                              ? 'Cargando contactos...'
+                              : (_contacts.isEmpty ? 'Este cliente no tiene contactos' : null),
+                      errorText: _server('contact'),
+                    ),
+                  ),
+                ],
+              ),
+              FormSection(
+                title: 'Actividad',
+                children: [
+                  DropdownButtonFormField<int>(
+                    key: const Key('activity-type-field'),
+                    initialValue: typeKnown ? _typeId : null,
+                    isExpanded: true,
+                    icon: cvSelectChevron,
+                    items: _types
+                        .map((t) => DropdownMenuItem<int>(value: t.id, child: Text(t.name, overflow: TextOverflow.ellipsis)))
+                        .toList(),
+                    onChanged: (v) => setState(() => _typeId = v),
+                    validator: (v) => v == null ? 'Selecciona el tipo de actividad' : null,
+                    decoration: InputDecoration(
+                      labelText: 'Tipo de actividad *',
+                      prefixIcon: const Icon(Icons.flash_on_outlined),
+                      errorText: _server('activity_type'),
+                    ),
+                  ),
+                  FieldPair(
+                    minWidth: 300,
+                    first: TapField(
+                      key: const Key('activity-date-field'),
+                      label: 'Fecha *',
+                      value: formatDate(_datetime),
+                      icon: Icons.calendar_today_outlined,
+                      trailingIcon: Icons.keyboard_arrow_down_rounded,
                       errorText: _server('datetime'),
+                      onTap: _pickDate,
                     ),
-                    child: Text(formatDate(_datetime)),
+                    second: TapField(
+                      key: const Key('activity-time-field'),
+                      label: 'Hora *',
+                      value: formatTime(_datetime),
+                      icon: Icons.access_time_rounded,
+                      onTap: _pickTime,
+                    ),
                   ),
+                ],
+              ),
+              FormSection(
+                title: 'Estado',
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SegmentedButton<ActivityStatus>(
+                        showSelectedIcon: false,
+                        segments: [
+                          for (final s in ActivityStatus.values)
+                            ButtonSegment(value: s, label: Text(s.label, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        ],
+                        selected: {_status},
+                        onSelectionChanged: (v) => setState(() => _status = v.first),
+                      ),
+                      if (statusMessage != null)
+                        _FieldNote(statusMessage, color: CvColors.danger)
+                      else if (_status == ActivityStatus.pending && !_datetime.isAfter(DateTime.now()))
+                        const _FieldNote('Fecha pasada: quedará como pendiente vencida.'),
+                    ],
+                  ),
+                ],
+              ),
+              FormSection(
+                title: 'Productos',
+                trailing: CvTextAction(
+                  label: 'Añadir producto',
+                  onPressed: _selectedProducts.length >= maxProducts ? null : _addProduct,
+                ),
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_selectedProducts.isEmpty)
+                        Text('Sin productos', style: CvText.helper.copyWith(fontSize: 13.5))
+                      else
+                        Wrap(
+                          spacing: CvSpace.xs,
+                          runSpacing: CvSpace.xs,
+                          children: [
+                            for (final p in _selectedProducts)
+                              FormTag(
+                                key: ValueKey('product-${p.id}'),
+                                label: p.name,
+                                removeTooltip: 'Quitar ${p.name}',
+                                onRemove: () => setState(() => _selectedProducts.removeWhere((s) => s.id == p.id)),
+                              ),
+                          ],
+                        ),
+                      if (widget.activity?.unlinkedProducts.isNotEmpty ?? false)
+                        _FieldNote(
+                          'Al guardar se quitarán los productos sin ficha de catálogo: '
+                          '${widget.activity!.unlinkedProducts.join(', ')}.',
+                          color: CvColors.warning,
+                        ),
+                      if (_server('products') != null) _FieldNote(_server('products')!, color: CvColors.danger),
+                    ],
+                  ),
+                ],
+              ),
+              TextFormField(
+                controller: _comment,
+                minLines: 3,
+                maxLines: 6,
+                maxLength: 2000,
+                decoration: InputDecoration(
+                  labelText: 'Comentario',
+                  alignLabelWithHint: true,
+                  errorText: _server('comment'),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: InkWell(
-                  key: const Key('activity-time-field'),
-                  onTap: _pickTime,
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Hora *',
-                      prefixIcon: Icon(Icons.access_time, size: 20),
-                    ),
-                    child: Text(formatTime(_datetime)),
-                  ),
-                ),
-              ),
             ],
-          ),
-          const SizedBox(height: 16),
-
-          // ESTADO
-          const Text('Estado', style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-          const SizedBox(height: 6),
-          SegmentedButton<ActivityStatus>(
-            showSelectedIcon: false,
-            segments: [
-              for (final s in ActivityStatus.values)
-                ButtonSegment(value: s, label: Text(s.label, maxLines: 1, overflow: TextOverflow.ellipsis)),
-            ],
-            selected: {_status},
-            onSelectionChanged: (v) => setState(() => _status = v.first),
-          ),
-          if (_statusProblem != null || _server('status') != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(_server('status') ?? _statusProblem!,
-                  style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 12.5)),
-            )
-          else if (_status == ActivityStatus.pending && !_datetime.isAfter(DateTime.now()))
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text('Fecha pasada: quedará como pendiente vencida.',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
-            ),
-          const SizedBox(height: 16),
-
-          // PRODUCTOS
-          Row(
-            children: [
-              const Expanded(
-                child: Text('Productos', style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-              ),
-              TextButton.icon(
-                onPressed: _selectedProducts.length >= maxProducts ? null : _addProduct,
-                icon: const Icon(Icons.add),
-                label: const Text('Añadir producto'),
-              ),
-            ],
-          ),
-          if (_selectedProducts.isEmpty)
-            const Text('Sin productos', style: TextStyle(color: AppColors.textSecondary, fontSize: 13))
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                for (final p in _selectedProducts)
-                  InputChip(
-                    label: Text(p.name),
-                    onDeleted: () => setState(() => _selectedProducts.removeWhere((s) => s.id == p.id)),
-                  ),
-              ],
-            ),
-          if (widget.activity?.unlinkedProducts.isNotEmpty ?? false)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Al guardar se quitarán los productos sin ficha de catálogo: '
-                '${widget.activity!.unlinkedProducts.join(', ')}.',
-                style: const TextStyle(color: Color(0xFFB45309), fontSize: 12.5),
-              ),
-            ),
-          if (_server('products') != null)
-            Text(_server('products')!, style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 12.5)),
-          const SizedBox(height: 16),
-
-          // COMENTARIO
-          TextFormField(
-            controller: _comment,
-            minLines: 3,
-            maxLines: 6,
-            maxLength: 2000,
-            decoration: InputDecoration(
-              labelText: 'Comentario',
-              alignLabelWithHint: true,
-              errorText: _server('comment'),
-            ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Nota bajo un campo (aviso o error) con el estilo de ayuda del formulario.
+class _FieldNote extends StatelessWidget {
+  final String text;
+  final Color color;
+
+  const _FieldNote(this.text, {this.color = CvColors.textSecondary});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: CvSpace.xs - 2),
+      child: Text(text, style: TextStyle(fontSize: 12.5, height: 1.4, color: color)),
     );
   }
 }

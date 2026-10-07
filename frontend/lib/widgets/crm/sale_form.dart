@@ -6,10 +6,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/app_colors.dart';
+import '../../core/design/cv_theme.dart';
+import '../../core/design/cv_tokens.dart';
 import '../../core/money.dart';
 import '../../models/crm.dart';
 import '../../services/api_service.dart';
+import '../ui/cv_components.dart';
 import 'crm_ui.dart';
 import 'form_shell.dart';
 
@@ -21,8 +23,7 @@ Future<bool?> openSaleForm(
   required Client client,
   required List<Contact> contacts,
   Sale? sale,
-}) =>
-    openCrmForm<bool>(context, SaleForm(client: client, contacts: contacts, sale: sale));
+}) => openCrmForm<bool>(context, SaleForm(client: client, contacts: contacts, sale: sale));
 
 class _Line {
   final Key key = UniqueKey();
@@ -32,9 +33,9 @@ class _Line {
   final TextEditingController amount;
 
   _Line({this.product, String? concept, int? quantity, String? amount})
-      : concept = TextEditingController(text: concept),
-        quantity = TextEditingController(text: quantity?.toString()),
-        amount = TextEditingController(text: amount);
+    : concept = TextEditingController(text: concept),
+      quantity = TextEditingController(text: quantity?.toString()),
+      amount = TextEditingController(text: amount);
 
   void dispose() {
     concept.dispose();
@@ -43,11 +44,11 @@ class _Line {
   }
 
   SaleLineInput toInput() => SaleLineInput(
-        productId: product?.id,
-        concept: product == null ? concept.text : null,
-        quantity: int.tryParse(quantity.text.trim()),
-        amount: amount.text,
-      );
+    productId: product?.id,
+    concept: product == null ? concept.text : null,
+    quantity: int.tryParse(quantity.text.trim()),
+    amount: amount.text,
+  );
 }
 
 class SaleForm extends StatefulWidget {
@@ -190,13 +191,15 @@ class _SaleFormState extends State<SaleForm> {
           ),
         );
       } else {
-        await api.createSales(SaleCreateInput(
-          clientId: widget.client.id,
-          contactId: _contactId,
-          saleDate: date,
-          notes: _notes.text,
-          lines: _lines.map((l) => l.toInput()).toList(),
-        ));
+        await api.createSales(
+          SaleCreateInput(
+            clientId: widget.client.id,
+            contactId: _contactId,
+            saleDate: date,
+            notes: _notes.text,
+            lines: _lines.map((l) => l.toInput()).toList(),
+          ),
+        );
       }
       if (!mounted) return;
       showSuccess(
@@ -214,8 +217,7 @@ class _SaleFormState extends State<SaleForm> {
   }
 
   /// Error del servidor de un campo de la línea (alta: "lines[i].x"; edición: "x").
-  String? _lineError(int index, String field) =>
-      _error?.messageFor(_isEdit ? field : 'lines[$index].$field');
+  String? _lineError(int index, String field) => _error?.messageFor(_isEdit ? field : 'lines[$index].$field');
 
   @override
   Widget build(BuildContext context) {
@@ -225,7 +227,7 @@ class _SaleFormState extends State<SaleForm> {
       title: _isEdit ? 'Editar venta' : 'Registrar venta',
       maxWidth: 680,
       actions: [
-        TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancelar')),
+        FormCancelButton(onPressed: _saving ? null : () => Navigator.pop(context)),
         SaveButton(
           saving: _saving,
           onPressed: _loading || _loadError != null ? null : _save,
@@ -233,67 +235,82 @@ class _SaleFormState extends State<SaleForm> {
         ),
       ],
       body: _loading
-          ? const LoadingView()
+          ? const FormLoadState.loading()
           : _loadError != null
-              ? ErrorView(message: _loadError!, onRetry: _loadProducts)
-              : Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+          ? FormLoadState.error(error: _loadError!, onRetry: _loadProducts)
+          : Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_error != null) FormErrorNotice(message: _error!.message, details: _error!.issueMessages),
+                  FormSections(
                     children: [
-                      if (_error != null) FormErrorBanner(message: _error!.message, details: _error!.issueMessages),
-                      ReadOnlyField(label: 'Cliente', value: widget.client.name, icon: Icons.business),
-                      const SizedBox(height: 12),
-                      _header(),
-                      const SizedBox(height: 16),
-                      for (var i = 0; i < _lines.length; i++) _lineCard(i),
-                      if (!_isEdit)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: _lines.length >= maxSaleLines ? null : _addLine,
-                            icon: const Icon(Icons.add),
-                            label: Text(_lines.length >= maxSaleLines
-                                ? 'Máximo $maxSaleLines líneas'
-                                : 'Añadir línea'),
+                      FormSection(
+                        title: 'Venta',
+                        children: [
+                          ReadOnlyField(label: 'Cliente', value: widget.client.name, icon: Icons.business_outlined),
+                          ..._header(),
+                        ],
+                      ),
+                      FormSection(
+                        title: _isEdit ? 'Línea de venta' : 'Líneas de venta',
+                        children: [
+                          AnimatedSize(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                            alignment: Alignment.topCenter,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                for (var i = 0; i < _lines.length; i++) ...[
+                                  if (i > 0)
+                                    const Padding(
+                                      padding: EdgeInsets.symmetric(vertical: CvSpace.md),
+                                      child: Divider(height: 1, thickness: 1, color: CvColors.border),
+                                    ),
+                                  _lineFields(i),
+                                ],
+                              ],
+                            ),
                           ),
-                        ),
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.07),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                _isEdit ? 'Importe' : 'Total (${_lines.length} ${_lines.length == 1 ? 'línea' : 'líneas'})',
-                                style: const TextStyle(fontWeight: FontWeight.w600),
+                          if (!_isEdit)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: CvTextAction(
+                                label: _lines.length >= maxSaleLines ? 'Máximo $maxSaleLines líneas' : 'Añadir línea',
+                                onPressed: _lines.length >= maxSaleLines ? null : _addLine,
                               ),
                             ),
-                            Text(
-                              total == null ? '—' : formatEuros(total),
-                              key: const Key('sale-total'),
-                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-                            ),
-                          ],
-                        ),
+                        ],
+                      ),
+                      SaleTotalBar(
+                        label: _isEdit ? 'Importe' : 'Total',
+                        detail: _isEdit ? null : '${_lines.length} ${_lines.length == 1 ? 'línea' : 'líneas'}',
+                        total: total,
                       ),
                     ],
                   ),
-                ),
+                ],
+              ),
+            ),
     );
   }
 
-  Widget _header() {
+  /// Contacto y fecha (en fila si cabe) y notas.
+  List<Widget> _header() {
     final contactField = DropdownButtonFormField<int?>(
       initialValue: _contactId,
       isExpanded: true,
+      icon: cvSelectChevron,
       items: [
         const DropdownMenuItem<int?>(value: null, child: Text('Sin contacto')),
-        ...widget.contacts.map((c) => DropdownMenuItem<int?>(value: c.id, child: Text(c.name, overflow: TextOverflow.ellipsis))),
+        ...widget.contacts.map(
+          (c) => DropdownMenuItem<int?>(
+            value: c.id,
+            child: Text(c.name, overflow: TextOverflow.ellipsis),
+          ),
+        ),
       ],
       onChanged: (v) => setState(() => _contactId = v),
       decoration: InputDecoration(
@@ -302,40 +319,27 @@ class _SaleFormState extends State<SaleForm> {
         errorText: _error?.messageFor('contact'),
       ),
     );
-    final dateField = InkWell(
+    final dateField = TapField(
       key: const Key('sale-date-field'),
+      label: 'Fecha de venta *',
+      value: formatDate(_saleDate),
+      icon: Icons.calendar_today_outlined,
+      errorText: _error?.messageFor('sale_date'),
       onTap: _pickDate,
-      child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: 'Fecha de venta *',
-          prefixIcon: const Icon(Icons.calendar_today, size: 20),
-          errorText: _error?.messageFor('sale_date'),
-        ),
-        child: Text(formatDate(_saleDate)),
+    );
+    return [
+      FieldPair(first: contactField, second: dateField),
+      TextFormField(
+        controller: _notes,
+        maxLength: 500,
+        decoration: InputDecoration(labelText: 'Notas', errorText: _error?.messageFor('notes')),
       ),
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        LayoutBuilder(
-          builder: (context, constraints) => constraints.maxWidth < 440
-              ? Column(children: [contactField, const SizedBox(height: 12), dateField])
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [Expanded(child: contactField), const SizedBox(width: 12), Expanded(child: dateField)],
-                ),
-        ),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _notes,
-          maxLength: 500,
-          decoration: InputDecoration(labelText: 'Notas', errorText: _error?.messageFor('notes')),
-        ),
-      ],
-    );
+    ];
   }
 
-  Widget _lineCard(int index) {
+  /// Una línea: cabecera «Línea N» (+ quitar), producto/concepto y
+  /// cantidad + importe. Sin tarjeta: las líneas se separan con un divisor.
+  Widget _lineFields(int index) {
     final line = _lines[index];
     final cents = parseEuroCents(line.amount.text);
     final productError = _lineError(index, 'product') ?? _lineError(index, 'concept');
@@ -348,11 +352,15 @@ class _SaleFormState extends State<SaleForm> {
               errorText: productError,
               suffixIcon: IconButton(
                 tooltip: 'Quitar producto (usar concepto libre)',
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close_rounded),
                 onPressed: () => setState(() => line.product = null),
               ),
             ),
-            child: Text(line.product!.name, overflow: TextOverflow.ellipsis),
+            child: Text(
+              line.product!.name,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, color: CvColors.textPrimary),
+            ),
           )
         : TextFormField(
             key: ValueKey('concept-${line.key}'),
@@ -364,13 +372,12 @@ class _SaleFormState extends State<SaleForm> {
               errorText: productError,
               suffixIcon: IconButton(
                 tooltip: 'Elegir producto del catálogo',
-                icon: const Icon(Icons.inventory_2_outlined),
+                icon: const Icon(Icons.search_rounded),
                 onPressed: () => _pickProduct(line),
               ),
             ),
-            validator: (v) => line.product == null && (v?.trim().isEmpty ?? true)
-                ? 'Indica un producto o un concepto'
-                : null,
+            validator: (v) =>
+                line.product == null && (v?.trim().isEmpty ?? true) ? 'Indica un producto o un concepto' : null,
           );
 
     final quantityField = TextFormField(
@@ -401,44 +408,99 @@ class _SaleFormState extends State<SaleForm> {
       validator: validateEuroAmount,
     );
 
-    return Container(
+    return Column(
       key: line.key,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      decoration: BoxDecoration(
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 40,
+          child: Row(
             children: [
               Expanded(
-                child: Text(_isEdit ? 'Línea' : 'Línea ${index + 1}',
-                    style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                child: Text(
+                  _isEdit ? 'Línea' : 'Línea ${index + 1}',
+                  style: CvText.label.copyWith(fontSize: 13, color: CvColors.textSecondary),
+                ),
               ),
               if (!_isEdit)
                 IconButton(
                   tooltip: 'Quitar línea',
-                  icon: const Icon(Icons.remove_circle_outline),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                  style: IconButton.styleFrom(
+                    foregroundColor: CvColors.textSecondary,
+                    hoverColor: CvColors.dangerSoft,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(CvRadius.sm)),
+                  ),
                   onPressed: _lines.length <= 1 ? null : () => _removeLine(index),
                 ),
             ],
           ),
-          productField,
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (context, constraints) => constraints.maxWidth < 400
-                ? Column(children: [quantityField, const SizedBox(height: 12), amountField])
-                : Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(flex: 2, child: quantityField),
-                      const SizedBox(width: 12),
-                      Expanded(flex: 3, child: amountField),
-                    ],
-                  ),
+        ),
+        const SizedBox(height: CvSpace.xxs),
+        productField,
+        const SizedBox(height: CvFormLayout.fieldGap),
+        FieldPair(minWidth: 400, firstFlex: 2, secondFlex: 3, first: quantityField, second: amountField),
+      ],
+    );
+  }
+}
+
+/// Total de la venta: superficie teal muy suave y cifra con presencia.
+/// Lo comparten el formulario de venta y la revisión de Voice (I.6.4).
+class SaleTotalBar extends StatelessWidget {
+  final String label;
+  final String? detail;
+  final int? total;
+
+  /// Texto si falta algún importe.
+  final String missing;
+
+  /// Key del texto del importe (los tests lo leen).
+  final Key totalKey;
+
+  const SaleTotalBar({
+    super.key,
+    required this.label,
+    required this.detail,
+    required this.total,
+    this.missing = '—',
+    this.totalKey = const Key('sale-total'),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: CvColors.primarySoft,
+        borderRadius: BorderRadius.circular(CvRadius.control + 2),
+        border: Border.all(color: CvColors.primary.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: CvText.label.copyWith(fontSize: 14, color: CvColors.primaryDark)),
+                if (detail != null) Text(detail!, style: CvText.helper.copyWith(fontSize: 12.5)),
+              ],
+            ),
+          ),
+          const SizedBox(width: CvSpace.sm),
+          Flexible(
+            child: Text(
+              total == null ? missing : formatEuros(total!),
+              key: totalKey,
+              textAlign: TextAlign.right,
+              style:
+                  (total == null ? CvText.helper.copyWith(fontSize: 14, fontWeight: FontWeight.w600) : CvText.heading)
+                      .copyWith(
+                        fontSize: total == null ? 14 : 22,
+                        letterSpacing: -0.4,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+            ),
           ),
         ],
       ),

@@ -24,6 +24,7 @@ import '../widgets/crm/crm_ui.dart';
 import '../widgets/crm/sale_form.dart';
 import '../widgets/shell/app_shell.dart';
 import '../widgets/ui/cv_components.dart';
+import '../widgets/ui/cv_feedback.dart';
 
 class ClientDetailScreen extends StatefulWidget {
   final int clientId;
@@ -388,10 +389,9 @@ class _ClientDetailScreenState extends State<ClientDetailScreen> {
                           ],
                         ),
                       ),
-                      IconButton(
+                      CvRowIconButton(
                         tooltip: 'Editar contacto',
-                        icon: const Icon(Icons.edit_outlined, size: 19),
-                        color: CvColors.textSecondary,
+                        icon: Icons.edit_outlined,
                         onPressed: () => _contactForm(c),
                       ),
                     ],
@@ -605,22 +605,16 @@ class _ClientDetailScreenState extends State<ClientDetailScreen> {
                       ),
                       const SizedBox(width: CvSpace.sm),
                       Text(formatEuros(s.amountCents), style: CvText.label.copyWith(fontSize: 14.5)),
-                      PopupMenuButton<String>(
-                        tooltip: 'Acciones',
-                        icon: const Icon(Icons.more_vert, color: CvColors.textSecondary),
+                      CvContextMenu<String>(
                         onSelected: (v) => v == 'edit' ? _saleForm(s) : _deleteSale(s),
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                            value: 'edit',
-                            child: ListTile(dense: true, leading: Icon(Icons.edit_outlined), title: Text('Editar')),
-                          ),
-                          PopupMenuItem(
+                        entries: const [
+                          CvMenuEntry(value: 'edit', label: 'Editar', icon: Icons.edit_outlined),
+                          CvMenuEntry(
                             value: 'delete',
-                            child: ListTile(
-                              dense: true,
-                              leading: Icon(Icons.delete_outline, color: Color(0xFFB91C1C)),
-                              title: Text('Eliminar venta'),
-                            ),
+                            label: 'Eliminar venta',
+                            icon: Icons.delete_outline_rounded,
+                            danger: true,
+                            dividerBefore: true,
                           ),
                         ],
                       ),

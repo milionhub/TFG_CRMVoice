@@ -531,7 +531,8 @@ _TOOLS = (
         "(no hace falta el nombre completo) y devuelve sus ids. Úsala siempre que el mensaje nombre a un "
         "cliente o contacto, haya o no cliente activo, y antes de cualquier herramienta que necesite un id. "
         "status: exact/fuzzy/inherited = resuelto; partial = resuelto por coincidencia parcial de palabras "
-        "(di cómo lo has entendido); ambiguous = varios candidatos (pregunta al usuario); unresolved = no existe; "
+        "y contextual = resuelto porque cliente y contacto juntos solo encajan con uno "
+        "(en los dos, di cómo lo has entendido); ambiguous = varios candidatos (pregunta al usuario); unresolved = no existe; "
         "conflict = el contacto no es de ese cliente. Solo identifica: no devuelve actividades, contactos del "
         "cliente ni facturación.",
         FindEntitiesArgs,

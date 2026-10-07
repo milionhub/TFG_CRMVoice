@@ -3,7 +3,9 @@ Esquemas del Action Engine (H.2).
 
 1. Interpretation: lo ÚNICO que produce el modelo (Structured Outputs,
    esquema estricto). Solo MENCIONES en texto: nunca ids. Todos los campos
-   son obligatorios (null o lista vacía si no aplican), como exige el modo strict.
+   son obligatorios (null o lista vacía si no aplican), como exige el modo strict;
+   los que tienen valor por defecto en Python (I.7) también son obligatorios
+   en el esquema que se envía al modelo (el SDK los marca como required).
 2. Campos de un borrador ya resuelto (ResolvedRef con ids del resolvedor
    determinista) por tipo de acción.
 3. Peticiones de la API (interpretar, editar, confirmar) y la vista pública
@@ -15,8 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from schemas.issues import Candidate, Issue
 
-ActionType = Literal["create_activity", "create_client", "create_contact", "create_sale"]
-ACTION_TYPES: tuple[str, ...] = ("create_activity", "create_client", "create_contact", "create_sale")
+# I.8: acciones del catálogo de productos (también en el CHECK de action_drafts, migración m006)
+ActionType = Literal["create_activity", "create_client", "create_contact", "create_sale",
+                     "create_product", "update_product"]
+ACTION_TYPES: tuple[str, ...] = ("create_activity", "create_client", "create_contact", "create_sale",
+                                 "create_product", "update_product")
 DraftStatus = Literal["open", "executed", "cancelled"]
 DraftSource = Literal["voice", "text", "chat"]
 MAX_SOURCE_TEXT = 2000
@@ -40,6 +45,10 @@ class NewClientMention(_LLM):
     city: str | None
     province: str | None
     group_name: str | None
+    # I.7: datos de contacto del cliente tal como se dicen (los normaliza core.structured_values)
+    phone: str | None = None
+    email: str | None = None
+    cif: str | None = None
 
 
 class NewContactMention(_LLM):
@@ -57,12 +66,22 @@ class SaleLineMention(_LLM):
     amount_is_unit_price: bool
 
 
+class ProductMention(_LLM):
+    """I.8: producto nuevo (create_product) o existente (update_product), tal como se dice."""
+    name: str | None                 # nombre dicho (el nuevo, o el del producto existente)
+    price: str | None                # PVP en euros con punto decimal: "89.00"
+    new_name: str | None             # nuevo nombre (update_product)
+
+
 class Interpretation(_LLM):
-    action_type: Literal["create_activity", "create_client", "create_contact", "create_sale", "unsupported"]
+    action_type: Literal["create_activity", "create_client", "create_contact", "create_sale",
+                         "create_product", "update_product", "unsupported"]
     client_name: str | None
     contact_name: str | None
     activity_type: ActivityTypeName | None
     date: str | None                 # AAAA-MM-DD
+    # I.7: el día tal como se dijo ("pasado mañana", "el próximo lunes"); lo resuelve core.relative_dates
+    date_said: str | None = None
     time: str | None                 # HH:MM
     status: Literal["pending", "completed"] | None
     products: list[str]
@@ -72,6 +91,8 @@ class Interpretation(_LLM):
     sale_lines: list[SaleLineMention]
     sale_date: str | None
     unsupported_reason: str | None
+    # I.8 (con valor por defecto en Python; obligatorios en el esquema del modelo)
+    product: ProductMention | None = None
 
 
 # =====================================================================
@@ -88,6 +109,7 @@ class ResolvedRef(BaseModel):
     match: Literal["exact", "fuzzy", "partial", "inherited", "user_selected", "new"] | None = None
     problem: Literal["ambiguous", "not_found", "conflict"] | None = None
     candidates: list[Candidate] = []          # emitidos por el servidor
+    evidence: str | None = None               # I.7: por qué se resolvió por contexto (visible en el aviso)
 
 
 class ActivityDraft(BaseModel):
@@ -112,6 +134,9 @@ class ClientDraft(BaseModel):
     city: str | None = None
     province: str | None = None
     group: ResolvedRef | None = None
+    phone: str | None = None
+    email: str | None = None
+    cif: str | None = None
 
 
 class ContactDraft(BaseModel):
@@ -146,8 +171,32 @@ class SaleDraft(BaseModel):
     notes: str | None = None
 
 
+class ProductDraft(BaseModel):
+    """create_product: producto NUEVO (nunca se resuelve contra uno existente)."""
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    price_cents: int | None = None            # PVP
+    price_said: str | None = None
+    price_error: str | None = None
+
+
+class ProductUpdateDraft(BaseModel):
+    """update_product: SOLO los cambios (None = no cambia) y los valores actuales, para mostrarlos."""
+    model_config = ConfigDict(extra="forbid")
+
+    product: ResolvedRef | None = None
+    name: str | None = None                   # nuevo nombre
+    price_cents: int | None = None            # nuevo PVP
+    price_said: str | None = None
+    price_error: str | None = None
+    current_name: str | None = None
+    current_price_cents: int | None = None
+
+
 DRAFT_MODELS = {"create_activity": ActivityDraft, "create_client": ClientDraft,
-                "create_contact": ContactDraft, "create_sale": SaleDraft}
+                "create_contact": ContactDraft, "create_sale": SaleDraft,
+                "create_product": ProductDraft, "update_product": ProductUpdateDraft}
 
 
 # =====================================================================
@@ -192,6 +241,9 @@ class ClientEdits(_Request):
     city: str | None = Field(None, max_length=80)
     province: str | None = Field(None, max_length=80)
     group_id: int | None = None
+    phone: str | None = Field(None, max_length=30)
+    email: str | None = Field(None, max_length=120)
+    cif: str | None = Field(None, max_length=20)
 
 
 class ContactEdits(_Request):
@@ -221,8 +273,21 @@ class SaleEdits(_Request):
     notes: str | None = Field(None, max_length=500)
 
 
+class ProductEdits(_Request):
+    name: str | None = Field(None, max_length=100)
+    price: StrictInt | StrictStr | None = None
+
+
+class ProductUpdateEdits(_Request):
+    product_id: int | None = None
+    product_name: str | None = Field(None, max_length=120)
+    name: str | None = Field(None, max_length=100)        # null explícito = no cambiar el nombre
+    price: StrictInt | StrictStr | None = None            # null explícito = no cambiar el PVP
+
+
 EDIT_MODELS = {"create_activity": ActivityEdits, "create_client": ClientEdits,
-               "create_contact": ContactEdits, "create_sale": SaleEdits}
+               "create_contact": ContactEdits, "create_sale": SaleEdits,
+               "create_product": ProductEdits, "update_product": ProductUpdateEdits}
 
 
 class DraftView(BaseModel):

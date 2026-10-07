@@ -11,6 +11,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frontend/providers/auth_provider.dart';
 import 'package:frontend/screens/chat_screen.dart';
+import 'package:frontend/widgets/chat/chat_composer.dart';
 import 'package:frontend/widgets/chat/chat_empty_state.dart';
 import 'package:frontend/widgets/chat/chat_message_bubble.dart';
 import 'package:frontend/widgets/chat/chat_theme.dart';
@@ -93,20 +94,54 @@ void main() {
   // Estado vacío y ejemplos
   // ===================================================================
 
-  testWidgets('estado vacío con título, ayuda y los seis ejemplos', (tester) => backend.run(() async {
-        await pumpChat(tester);
+  testWidgets('estado vacío: cabecera Chat IA, pregunta, ayuda, cuatro sugerencias y nota de solo lectura',
+      (tester) => backend.run(() async {
+            await pumpChat(tester);
 
-        expect(find.text(ChatEmptyState.title), findsOneWidget);
-        expect(shows('sin modificarlos'), isTrue);
-        for (final prompt in ChatEmptyState.prompts) {
-          expect(find.text(prompt.text), findsOneWidget);
-        }
-        expect(find.text('CRMVoice IA'), findsOneWidget);
-        expect(find.text('Consulta tu CRM en lenguaje natural'), findsOneWidget);
-        expect(find.byType(UserMessage), findsNothing);
-      }));
+            expect(find.text('Chat IA'), findsNWidgets(2)); // barra lateral y cabecera
+            expect(find.text('Pregunta, analiza y entiende tu CRM en lenguaje natural.'), findsOneWidget);
+            expect(find.text(ChatEmptyState.title), findsOneWidget);
+            expect(find.text(ChatEmptyState.helper), findsOneWidget);
+            expect(ChatEmptyState.prompts, hasLength(4));
+            for (final prompt in ChatEmptyState.prompts) {
+              expect(find.text(prompt.text), findsOneWidget);
+              expect(find.descendant(of: find.byType(SuggestedPrompt), matching: find.text(prompt.category)), findsOneWidget);
+            }
+            expect(find.byType(SuggestedPrompt), findsNWidgets(4));
+            expect(find.text(ChatDisclaimer.text), findsOneWidget);
+            expect(find.text(ChatComposer.placeholder), findsOneWidget);
+            // Sin conversación no hay nada que reiniciar
+            expect(find.text('Nueva conversación'), findsNothing);
+            expect(find.byType(UserMessage), findsNothing);
+          }));
 
-  for (final (width, columns) in [(1400.0, 3), (1000.0, 2), (400.0, 1)]) {
+  testWidgets('escritorio: el composer forma parte del estado vacío y baja al empezar la conversación',
+      (tester) => backend.run(() async {
+            backend.on('POST', '/chat', (_) => chatReply('Hecho.'));
+            await pumpChat(tester);
+
+            Finder composerIn(Type parent) =>
+                find.descendant(of: find.byType(parent), matching: find.byType(ChatComposer));
+            expect(composerIn(ChatEmptyState), findsOneWidget);
+            // Composición centrada: ni arriba del todo ni pegada al borde inferior
+            final composer = tester.getRect(find.byType(ChatComposer));
+            expect(composer.top, greaterThan(250));
+            expect(composer.bottom, lessThan(900));
+
+            await tester.tap(find.byType(TextField));
+            await type(tester, 'hola');
+            await tester.tap(sendButton());
+            await tester.pumpAndSettle();
+
+            expect(find.byType(ChatEmptyState), findsNothing);
+            expect(find.byType(SuggestedPrompt), findsNothing);
+            expect(find.byType(ChatComposer), findsOneWidget);
+            expect(tester.getRect(find.byType(ChatComposer)).bottom, greaterThan(900)); // abajo
+            expect(find.text(ChatDisclaimer.text), findsOneWidget);
+            expect(find.text('CRMVoice IA'), findsOneWidget); // etiqueta de la respuesta
+          }));
+
+  for (final (width, columns) in [(1400.0, 2), (1000.0, 2), (400.0, 1)]) {
     testWidgets('ejemplos en $columns columna(s) a $width px', (tester) => backend.run(() async {
           tester.view.physicalSize = Size(width, 1000);
           tester.view.devicePixelRatio = 1.0;
@@ -127,13 +162,13 @@ void main() {
         backend.on('POST', '/chat', (_) => chatReply('Rivera va bien.'));
         await pumpChat(tester);
 
-        await tester.tap(find.text('¿Cómo va Rivera?'));
+        await tester.tap(find.text('¿Cómo va Tecnología Rivera?'));
         await tester.pumpAndSettle();
 
         expect(chatBodies(), [
-          {"message": "¿Cómo va Rivera?"}
+          {"message": "¿Cómo va Tecnología Rivera?"}
         ]);
-        expect(find.widgetWithText(UserMessage, '¿Cómo va Rivera?'), findsOneWidget);
+        expect(find.widgetWithText(UserMessage, '¿Cómo va Tecnología Rivera?'), findsOneWidget);
         expect(shows('Rivera va bien.'), isTrue);
         expect(find.text(ChatEmptyState.title), findsNothing);
       }));
@@ -143,28 +178,28 @@ void main() {
         backend.on('POST', '/chat', (_) => chatReply('ok'));
         await pumpChat(tester);
 
-        final starter = find.bySemanticsLabel('Preguntar: ¿Cómo va Rivera?');
+        final starter = find.bySemanticsLabel('Preguntar: ¿Cómo va Tecnología Rivera?');
         expect(tester.getSemantics(starter), isSemantics(isButton: true, hasTapAction: true, isEnabled: true));
 
         // La acción semántica envía como un toque normal
-        tester.semantics.tap(find.semantics.byLabel('Preguntar: ¿Cómo va Rivera?'));
+        tester.semantics.tap(find.semantics.byLabel('Preguntar: ¿Cómo va Tecnología Rivera?'));
         await tester.pumpAndSettle();
         expect(chatBodies(), [
-          {"message": "¿Cómo va Rivera?"}
+          {"message": "¿Cómo va Tecnología Rivera?"}
         ]);
         semantics.dispose();
       }));
 
   testWidgets('un ejemplo no borra el borrador del composer', (tester) => backend.run(() async {
-        backend.on('POST', '/chat', (_) => chatReply('Mañana nada.'));
+        backend.on('POST', '/chat', (_) => chatReply('Nada pendiente.'));
         await pumpChat(tester);
 
         await type(tester, 'borrador a medias');
-        await tester.tap(find.text('¿Qué tengo mañana?'));
+        await tester.tap(find.text('¿Qué tengo pendiente esta semana?'));
         await tester.pumpAndSettle();
 
         expect(chatBodies(), [
-          {"message": "¿Qué tengo mañana?"}
+          {"message": "¿Qué tengo pendiente esta semana?"}
         ]);
         expect(tester.widget<TextField>(find.byType(TextField)).controller!.text, 'borrador a medias');
 
@@ -352,19 +387,21 @@ void main() {
             expect(chatBodies().first, {"message": "¿Cómo va Rivera?"});
           }));
 
-  testWidgets('Nueva conversación está deshabilitada sin mensajes y durante una consulta',
+  testWidgets('Nueva conversación: oculta sin mensajes, desactivada durante una consulta',
       (tester) => backend.run(() async {
             final pending = Completer<http.Response>();
             backend.on('POST', '/chat', (_) => pending.future);
             await pumpChat(tester);
 
-            OutlinedButton newButton() =>
-                tester.widget<OutlinedButton>(find.ancestor(of: find.text('Nueva conversación'), matching: find.byType(OutlinedButton)));
-            expect(newButton().onPressed, isNull);
+            OutlinedButton newButton() => tester.widget<OutlinedButton>(find.ancestor(
+                of: find.text('Nueva conversación'), matching: find.byWidgetPredicate((w) => w is OutlinedButton)));
+            expect(find.text('Nueva conversación'), findsNothing);
 
             await type(tester, 'hola');
             await tester.tap(sendButton());
-            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 300));
+            expect(find.byType(PendingMessage), findsOneWidget);
+            expect(find.text(PendingMessage.text), findsOneWidget);
             expect(newButton().onPressed, isNull);
 
             pending.complete(chatReply('hola'));
@@ -725,7 +762,10 @@ void main() {
         backend.on('POST', '/chat', (_) => chatReply('ok'));
         await pumpChat(tester, desktop: false);
 
-        expect(find.widgetWithText(AppBar, 'CRMVoice IA'), findsOneWidget);
+        expect(find.widgetWithText(AppBar, 'Chat IA'), findsOneWidget);
+        // Composer fijo abajo, fuera del estado vacío
+        expect(find.descendant(of: find.byType(ChatEmptyState), matching: find.byType(ChatComposer)), findsNothing);
+        expect(find.byType(ChatComposer), findsOneWidget);
         final reset = find.ancestor(of: find.byTooltip('Nueva conversación'), matching: find.byType(IconButton));
         expect(tester.widget<IconButton>(reset).onPressed, isNull);
 
@@ -734,6 +774,36 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text(ChatEmptyState.title), findsOneWidget);
       }));
+
+  for (final width in [390.0, 360.0]) {
+    testWidgets('móvil ${width.toInt()} px: estado vacío y conversación sin desbordes', (tester) => backend.run(() async {
+          backend.on('POST', '/chat', (_) => chatReply('## Resumen\n\n- **Tecnologia Rivera SL**: 3 actividades, '
+              '1.250,00 € vendidos\n- Sin pendientes esta semana'));
+          tester.view.physicalSize = Size(width, 780);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.reset);
+          auth = await loggedInAuth(backend);
+          await tester.pumpWidget(appFor(auth, const ChatScreen()));
+          await tester.pumpAndSettle();
+
+          // Un overflow haría fallar el test
+          expect(find.text(ChatEmptyState.title), findsOneWidget);
+          for (var i = 0; i < ChatEmptyState.prompts.length; i++) {
+            final prompt = find.byType(SuggestedPrompt).at(i);
+            await tester.ensureVisible(prompt);
+            final rect = tester.getRect(prompt);
+            expect(rect.right, lessThanOrEqualTo(width));
+            expect(rect.height, greaterThanOrEqualTo(48), reason: 'objetivo táctil');
+          }
+          expect(tester.getRect(find.byType(ChatComposer)).bottom, lessThanOrEqualTo(780));
+
+          await tester.tap(find.text('¿Cómo va Tecnología Rivera?'));
+          await tester.pumpAndSettle();
+          expect(tester.getRect(find.byType(UserMessage).first).right, lessThanOrEqualTo(width));
+          expect(find.byType(AssistantMessage), findsOneWidget);
+          expect(tester.getRect(find.byType(ChatComposer)).bottom, lessThanOrEqualTo(780));
+        }));
+  }
 
   testWidgets('salir de la pantalla durante una consulta no rompe nada', (tester) => backend.run(() async {
         final pending = Completer<http.Response>();
