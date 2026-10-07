@@ -1,385 +1,660 @@
 # CRMVoice
 
-Registro de actividades comerciales por voz: el comercial graba un audio, el backend
-lo transcribe con Whisper, extrae cliente, contacto, acción, fecha y productos, y el
-usuario revisa y guarda la actividad en el CRM. Incluye histórico, calendario y un
-chat con IA sobre los datos del CRM.
+<p align="center">
+  <strong>Tu CRM. Ahora también te escucha.</strong>
+</p>
 
-Proyecto desarrollado como Trabajo de Fin de Grado (TFG).
+<p align="center">
+  CRM comercial con voz e inteligencia artificial para gestionar clientes, contactos, actividades, productos y ventas utilizando lenguaje natural.
+</p>
 
-- **Backend:** Python + FastAPI + SQLite (`backend/`)
-- **Frontend:** Flutter, orientado a web (`frontend/`)
-
----
-
-## Componentes: qué es local y qué es externo
-
-| Componente | Dónde se ejecuta | Para qué | ¿Necesario? |
-|---|---|---|---|
-| SQLite (`backend/crm.db`) | Local, fichero | Datos del CRM. Se crea solo al arrancar el backend | Sí |
-| Whisper (modelo `base`) | Local, CPU | Transcripción del audio | Sí (para grabar actividades por voz) |
-| FFmpeg | Local, programa del sistema | Whisper lo usa para decodificar el audio | Sí (para grabar actividades por voz) |
-| OpenAI API | Externo, de pago | Embeddings (duplicados, búsqueda semántica) y asistente del chat (tool calling) | La clave es obligatoria para arrancar; las funciones de IA del chat dependen de ella |
-| Google OAuth | Externo | Login con Google | Opcional (también hay registro con email y contraseña) |
+<p align="center">
+  <code>Python</code> ·
+  <code>FastAPI</code> ·
+  <code>Flutter</code> ·
+  <code>SQLite</code> ·
+  <code>OpenAI</code> ·
+  <code>Whisper</code> ·
+  <code>GitHub Actions</code>
+</p>
 
 ---
 
-## Requisitos previos
+![CRMVoice Home](assets/screenshots/home.png)
 
-| Herramienta | Versión | Comprobación |
-|---|---|---|
-| Python | 3.11 (probado con 3.11.2; `numpy` 2.3 requiere 3.11 o superior) | `python --version` (macOS/Linux: `python3 --version`) |
-| FFmpeg | Cualquier versión reciente (probado con 8.0.1) en el `PATH` | `ffmpeg -version` |
-| Flutter | 3.38 o superior (Dart ≥ 3.10.3; probado con Flutter 3.41.0) | `flutter --version` |
-| Google Chrome | — | — |
-| Clave de API de OpenAI | — | — |
+## Sobre CRMVoice
 
-Instalar FFmpeg:
-- **Windows:** `winget install Gyan.FFmpeg` (o descargar un build de https://www.gyan.dev/ffmpeg/builds/ y añadir su carpeta `bin` al `PATH`).
-- **macOS:** `brew install ffmpeg`
-- **Debian/Ubuntu:** `sudo apt install ffmpeg`
+CRMVoice nace con una idea sencilla: reducir la fricción de actualizar un CRM.
+
+En lugar de depender únicamente de formularios, el comercial puede explicar una acción de forma natural:
+
+> “Programa una reunión mañana a las diez con Marta López de Tecnología Rivera para hablar del Portátil Luna 13.”
+
+CRMVoice transcribe el audio, interpreta la intención, resuelve las entidades contra los datos reales del CRM y genera un borrador estructurado que el usuario puede revisar antes de confirmar cualquier cambio.
+
+La voz no sustituye a la interfaz tradicional: la complementa. Clientes, contactos, actividades, calendario, productos y ventas también pueden gestionarse desde una interfaz gráfica completa.
+
+El proyecto comenzó como mi **Trabajo de Fin de Grado en Ingeniería Informática** y posteriormente evolucionó hasta convertirse en un proyecto de portfolio más completo, con una arquitectura revisada, Action Engine, Chat IA, testing automatizado y una nueva experiencia de usuario.
 
 ---
 
-## Backend
+## Funcionalidades principales
 
-Todos los comandos de esta sección se ejecutan **dentro de `backend/`**. Desde la raíz del repositorio:
+### 🎙️ Voice Action Engine
+
+El núcleo diferencial de CRMVoice.
+
+Permite convertir lenguaje natural, hablado o escrito, en operaciones estructuradas sobre el CRM.
+
+Actualmente permite:
+
+- crear actividades;
+- crear clientes;
+- crear contactos;
+- registrar ventas;
+- crear productos;
+- actualizar productos.
+
+Las eliminaciones sensibles, como borrar productos, permanecen deliberadamente fuera del flujo por voz.
+
+Antes de escribir en el CRM, CRMVoice presenta siempre una revisión editable de la acción detectada.
+
+![CRMVoice Voice Action Review](assets/screenshots/voice-action-review.png)
+
+El sistema diferencia coincidencias exactas, aproximadas, valores deducidos y ambigüedades. Si una entidad no puede resolverse de forma segura, solicita intervención del usuario en lugar de elegir silenciosamente.
+
+---
+
+### 👥 Gestión de clientes y contactos
+
+CRMVoice incluye una cartera completa de clientes con búsqueda y gestión de contactos asociados.
+
+![CRMVoice Clients](assets/screenshots/clients.png)
+
+Cada cliente dispone de una vista comercial unificada con:
+
+- información empresarial;
+- contactos;
+- ventas registradas;
+- facturación histórica;
+- actividad reciente;
+- próximas acciones comerciales.
+
+![CRMVoice Client Detail](assets/screenshots/client-detail.png)
+
+Los clientes, contactos y productos forman parte del catálogo compartido del CRM. Las actividades y ventas pertenecen al comercial autenticado.
+
+---
+
+### 📅 Actividades y calendario
+
+Las actividades comerciales pueden crearse manualmente o mediante el Action Engine.
+
+El sistema permite trabajar con diferentes tipos de actividad, estados, fechas, contactos y productos relacionados.
+
+La vista de calendario organiza el seguimiento comercial en una agenda semanal.
+
+![CRMVoice Calendar](assets/screenshots/calendar.png)
+
+También existe una vista específica de Actividades con búsqueda, filtros y gestión de estados.
+
+---
+
+### 💰 Ventas y productos
+
+CRMVoice permite registrar ventas con una o varias líneas de producto y mantener un catálogo comercial reutilizable.
+
+El sistema diferencia entre:
+
+- ventas registradas por el comercial;
+- facturación histórica del cliente;
+- facturación comercial agregada.
+
+Los productos pueden utilizarse tanto desde los formularios tradicionales como desde acciones interpretadas mediante lenguaje natural.
+
+---
+
+### 🤖 Chat IA sobre el CRM
+
+CRMVoice incluye un asistente conversacional para consultar los datos del CRM utilizando lenguaje natural.
+
+No modifica información: el Chat IA funciona como una capa de consulta **read-only**.
+
+Puede responder preguntas como:
+
+- “¿Qué tengo pendiente esta semana?”
+- “¿Cuánto he vendido este mes?”
+- “¿Cómo va Tecnología Rivera?”
+- “¿Qué clientes debería revisar y por qué?”
+
+![CRMVoice Chat IA](assets/screenshots/chat-ai.png)
+
+El asistente utiliza herramientas controladas por el backend para consultar información real del CRM. El modelo no decide directamente qué registros puede leer ni ejecuta SQL libre.
+
+Entre otras capacidades, entiende:
+
+- fechas relativas;
+- nombres parciales;
+- contexto conversacional;
+- clientes y contactos activos;
+- actividad comercial;
+- ventas y facturación;
+- productos tratados;
+- señales deterministas de atención comercial.
+
+---
+
+## Cómo funciona una acción por voz
+
+```text
+Usuario
+   │
+   │ audio
+   ▼
+Whisper
+   │
+   │ transcripción
+   ▼
+Structured LLM Interpretation
+   │
+   │ menciones estructuradas
+   ▼
+Deterministic Entity Resolution
+   │
+   │ IDs + coincidencias + ambigüedades
+   ▼
+Persisted Action Draft
+   │
+   │ revisión editable
+   ▼
+Confirmación explícita del usuario
+   │
+   ▼
+Transactional Write Services
+   │
+   ▼
+CRM
+```
+
+### 1. Transcripción
+
+El audio se procesa con Whisper para obtener el texto original de la acción.
+
+### 2. Interpretación estructurada
+
+El intérprete utiliza Structured Outputs para extraer únicamente la intención y las menciones relevantes.
+
+El modelo no selecciona IDs de la base de datos ni escribe directamente en el CRM.
+
+### 3. Resolución determinista
+
+El backend resuelve clientes, contactos y productos contra el catálogo real.
+
+Puede producir:
+
+- coincidencias exactas;
+- coincidencias aproximadas;
+- valores deducidos;
+- candidatos ambiguos;
+- bloqueos cuando no existe suficiente información.
+
+### 4. Action Draft
+
+La interpretación se guarda como un borrador temporal y revisionado asociado al usuario.
+
+El borrador puede editarse o descartarse antes de ejecutar la acción.
+
+### 5. Confirmación
+
+La confirmación vuelve a validar el borrador contra el estado actual de la base de datos y ejecuta la operación mediante los mismos servicios de escritura utilizados por los formularios tradicionales.
+
+La confirmación es idempotente: repetirla no duplica la operación.
+
+---
+
+## Arquitectura
+
+CRMVoice separa la interfaz, la capa HTTP, la lógica de negocio, la interpretación mediante IA y el acceso a datos.
+
+```text
+┌─────────────────────────────┐
+│       Flutter Web App       │
+│                             │
+│ CRM · Voice · Chat IA · UI  │
+└──────────────┬──────────────┘
+               │ REST / JWT
+               ▼
+┌─────────────────────────────┐
+│        FastAPI Backend      │
+│                             │
+│ Auth · CRM · Actions · Chat │
+└──────┬───────────┬──────────┘
+       │           │
+       │           ├──────────────► OpenAI API
+       │           │                Structured Outputs
+       │           │                Tool Calling
+       │
+       ├──────────────────────────► Whisper
+       │                            Speech-to-Text
+       │
+       ▼
+┌─────────────────────────────┐
+│           SQLite            │
+│                             │
+│ CRM · Users · Drafts · Chat │
+└─────────────────────────────┘
+```
+
+### Backend
+
+**Python + FastAPI**
+
+Responsable de:
+
+- autenticación JWT;
+- Google OAuth;
+- clientes y contactos;
+- actividades;
+- productos;
+- ventas;
+- Action Engine;
+- resolución de entidades;
+- Chat IA;
+- persistencia;
+- reglas de negocio.
+
+### Frontend
+
+**Flutter**
+
+Aplicación responsive orientada principalmente a web con:
+
+- autenticación;
+- dashboard;
+- clientes;
+- calendario;
+- actividades;
+- productos;
+- Chat IA;
+- grabación de voz;
+- revisión y confirmación de acciones.
+
+### Persistencia
+
+**SQLite**
+
+La base de datos se crea y evoluciona mediante migraciones versionadas.
+
+El fichero local de base de datos no forma parte del repositorio.
+
+---
+
+## Decisiones técnicas destacadas
+
+### IA sin acceso directo a escrituras
+
+El modelo interpreta lenguaje, pero no recibe libertad para modificar directamente la base de datos.
+
+Las escrituras pasan por servicios de negocio controlados por el backend.
+
+### Confirmación humana
+
+Una interpretación por voz nunca se convierte automáticamente en una modificación del CRM.
+
+El usuario revisa exactamente qué se va a guardar antes de confirmar.
+
+### Resolución de entidades fuera del LLM
+
+Los IDs de clientes, contactos y productos se determinan mediante lógica del backend.
+
+Esto permite representar explícitamente coincidencias aproximadas y ambigüedades en lugar de ocultarlas detrás de una respuesta generativa.
+
+### Chat IA read-only
+
+El asistente utiliza una lista blanca de herramientas.
+
+El backend:
+
+- valida sus argumentos;
+- inyecta el usuario autenticado;
+- controla los IDs accesibles;
+- limita las llamadas;
+- ejecuta las consultas en modo de solo lectura.
+
+### Escrituras centralizadas
+
+Los formularios tradicionales y el Action Engine utilizan los mismos servicios de escritura.
+
+Las reglas de negocio no están duplicadas entre la interfaz manual y la interfaz mediante IA.
+
+---
+
+## Stack
+
+| Área | Tecnología |
+|---|---|
+| Frontend | Flutter / Dart |
+| Backend | Python / FastAPI |
+| Base de datos | SQLite |
+| ORM / acceso a datos | SQL directo + servicios de dominio |
+| Speech-to-Text | OpenAI Whisper |
+| Interpretación IA | OpenAI API |
+| Chat IA | OpenAI Tool Calling |
+| Autenticación | JWT + Google OAuth |
+| Validación backend | Pydantic |
+| Testing backend | pytest |
+| Testing frontend | flutter_test |
+| CI | GitHub Actions |
+
+---
+
+## Testing y calidad
+
+CRMVoice dispone de suites automatizadas independientes para backend y frontend.
+
+### Backend
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+Los tests utilizan una base SQLite temporal y no modifican `backend/crm.db`.
+
+Las integraciones externas como OpenAI, Google y Whisper se aíslan durante la suite.
+
+### Frontend
+
+```bash
+cd frontend
+flutter pub get
+flutter test
+flutter analyze --no-fatal-infos
+```
+
+Los tests utilizan dobles para HTTP y canales de plataforma, por lo que no requieren el backend real, Google OAuth ni acceso al micrófono.
+
+### CI
+
+GitHub Actions ejecuta automáticamente las validaciones de backend y frontend en pushes y pull requests de las ramas principales de desarrollo.
+
+El pipeline no necesita secretos ni servicios externos.
+
+---
+
+## Ejecutar CRMVoice en local
+
+### Requisitos
+
+- Python 3.11+
+- Flutter 3.38+
+- Google Chrome
+- FFmpeg
+- OpenAI API key
+
+---
+
+### 1. Backend
+
+Desde la raíz del repositorio:
 
 ```bash
 cd backend
 ```
 
-Crear el entorno virtual e instalar dependencias:
+Crear un entorno virtual:
+
+**Windows**
 
 ```bash
-# Windows (PowerShell o cmd)
 python -m venv venv
 venv\Scripts\activate
+```
 
-# macOS / Linux
+**macOS / Linux**
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
+```
 
-# Con el venv activo, en cualquier sistema:
+Instalar dependencias:
+
+```bash
 pip install -r requirements.txt
 ```
 
-La instalación descarga PyTorch (lo necesita Whisper) y ocupa en torno a 1 GB.
-En Windows y macOS, pip instala la versión solo-CPU. **En Linux**, pip instala por
-defecto la versión con CUDA (varios GB); si no tienes GPU, instala antes la versión
-solo-CPU:
+> Whisper utiliza PyTorch y su instalación completa requiere más espacio que el backend base.
+
+Crear la configuración local:
+
+**Windows**
 
 ```bash
-pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
-```
-
-Ficheros de dependencias:
-
-| Fichero | Contenido | Para qué |
-|---|---|---|
-| `requirements.txt` | `requirements-core.txt` + Whisper + PyTorch | Ejecutar el backend completo (con voz) |
-| `requirements-core.txt` | Backend sin la transcripción local | Lo incluyen los otros dos |
-| `requirements-dev.txt` | `requirements-core.txt` + pytest + httpx | Ejecutar los tests (sin Whisper ni PyTorch) |
-
-### Configuración
-
-```bash
-# Windows
 copy .env.example .env
-# macOS / Linux
+```
+
+**macOS / Linux**
+
+```bash
 cp .env.example .env
 ```
 
-Edita `backend/.env` y rellena los valores vacíos:
+Configura al menos:
 
-| Variable | Obligatoria | Descripción |
-|---|---|---|
-| `OPENAI_API_KEY` | Sí | Clave de la API de OpenAI |
-| `SECRET_KEY` | Sí | Clave aleatoria para firmar los JWT (mínimo 32 caracteres). Ver abajo cómo generarla |
-| `ALGORITHM` | Sí | Algoritmo del JWT: `HS256` (también se admiten `HS384` y `HS512`) |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Sí | Duración de la sesión en minutos, por ejemplo `60` |
-| `GOOGLE_CLIENT_ID` | No | OAuth Client ID de Google (ver [Login con Google](#login-con-google-opcional)). Sin él, `/auth/google` responde 503 |
-| `CORS_ORIGINS` | No | Orígenes permitidos, separados por comas (p. ej. `http://localhost:5000`). Sin definir, se permite cualquier origen (`*`) |
-
-Generar la `SECRET_KEY` y pegarla en `.env`:
-
-```bash
-# Windows
-python -c "import secrets; print(secrets.token_urlsafe(64))"
-# macOS / Linux
-python3 -c "import secrets; print(secrets.token_urlsafe(64))"
+```env
+OPENAI_API_KEY=...
+SECRET_KEY=...
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
 ```
 
-Si falta alguna variable obligatoria o se deja un valor de ejemplo, el backend no arranca
-y el error indica qué corregir.
+Genera una `SECRET_KEY` segura, por ejemplo:
 
-### Datos
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+```
 
-`crm.db` no está en el repositorio. Al arrancar, el backend crea las tablas y los 5 tipos
-de actividad que reconoce el análisis de voz (datos de referencia), pero no hay clientes ni
-productos: sin ellos no se puede reconocer ni guardar ninguna actividad.
+Opcionalmente pueden configurarse:
 
-Para probar la app, carga el catálogo de demostración. Todos sus datos son **ficticios**
-(empresas "Demo", personas y productos inventados):
+```env
+GOOGLE_CLIENT_ID=...
+CORS_ORIGINS=http://localhost:5000
+CRMVOICE_DB_PATH=...
+```
+
+---
+
+### 2. Datos de demostración
+
+La base de datos local no está incluida en el repositorio.
+
+Para disponer de un catálogo ficticio con el que probar CRMVoice:
 
 ```bash
 python seed_demo_data.py
 ```
 
-Crea 5 clientes, 7 contactos, 6 productos (con alias para el reconocimiento por voz) y
-8 facturas. No crea usuarios (regístrate desde la app) ni actividades. Si la base de datos
-ya tiene datos de catálogo, no modifica nada.
+Los datos generados por este script son ficticios.
 
-### Arrancar
+---
+
+### 3. Arrancar el backend
 
 ```bash
 uvicorn main:app --reload --port 8000
 ```
 
-El modelo `base` de Whisper se carga en la **primera transcripción**, no al arrancar. La
-primera vez lo descarga (~140 MB, en `~/.cache/whisper`), así que esa primera grabación
-tarda más y necesita conexión a Internet.
+Comprobación:
 
-Comprobación rápida:
-- http://127.0.0.1:8000/ping → `{"status":"ok"}`
-- http://127.0.0.1:8000/docs → documentación de la API
+```text
+http://127.0.0.1:8000/ping
+```
+
+Documentación interactiva de la API:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Whisper carga el modelo en la primera transcripción. La primera ejecución puede tardar más mientras se descarga el modelo necesario.
 
 ---
 
-## Frontend
+### 4. Frontend
 
-Todos los comandos de esta sección se ejecutan **dentro de `frontend/`**. Desde la raíz del
-repositorio (en otra terminal, con el backend arrancado):
+En otra terminal:
 
 ```bash
 cd frontend
 flutter pub get
 ```
 
-### Configuración
+Crear la configuración local:
 
-El frontend se configura al arrancar con `--dart-define`, sin editar código:
-
-| Variable | Por defecto | Descripción |
-|---|---|---|
-| `API_BASE_URL` | `http://127.0.0.1:8000` | URL del backend |
-| `GOOGLE_CLIENT_ID` | vacío | OAuth Client ID de Google. Si está vacío, no se muestra el botón de Google |
-
-La forma más cómoda es un fichero local (está en `.gitignore`):
+**Windows**
 
 ```bash
-# Windows
 copy dart_defines.example.json dart_defines.json
-# macOS / Linux
+```
+
+**macOS / Linux**
+
+```bash
 cp dart_defines.example.json dart_defines.json
 ```
 
-### Arrancar
+El frontend admite:
+
+```text
+API_BASE_URL
+GOOGLE_CLIENT_ID
+```
+
+Arrancar en Chrome:
 
 ```bash
 flutter run -d chrome --web-port 5000 --dart-define-from-file=dart_defines.json
 ```
 
-Equivalente sin fichero:
-
-```bash
-flutter run -d chrome --web-port 5000 --dart-define=API_BASE_URL=http://127.0.0.1:8000 --dart-define=GOOGLE_CLIENT_ID=TU_CLIENT_ID.apps.googleusercontent.com
-```
-
-- El puerto fijo (`--web-port 5000`) es necesario para el login con Google: Google solo
-  acepta los orígenes que tengas autorizados.
-- Los valores de `--dart-define` se aplican al compilar: si los cambias, detén
-  `flutter run` y vuelve a lanzarlo (el hot reload no los recoge).
+El puerto fijo `5000` facilita la configuración de Google OAuth durante el desarrollo.
 
 ---
 
-## Login con Google (opcional)
+## Google OAuth
 
-1. En [Google Cloud Console](https://console.cloud.google.com/) → *APIs & Services* →
-   *Credentials* → *Create credentials* → *OAuth client ID* → tipo **Web application**.
-2. En *Authorized JavaScript origins* añade el origen exacto desde el que abres la app:
-   `http://localhost:5000` (y `http://127.0.0.1:5000` si usas esa dirección; para Google
-   son orígenes distintos). No hace falta ninguna *redirect URI*.
-3. Usa el mismo Client ID en los dos lados:
-   - backend: `GOOGLE_CLIENT_ID` en `backend/.env`
-   - frontend: `GOOGLE_CLIENT_ID` en `frontend/dart_defines.json`
+Google Login es opcional. CRMVoice también permite autenticación mediante email y contraseña.
 
-El frontend envía a `/auth/google` el **ID token** de Google y el backend verifica su
-firma, emisor, caducidad y que `aud` sea tu Client ID.
+Para habilitarlo:
+
+1. Crea un OAuth Client ID de tipo **Web application** en Google Cloud.
+2. Añade como origen autorizado:
+
+```text
+http://localhost:5000
+```
+
+3. Configura el mismo `GOOGLE_CLIENT_ID` en backend y frontend.
+
+El frontend obtiene el ID token de Google y el backend valida su firma, emisor, caducidad y audiencia antes de autenticar al usuario.
 
 ---
 
-## Primer uso
+## Estructura del repositorio
 
-1. Backend y frontend arrancados, con el catálogo de demostración cargado.
-2. En la app, pestaña **Sign Up**: crea tu usuario.
-3. En Inicio, mantén pulsado el micrófono y di, por ejemplo:
-   *"Concertar reunión mañana a las 10 con Nora Quintana de Nebula para presentarle el monitor Vela 24"*.
-4. Revisa la actividad detectada y guárdala. Aparecerá en Histórico y Calendario.
+```text
+CRMVoice/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+│
+├── assets/
+│   └── screenshots/
+│
+├── backend/
+│   ├── api/                # Routers HTTP y dependencias
+│   ├── core/               # Seguridad, formatos y utilidades
+│   ├── schemas/            # Modelos Pydantic
+│   ├── services/
+│   │   ├── actions/        # Action Engine
+│   │   ├── crm_tools/      # Herramientas de consulta del CRM
+│   │   └── writes/         # Servicios centralizados de escritura
+│   ├── tests/
+│   ├── db.py
+│   ├── migrations.py
+│   ├── seed_demo_data.py
+│   └── requirements*.txt
+│
+├── frontend/
+│   ├── lib/
+│   │   ├── models/
+│   │   ├── providers/
+│   │   ├── screens/
+│   │   ├── services/
+│   │   └── widgets/
+│   ├── test/
+│   └── web/
+│
+├── LICENSE
+└── README.md
+```
 
 ---
 
-## Tests
+## Estado del proyecto
 
-### Backend (pytest)
+CRMVoice se encuentra en fase de preparación final para portfolio.
 
-Desde `backend/`. Basta con `requirements-dev.txt`: **no hacen falta Whisper, PyTorch ni
-FFmpeg** (también funciona con el venv completo de `requirements.txt`).
+### Completado
 
-```bash
-pip install -r requirements-dev.txt
-pytest
-```
+- autenticación email/password;
+- Google OAuth;
+- dashboard comercial;
+- clientes y contactos;
+- actividades;
+- calendario;
+- catálogo de productos;
+- ventas;
+- Voice Action Engine;
+- acciones mediante texto;
+- resolución determinista de entidades;
+- revisión antes de confirmar acciones;
+- Chat IA read-only;
+- diseño responsive;
+- suites automatizadas;
+- CI con GitHub Actions.
 
-La suite usa una SQLite temporal (nunca `crm.db`) y configuración ficticia (no lee
-`backend/.env`), y bloquea la red, OpenAI, Google y los imports de Whisper/PyTorch.
+### Pendiente
 
-### Frontend (Flutter)
-
-Desde `frontend/`:
-
-```bash
-flutter test
-flutter analyze --no-fatal-infos
-```
-
-Los tests no usan el backend real, Google ni el micrófono: HTTP y los canales de
-plataforma se sustituyen por dobles de prueba.
-
-Los bugs conocidos aparecen como `xfail` (backend) o como tests `skip` (frontend), con el
-comportamiento deseado. El listado está en [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
-
-### CI (GitHub Actions)
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) se ejecuta en cada push a `develop` y
-`refactor/portfolio-v2` y en los pull requests hacia `develop`:
-
-- **Backend:** Python 3.11, `pip install -r requirements-dev.txt` (comprueba que Whisper y
-  PyTorch no están instalados) y `pytest`.
-- **Frontend:** Flutter 3.41.0, `flutter pub get --enforce-lockfile`,
-  `flutter analyze --no-fatal-infos` (falla con warnings o errores, no con avisos
-  informativos) y `flutter test`.
-
-No usa secretos ni servicios externos.
+- deployment público;
+- configuración de entorno de producción;
+- demo pública controlada.
 
 ---
 
-## Problemas frecuentes
+## Origen del proyecto
 
-| Síntoma | Causa y solución |
-|---|---|
-| PowerShell no deja activar el venv ("la ejecución de scripts está deshabilitada") | Permítelo solo en esa terminal: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` y vuelve a ejecutar `venv\Scripts\activate` |
-| El backend no arranca: `Configuración del backend no válida` | Falta `backend/.env`, alguna variable o sigue un valor de ejemplo. El mensaje indica cuál; la `SECRET_KEY` se genera como se explica en [Configuración](#configuración) |
-| Aviso `FFmpeg no está en el PATH` al arrancar, o "Error enviando audio" al grabar | Instala FFmpeg y comprueba `ffmpeg -version` en la misma terminal donde arrancas el backend |
-| Al guardar una actividad: "Cliente obligatorio"; nunca se reconoce ningún cliente | La base de datos no tiene catálogo: ejecuta `python seed_demo_data.py` |
-| No aparece el botón de Google | Falta `GOOGLE_CLIENT_ID` en el frontend (`dart_defines.json` o `--dart-define`) |
-| El botón de Google da error / "origin is not allowed" | El origen (host y puerto exactos) no está autorizado en Google Cloud. Usa `--web-port 5000` y autoriza `http://localhost:5000` |
-| "Error con Google Login" | Mira el log del backend: 503 si falta `GOOGLE_CLIENT_ID` en `backend/.env`; 401 si el Client ID del backend no coincide con el del frontend |
-| Tras borrar o recrear `crm.db`, todo falla con 401 "Token inválido" | La sesión guardada es de un usuario que ya no existe: cierra sesión y vuelve a registrarte o a entrar |
-| La app no conecta con el backend | Revisa `API_BASE_URL`. Desde otro dispositivo usa la IP del PC y arranca el backend con `--host 0.0.0.0` |
+CRMVoice comenzó como mi **Trabajo de Fin de Grado en Ingeniería Informática**.
+
+El objetivo inicial era explorar cómo la interacción por voz podía reducir la fricción del registro de información comercial.
+
+Tras finalizar el TFG, el proyecto fue ampliado y refactorizado como proyecto de portfolio, incorporando una arquitectura más robusta, nuevas operaciones CRM, Action Engine, Chat IA, testing automatizado, CI y un rediseño completo de la experiencia de usuario.
 
 ---
 
-## Estructura
+## Autor
 
-```
-backend/
-  main.py              composición de la app: CORS, routers y arranque (init_db)
-  config.py            lectura de la configuración (.env)
-  env_check.py         validación de la configuración al arrancar
-  db.py                SQLite: conexión, tablas y tipos de actividad
-  migrations.py        migraciones versionadas (PRAGMA user_version)
-  api/                 capa HTTP: routers por dominio (auth, crm, activities,
-                       sales, actions, voice, chat, system), dependencias
-                       (usuario del JWT) y errores de dominio -> HTTP
-  schemas/             modelos Pydantic de peticiones y respuestas
-  core/                contraseñas (bcrypt), JWT y formatos (importes, fechas)
-  services/            lógica sin FastAPI: cuentas, catálogo, actividades,
-                       voz (Whisper, análisis de texto, fechas, entidades),
-                       herramientas CRM de solo lectura (crm_tools), chat
-                       (chat_store, chat_tools, chat_orchestrator), escrituras
-                       del CRM (writes) y Action Engine (actions)
-  seed_demo_data.py    catálogo de demostración (datos ficticios)
-  .env.example         plantilla de configuración
-  requirements*.txt    dependencias (completo / core / dev)
-  tests/               tests (pytest)
-frontend/
-  lib/                 app Flutter
-  test/                tests (flutter test)
-  web/index.html
-  dart_defines.example.json
-.github/workflows/ci.yml   CI (GitHub Actions)
-docs/KNOWN_ISSUES.md       deuda técnica conocida
-```
+**Juan Marín Escolano**
 
-### Chat IA
+Software Engineer · Computer Engineering
 
-`POST /chat` es un asistente **de solo lectura** sobre el CRM:
+GitHub: `@milionhub`
 
-1. `chat_store` carga la conversación del comercial autenticado (o la crea con el
-   primer turno; una ajena o inexistente da `404`), su cliente/contacto activo
-   revalidado y los últimos mensajes. La BD se cierra antes de llamar a OpenAI.
-2. `chat_orchestrator` ejecuta un único bucle acotado con OpenAI (tool calling con
-   esquemas estrictos): como máximo 4 llamadas al modelo, 4 herramientas por ronda,
-   8 por petición y un presupuesto de unos 30 s (orientativo, no un corte exacto: se
-   comprueba antes de cada llamada y ninguna recibe más tiempo, conexión incluida, del
-   que queda), con un solo reintento.
-3. `chat_tools` es la lista blanca: valida los argumentos con Pydantic, inyecta el
-   `salesperson_id` del JWT (el modelo nunca lo elige), solo acepta ids que el backend
-   ya conoce, ejecuta las herramientas de `crm_tools` (conexión SQLite `query_only`)
-   y recorta los resultados.
-4. El cliente/contacto activo se deriva de los resultados de las herramientas (nunca
-   del texto del modelo) y el turno se guarda en `chat_conversations` / `chat_messages`.
-   Solo los ids de resultados que llegan de verdad al modelo pasan a ser de confianza.
+---
 
-Qué entiende (G.4), siempre con datos de las herramientas y sin escribir nada en el CRM:
+## Licencia
 
-- **Fechas relativas**: hoy, mañana, ayer, esta semana, la semana pasada o la que viene
-  (semanas de lunes a domingo). El backend calcula un calendario a partir de la hora de
-  la petición (hora local del servidor) y el modelo no hace aritmética de fechas.
-- **Nombres parciales**: si un nombre no se resuelve, se buscan clientes o contactos que
-  contengan todas sus palabras ("Costa" → Diputacion Costa Verde). Con una sola
-  coincidencia se resuelve y el asistente dice cómo lo ha entendido; con varias, pregunta.
-  Las aclaraciones ("el de San Lucas") se resuelven con el historial de la conversación.
-- **Contexto de la conversación**: el cliente/contacto activo sirve para "ellos", "su" o
-  "¿y mañana?", pero no es un filtro por defecto. "En general" consulta todo sin perder el
-  contexto; "Olvida Costa" / "Volvamos a general" lo borran. Si hay un cliente activo y una
-  consulta de actividades no dice si es sobre él, el asistente pregunta en vez de adivinar
-  (`services/chat_scope.py` + una guarda en `chat_tools`).
-- **Prioridades**: `crm_rankings` con `attention` devuelve señales deterministas por cliente
-  (nunca contactado, más de 90 días sin actividad, sin actividad próxima, entre los que más
-  facturan): no es una puntuación y el asistente debe justificar cada prioridad con ellas.
-- **Productos**: actividades por producto tratado (`product_name`) y productos más tratados
-  (`product_discussed`), siempre con tus actividades.
-- **Respuestas**: primero la respuesta y después solo la evidencia relevante; distingue tus
-  actividades de la facturación total del cliente (todos los comerciales), avisa si los datos
-  son parciales o una herramienta falla, y no muestra teléfonos ni emails salvo que se pidan.
+Este proyecto está distribuido bajo la licencia [MIT](LICENSE).
 
-Petición: `{"message", "conversation_id"?}`. Respuesta: `{"type": "answer" | "error",
-"content" (Markdown), "metadata": {"active_client", "active_contact"}, "conversation_id"}`.
-
-### Escrituras y Action Engine (H.2)
-
-Todas las escrituras del CRM pasan por `services/writes` (clientes, contactos,
-actividades y ventas): validación de negocio, duplicados y coherencia cliente↔contacto
-en un solo sitio, que usan igual los formularios (`POST/PUT /clients`, `/contacts`,
-`/activities`, `/sales`, `PATCH /activities/{id}` para el estado) y el Action Engine.
-Clientes y contactos son compartidos; actividades y ventas, de cada comercial.
-
-El Action Engine (`/actions`) convierte un texto o un audio en una acción que el usuario
-confirma (crear actividad, cliente, contacto o venta):
-
-1. `POST /actions/interpret` (texto) o `/actions/interpret-audio` (Whisper): el
-   intérprete (`gpt-4o-mini`, Structured Outputs con esquema estricto) solo extrae
-   **menciones**; nunca ids ni escrituras. Lo que no es una de las cuatro acciones
-   (consultas, borrar, completar...) se rechaza sin crear nada.
-2. El resolvedor determinista (el mismo de la voz y el chat) pone los ids y marca lo
-   dudoso: parecidos visibles, ambigüedades con candidatos, conflictos sin corregir solos.
-3. Se guarda un **borrador** del comercial (id aleatorio, revisión, caduca en 30 min) que
-   se puede editar (`PATCH`, revalidado) o cancelar.
-4. `POST /actions/{id}/confirm {"revision"}` revalida contra la BD actual y escribe con
-   los servicios de escritura en la misma transacción que marca el borrador como
-   ejecutado. No acepta datos: solo la revisión vista. Confirmar dos veces no duplica.
-
-Autor: Juan Marín Escolano
+Copyright © 2026 Juan Marín Escolano.
