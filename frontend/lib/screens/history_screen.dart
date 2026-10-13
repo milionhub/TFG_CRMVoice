@@ -1,62 +1,36 @@
+// Actividades (antes «Histórico»): listado completo con filtro por estado,
+// filtros avanzados, alta, edición, cambio de estado y borrado.
+//
+// I.4.1: cabecera de página, selector de estado segmentado, acceso a
+// «Filtros», filtros activos como pastillas y una única superficie con filas
+// compactas. La fila muestra los productos asociados como metadato discreto;
+// por densidad no muestra el comentario (se ve al editar). El diálogo de
+// filtros, el menú «⋮» y los formularios mantienen su estilo hasta la fase
+// común de diálogos.
+// Internamente se conserva el nombre History*.
 import 'package:flutter/material.dart';
-import '../core/app_colors.dart';
+import '../core/design/cv_theme.dart';
+import '../core/design/cv_tokens.dart';
 import 'home_screen.dart';
-import 'calendar_screen.dart';
 import 'package:provider/provider.dart';
 import '../services/api_service.dart';
+import '../models/crm.dart';
+import '../widgets/crm/activity_form.dart';
+import '../widgets/crm/activity_list.dart';
+import '../widgets/crm/crm_ui.dart';
+import '../widgets/crm/form_shell.dart';
+import '../widgets/ui/cv_components.dart';
 
 class HistoryScreen extends StatelessWidget {
   const HistoryScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = MediaQuery.of(context).size.width < 800;
-
-    if (isMobile) {
-      return const _MobileLayoutHistory();
-    } else {
-      return const _DesktopLayoutHistory();
-    }
-  }
-}
-
-class _DesktopLayoutHistory extends StatelessWidget {
-  const _DesktopLayoutHistory();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Row(
-        children: [
-          const Sidebar(currentIndex: 1),
-          const Expanded(
-            child: SafeArea(
-              child: HistoryContent(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MobileLayoutHistory extends StatelessWidget {
-  const _MobileLayoutHistory();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      drawer: const MobileDrawer(),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        title: const Text("Histórico"),
-      ),
-      body: const SafeArea(
-        child: HistoryContent(),
-      ),
+    // Shell común (I.2): barra lateral en escritorio, cabecera + menú en móvil
+    return const AppShell(
+      currentIndex: 3,
+      title: "Actividades",
+      body: HistoryContent(),
     );
   }
 }
@@ -71,7 +45,12 @@ class HistoryContent extends StatefulWidget {
 class _HistoryContentState extends State<HistoryContent> {
 
   bool loading = true;
-  List<dynamic> activities = [];
+  String? loadError;
+  List<CrmActivity> activities = [];
+  int _request = 0;
+
+  /// Filtro por estado (Activity V2): lo aplica el backend.
+  ActivityStatus? selectedStatus;
 
   int? selectedClientId;
   int? selectedActionId;
@@ -95,42 +74,60 @@ class _HistoryContentState extends State<HistoryContent> {
   Future<void> _loadActivities() async {
 
     final api = context.read<ApiService>();
-
-    final data = await api.getActivities(
-      clientId: selectedClientId,
-      actionId: selectedActionId,
-      dateFrom: selectedRange?.start.toIso8601String().split("T").first,
-      dateTo: selectedRange?.end.toIso8601String().split("T").first,
-    );
-
-    List filtered = data;
-
-    if (selectedContactId != null) {
-      filtered = filtered.where((a) =>
-          a["contact_id"] == selectedContactId).toList();
-    }
-
-    if (selectedProductId != null) {
-
-      final productName = products.firstWhere(
-        (p) => p["id"] == selectedProductId
-      )["name"];
-
-      filtered = filtered.where((a) {
-
-        final prods = a["products"] ?? [];
-
-        return prods.any((p) =>
-            p["product_raw"] == productName);
-
-      }).toList();
-
-    }
+    final request = ++_request;
 
     setState(() {
-      activities = filtered;
-      loading = false;
+      loading = true;
+      loadError = null;
     });
+
+    try {
+      final data = await api.getActivities(
+        clientId: selectedClientId,
+        actionId: selectedActionId,
+        dateFrom: selectedRange?.start.toIso8601String().split("T").first,
+        dateTo: selectedRange?.end.toIso8601String().split("T").first,
+        status: selectedStatus?.api,
+      );
+
+      List filtered = data;
+
+      if (selectedContactId != null) {
+        filtered = filtered.where((a) =>
+            a["contact_id"] == selectedContactId).toList();
+      }
+
+      if (selectedProductId != null) {
+
+        final productName = products.firstWhere(
+          (p) => p["id"] == selectedProductId,
+          orElse: () => {"name": null},
+        )["name"];
+
+        filtered = filtered.where((a) {
+
+          final prods = a["products"] ?? [];
+
+          return prods.any((p) =>
+              p["product_id"] == selectedProductId ||
+              (productName != null && p["product_raw"] == productName));
+
+        }).toList();
+
+      }
+
+      if (!mounted || request != _request) return;
+      setState(() {
+        activities = CrmActivity.listFrom(filtered);
+        loading = false;
+      });
+    } catch (_) {
+      if (!mounted || request != _request) return;
+      setState(() {
+        loadError = "No se pudieron cargar las actividades.";
+        loading = false;
+      });
+    }
 
   }
 
@@ -150,6 +147,10 @@ class _HistoryContentState extends State<HistoryContent> {
 
   }
 
+  /// Filtros avanzados (I.6.2): mismo contenedor que los formularios —
+  /// diálogo compacto en escritorio y panel inferior en móvil. La lógica es
+  /// la de siempre: «Aplicar filtros» fija los valores y recarga; «Limpiar»
+  /// los quita y recarga sin cerrar.
   void _openFilters() {
 
     int? client = selectedClientId;
@@ -157,855 +158,485 @@ class _HistoryContentState extends State<HistoryContent> {
     int? contact = selectedContactId;
     int? product = selectedProductId;
     DateTimeRange? range = selectedRange;
+    // «Limpiar» vuelve a crear los campos para que se vean vacíos
+    var generation = 0;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
+    String rangeLabel(DateTimeRange r) =>
+        "${r.start.day}/${r.start.month}/${r.start.year} – ${r.end.day}/${r.end.month}/${r.end.year}";
 
-        return Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-
-              const Text(
-                "Filtrar actividades",
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
-                ),
+    openCrmForm<void>(
+      context,
+      sheetOnMobile: true,
+      StatefulBuilder(
+        builder: (context, setModalState) {
+          return CrmFormShell(
+            title: "Filtrar actividades",
+            maxWidth: 520,
+            leading: TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: CvColors.textSecondary,
+                minimumSize: const Size(0, 42),
+                padding: const EdgeInsets.symmetric(horizontal: CvSpace.sm),
               ),
+              onPressed: () {
 
-              const SizedBox(height: 24),
+                setModalState(() {
 
-              /// CLIENTE
-              DropdownButtonFormField<int>(
-                value: client,
-                dropdownColor: Colors.white,
-                iconEnabledColor: AppColors.primary,
-                style: const TextStyle(color: AppColors.primary),
-                decoration: const InputDecoration(labelText: "Cliente"),
-                items: clients.map<DropdownMenuItem<int>>((c) {
-                  return DropdownMenuItem(
-                    value: c["id"],
-                    child: Text(c["name"]),
-                  );
-                }).toList(),
-                onChanged: (v) async {
+                  client = null;
+                  action = null;
+                  contact = null;
+                  product = null;
+                  range = null;
+                  contacts = [];
+                  generation++;
 
-                  setModalState(() {
-                    client = v;
+                });
 
-                    /// borrar contacto anterior si cambia cliente
-                    contact = null;
+                setState(() {
 
-                    /// limpiar lista mientras carga
-                    contacts = [];
-                  });
+                  selectedClientId = null;
+                  selectedActionId = null;
+                  selectedContactId = null;
+                  selectedProductId = null;
+                  selectedRange = null;
 
-                  if (v != null) {
+                });
 
-                    final api = context.read<ApiService>();
-                    final cs = await api.getContacts(clientId: v);
+                _loadActivities();
 
-                    setModalState(() {
-                      contacts = cs;
-                    });
-
-                  }
-
-                },
+              },
+              child: const Text("Limpiar"),
             ),
+            actions: [
+              CvPrimaryButton(
+                label: "Aplicar filtros",
+                onPressed: () {
 
-              const SizedBox(height: 16),
-
-              /// CONTACTO
-              DropdownButtonFormField<int>(
-                value: contact,
-                dropdownColor: Colors.white,
-                iconEnabledColor: AppColors.primary,
-                style: const TextStyle(color: AppColors.primary),
-                decoration: const InputDecoration(labelText: "Contacto"),
-                items: contacts.map<DropdownMenuItem<int>>((c) {
-                  return DropdownMenuItem(
-                    value: c["id"],
-                    child: Text(c["name"]),
-                  );
-                }).toList(),
-                onChanged: client == null ? null : (v) {
-                  setModalState(() {
-                    contact = v;
+                  setState(() {
+                    selectedClientId = client;
+                    selectedActionId = action;
+                    selectedContactId = contact;
+                    selectedProductId = product;
+                    selectedRange = range;
                   });
-                },
-              ),
 
-              const SizedBox(height: 16),
-
-              /// ACCIÓN
-              DropdownButtonFormField<int>(
-                value: action,
-                dropdownColor: Colors.white,
-                iconEnabledColor: AppColors.primary,
-                style: const TextStyle(color: AppColors.primary),
-                decoration: const InputDecoration(labelText: "Acción"),
-                items: actions.map<DropdownMenuItem<int>>((a) {
-                  return DropdownMenuItem(
-                    value: a["id"],
-                    child: Text(a["name"]),
-                  );
-                }).toList(),
-                onChanged: (v) {
-                  action = v;
-                },
-              ),
-
-              const SizedBox(height: 16),
-
-              /// PRODUCTO
-              DropdownButtonFormField<int>(
-                value: product,
-                dropdownColor: Colors.white,
-                iconEnabledColor: AppColors.primary,
-                style: const TextStyle(color: AppColors.primary),
-                decoration: const InputDecoration(labelText: "Producto"),
-                items: products.map<DropdownMenuItem<int>>((p) {
-                  return DropdownMenuItem(
-                    value: p["id"],
-                    child: Text(p["name"]),
-                  );
-                }).toList(),
-                onChanged: (v) {
-                  product = v;
-                },
-              ),
-
-              const SizedBox(height: 20),
-
-              /// FECHAS
-              ElevatedButton.icon(
-                icon: const Icon(Icons.date_range),
-                label: const Text("Seleccionar rango de fechas"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () async {
-
-                  final r = await showDateRangePicker(
-                    context: context,
-                    firstDate: DateTime(2020),
-                    lastDate: DateTime(2030),
-
-                    builder: (context, child) {
-
-                      return Theme(
-
-                        data: ThemeData.light().copyWith(
-
-                          colorScheme: const ColorScheme.light(
-                            primary: AppColors.primary,
-                            onPrimary: Colors.white,
-                            surface: Colors.white,
-                            onSurface: Colors.black,
-                          ),
-
-                          dialogBackgroundColor: Colors.white,
-                          scaffoldBackgroundColor: Colors.white,
-
-                          textTheme: const TextTheme(
-                            bodyMedium: TextStyle(color: Colors.black),
-                            bodyLarge: TextStyle(color: Colors.black),
-                          ),
-
-                          textButtonTheme: TextButtonThemeData(
-                            style: TextButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                            ),
-                          ),
-
-                        ),
-
-                        child: child!,
-
-                      );
-
-                    },
-                  );
-
-                  if (r != null) {
-                    range = r;
-                  }
+                  Navigator.pop(context);
+                  _loadActivities();
 
                 },
               ),
-
-              const SizedBox(height: 28),
-
-              /// BOTONES
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-
-                  TextButton(
-                    onPressed: () {
-
-                      setModalState(() {
-
-                        client = null;
-                        action = null;
-                        contact = null;
-                        product = null;
-                        range = null;
-                        contacts = []; 
-
-                      });
-
-                      setState(() {
-
-                        selectedClientId = null;
-                        selectedActionId = null;
-                        selectedContactId = null;
-                        selectedProductId = null;
-                        selectedRange = null;
-                      
-
-                      });
-
-
-                      _loadActivities();
-
-                    },
-                    child: const Text(
-                      "Limpiar",
-                      style: TextStyle(color: AppColors.textSecondary),
-                    ),
-                  ),
-
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                    onPressed: () {
-
-                      setState(() {
-                        selectedClientId = client;
-                        selectedActionId = action;
-                        selectedContactId = contact;
-                        selectedProductId = product;
-                        selectedRange = range;
-                      });
-
-                      Navigator.pop(context);
-                      _loadActivities();
-
-                    },
-                    child: const Text("Aplicar"),
-                  ),
-
-                ],
-              ),
-
-              const SizedBox(height: 10),
-
             ],
-          ),
-        );
+            body: FormSections(
+              key: ValueKey('filters-$generation'),
+              children: [
+                FormSection(
+                  title: "Cliente y contacto",
+                  children: [
+                    /// CLIENTE
+                    DropdownButtonFormField<int>(
+                      initialValue: client,
+                      isExpanded: true,
+                      icon: cvSelectChevron,
+                      decoration: const InputDecoration(
+                        labelText: "Cliente",
+                        prefixIcon: Icon(Icons.business_outlined),
+                      ),
+                      items: clients.map<DropdownMenuItem<int>>((c) {
+                        return DropdownMenuItem(
+                          value: c["id"],
+                          child: Text(c["name"], overflow: TextOverflow.ellipsis),
+                        );
+                      }).toList(),
+                      onChanged: (v) async {
 
-      },
-        
+                        setModalState(() {
+                          client = v;
+
+                          /// borrar contacto anterior si cambia cliente
+                          contact = null;
+
+                          /// limpiar lista mientras carga
+                          contacts = [];
+                        });
+
+                        if (v != null) {
+
+                          final api = context.read<ApiService>();
+                          final cs = await api.getContacts(clientId: v);
+
+                          setModalState(() {
+                            contacts = cs;
+                          });
+
+                        }
+
+                      },
+                    ),
+
+                    /// CONTACTO
+                    DropdownButtonFormField<int>(
+                      key: ValueKey('filter-contact-$client-${contacts.length}'),
+                      initialValue: contact,
+                      isExpanded: true,
+                      icon: cvSelectChevron,
+                      decoration: InputDecoration(
+                        labelText: "Contacto",
+                        prefixIcon: const Icon(Icons.person_outline),
+                        helperText: client == null ? "Elige antes el cliente" : null,
+                      ),
+                      items: contacts.map<DropdownMenuItem<int>>((c) {
+                        return DropdownMenuItem(
+                          value: c["id"],
+                          child: Text(c["name"], overflow: TextOverflow.ellipsis),
+                        );
+                      }).toList(),
+                      onChanged: client == null ? null : (v) {
+                        setModalState(() {
+                          contact = v;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                FormSection(
+                  title: "Actividad",
+                  children: [
+                    /// ACCIÓN
+                    DropdownButtonFormField<int>(
+                      initialValue: action,
+                      isExpanded: true,
+                      icon: cvSelectChevron,
+                      decoration: const InputDecoration(
+                        labelText: "Acción",
+                        prefixIcon: Icon(Icons.flash_on_outlined),
+                      ),
+                      items: actions.map<DropdownMenuItem<int>>((a) {
+                        return DropdownMenuItem(
+                          value: a["id"],
+                          child: Text(a["name"], overflow: TextOverflow.ellipsis),
+                        );
+                      }).toList(),
+                      onChanged: (v) {
+                        action = v;
+                      },
+                    ),
+
+                    /// PRODUCTO
+                    DropdownButtonFormField<int>(
+                      initialValue: product,
+                      isExpanded: true,
+                      icon: cvSelectChevron,
+                      decoration: const InputDecoration(
+                        labelText: "Producto",
+                        prefixIcon: Icon(Icons.inventory_2_outlined),
+                      ),
+                      items: products.map<DropdownMenuItem<int>>((p) {
+                        return DropdownMenuItem(
+                          value: p["id"],
+                          child: Text(p["name"], overflow: TextOverflow.ellipsis),
+                        );
+                      }).toList(),
+                      onChanged: (v) {
+                        product = v;
+                      },
+                    ),
+
+                    /// FECHAS
+                    TapField(
+                      key: const Key('filter-range-field'),
+                      label: "Rango de fechas",
+                      value: range == null ? null : rangeLabel(range!),
+                      placeholder: "Cualquier fecha",
+                      icon: Icons.date_range_outlined,
+                      onTap: () async {
+
+                        final r = await showDateRangePicker(
+                          context: context,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2030),
+                          initialDateRange: range,
+                        );
+
+                        if (r != null) {
+                          setModalState(() => range = r);
+                        }
+
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
-      
-  });
+  }
+
+  String _chipLabel(List<dynamic> items, int id) {
+    final match = items.where((i) => i["id"] == id);
+    return match.isEmpty ? "#$id" : "${match.first["name"]}";
+  }
+
+  int get _activeFilterCount => [
+        selectedClientId,
+        selectedActionId,
+        selectedContactId,
+        selectedProductId,
+        selectedRange,
+      ].where((f) => f != null).length;
+
+  void _selectStatus(ActivityStatus? status) {
+    if (selectedStatus == status) return;
+    setState(() => selectedStatus = status);
+    _loadActivities();
+  }
+
+  /// Quita estado y filtros avanzados (lo mismo que «Limpiar» del diálogo).
+  void _clearAllFilters() {
+    setState(() {
+      selectedStatus = null;
+      selectedClientId = null;
+      selectedActionId = null;
+      selectedContactId = null;
+      selectedProductId = null;
+      selectedRange = null;
+    });
+    _loadActivities();
   }
 
   @override
   Widget build(BuildContext context) {
+    return CrmTheme(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final insets = CvPageBody.insets(constraints.maxWidth);
+          final compact = constraints.maxWidth < CvBreakpoints.tablet;
+          return RefreshIndicator(
+            onRefresh: _loadActivities,
+            color: CvColors.primaryDark,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(insets.left, insets.top, insets.right, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        CvPageHeader(
+                          title: "Actividades",
+                          subtitle: "Gestiona y consulta toda tu actividad comercial.",
+                          action: _headerActions(compact),
+                        ),
+                        const SizedBox(height: CvSpace.xl),
+                        _toolbar(compact),
+                        if (_activeFilterCount > 0) ...[
+                          const SizedBox(height: CvSpace.sm),
+                          _activeFilters(),
+                        ],
+                        const SizedBox(height: CvSpace.lg),
+                      ],
+                    ),
+                  ),
+                ),
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(insets.left, 0, insets.right, insets.bottom),
+                  sliver: _body(),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
 
-    return Column(
+  /// «Nueva actividad» es la acción principal; «Actualizar» queda discreta
+  /// (en móvil basta con deslizar hacia abajo).
+  Widget _headerActions(bool compact) {
+    final create = CvPrimaryButton(label: "Nueva actividad", icon: Icons.add_rounded, onPressed: _createActivity);
+    if (compact) return create;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-
-        /// HEADER
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "Histórico CRM",
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    "Registro completo de actividades",
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-
-              Row(
-                children: [
-
-                   IconButton(
-                      icon: const Icon(Icons.filter_alt_outlined),
-                      onPressed: _openFilters,
-                    ),
-
-                  IconButton(
-                    icon: const Icon(Icons.refresh),
-                    onPressed: () {
-                      setState(() {
-                        loading = true;
-                      });
-                      _loadActivities();
-                    },
-                  ),
-
-                ],
-              ),
-            ],
-          ),
+        IconButton(
+          tooltip: "Actualizar",
+          onPressed: _loadActivities,
+          icon: const Icon(Icons.refresh_rounded, size: 20, color: CvColors.textSecondary),
         ),
+        const SizedBox(width: CvSpace.xs),
+        create,
+      ],
+    );
+  }
 
-        if (selectedClientId != null ||
-            selectedActionId != null ||
-            selectedRange != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Wrap(
-              spacing: 8,
+  /// Estado (segmentado) y acceso a los filtros avanzados.
+  Widget _toolbar(bool compact) {
+    final count = _activeFilterCount;
+    final filters = CvSecondaryButton(
+      key: const Key('activities-filters'),
+      label: count == 0 ? "Filtros" : "Filtros ($count)",
+      icon: Icons.tune_rounded,
+      tooltip: "Filtrar actividades",
+      onPressed: _openFilters,
+    );
+    final status = ActivityStatusFilter(selected: selectedStatus, onSelected: _selectStatus);
+
+    if (compact) {
+      // Móvil: el selector ocupa todo el ancho con las cuatro opciones completas
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ActivityStatusFilter(selected: selectedStatus, onSelected: _selectStatus, expand: true),
+          const SizedBox(height: CvSpace.sm),
+          filters,
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Flexible(child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: status)),
+        const SizedBox(width: CvSpace.md),
+        filters,
+      ],
+    );
+  }
+
+  Widget _activeFilters() {
+    void remove(VoidCallback clear) {
+      setState(clear);
+      _loadActivities();
+    }
+
+    return Wrap(
+      key: const Key('active-filters'),
+      spacing: CvSpace.xs,
+      runSpacing: CvSpace.xs,
+      children: [
+        if (selectedClientId != null)
+          ActiveFilterChip(
+            label: _chipLabel(clients, selectedClientId!),
+            onRemove: () => remove(() => selectedClientId = null),
+          ),
+        if (selectedActionId != null)
+          ActiveFilterChip(
+            label: _chipLabel(actions, selectedActionId!),
+            onRemove: () => remove(() => selectedActionId = null),
+          ),
+        if (selectedRange != null)
+          ActiveFilterChip(
+            label: "${selectedRange!.start.day}/${selectedRange!.start.month} → "
+                "${selectedRange!.end.day}/${selectedRange!.end.month}",
+            onRemove: () => remove(() => selectedRange = null),
+          ),
+        if (selectedContactId != null)
+          ActiveFilterChip(
+            label: _chipLabel(contacts, selectedContactId!),
+            onRemove: () => remove(() => selectedContactId = null),
+          ),
+        if (selectedProductId != null)
+          ActiveFilterChip(
+            label: _chipLabel(products, selectedProductId!),
+            onRemove: () => remove(() => selectedProductId = null),
+          ),
+      ],
+    );
+  }
+
+  /// Estados: carga inicial, error, vacío (con o sin filtros) y listado
+  /// (al recargar se mantiene el listado con una barra de progreso fina).
+  Widget _body() {
+    if (loading && activities.isEmpty) {
+      return const SliverToBoxAdapter(
+        child: CvStatePanel(
+          icon: SizedBox.square(
+            dimension: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: CvColors.primaryDark),
+          ),
+          title: "Cargando actividades…",
+        ),
+      );
+    }
+    if (loadError != null && !loading) {
+      return SliverToBoxAdapter(
+        child: CvStatePanel(
+          icon: const Icon(Icons.cloud_off_outlined),
+          title: loadError!,
+          message: "Comprueba la conexión e inténtalo de nuevo.",
+          action: CvSecondaryButton(label: "Reintentar", icon: Icons.refresh_rounded, onPressed: _loadActivities),
+        ),
+      );
+    }
+    if (activities.isEmpty) {
+      final filtered = selectedStatus != null || _activeFilterCount > 0;
+      return SliverToBoxAdapter(
+        child: filtered
+            ? CvStatePanel(
+                icon: const Icon(Icons.filter_alt_off_outlined),
+                title: "No hay actividades con estos filtros.",
+                message: "Prueba con otro estado o quita algún filtro.",
+                action: TextButton(
+                  onPressed: _clearAllFilters,
+                  style: TextButton.styleFrom(foregroundColor: CvColors.primaryDark),
+                  child: const Text("Quitar filtros"),
+                ),
+              )
+            : const CvStatePanel(
+                icon: Icon(Icons.event_note_outlined),
+                title: "Aún no tienes actividades.",
+                message: "Registra la primera con «Nueva actividad» o por voz desde Inicio.",
+              ),
+      );
+    }
+
+    final n = activities.length;
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: CvSpace.sm),
+            child: Row(
               children: [
-
-                if (selectedClientId != null)
-                  Chip(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    label: Text(
-                      clients.firstWhere(
-                        (c) => c["id"] == selectedClientId,
-                      )["name"],
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    deleteIcon: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                    onDeleted: () {
-                      setState(() {
-                        selectedClientId = null;
-                      });
-                      _loadActivities();
-                    },
+                Text(
+                  n == 1 ? "1 actividad" : "$n actividades",
+                  key: const Key('activities-count'),
+                  style: CvText.helper.copyWith(fontSize: 13),
+                ),
+                if (loading) ...[
+                  const SizedBox(width: CvSpace.sm),
+                  const SizedBox(
+                    width: 64,
+                    child: LinearProgressIndicator(minHeight: 2, color: CvColors.primary),
                   ),
-
-                if (selectedActionId != null)
-                  Chip(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    label: Text(
-                      actions.firstWhere(
-                        (a) => a["id"] == selectedActionId,
-                      )["name"],
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    deleteIcon: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                    onDeleted: () {
-                      setState(() {
-                        selectedActionId = null;
-                      });
-                      _loadActivities();
-                    },
-                  ),
-
-                if (selectedRange != null)
-                  Chip(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    label: Text(
-                      "${selectedRange!.start.day}/${selectedRange!.start.month} → "
-                      "${selectedRange!.end.day}/${selectedRange!.end.month}",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    deleteIcon: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                    onDeleted: () {
-                      setState(() {
-                        selectedRange = null;
-                      });
-                      _loadActivities();
-                    },
-                  ),
-
-                if (selectedContactId != null)
-                  Chip(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    label: Text(
-                      contacts.firstWhere(
-                        (c) => c["id"] == selectedContactId,
-                      )["name"],
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    deleteIcon: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                    onDeleted: () {
-                      setState(() {
-                        selectedContactId = null;
-                      });
-                      _loadActivities();
-                    },
-                  ),
-
-                if (selectedProductId != null)
-                  Chip(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    label: Text(
-                      products.firstWhere(
-                        (p) => p["id"] == selectedProductId,
-                      )["name"],
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    deleteIcon: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                    onDeleted: () {
-                      setState(() {
-                        selectedProductId = null;
-                      });
-                      _loadActivities();
-                    },
-                  ),
+                ],
               ],
             ),
           ),
-
-        /// CONTENIDO
-        Expanded(
-          child: loading
-              ? const Center(child: CircularProgressIndicator())
-              : activities.isEmpty
-                  ? const Center(
-                      child: Text("No hay actividades registradas"),
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 32, vertical: 10),
-                      itemCount: activities.length,
-                      itemBuilder: (_, i) {
-                        final activity = activities[i];
-                        return ActivityHistoryCard(
-                          activity: activity,
-
-                          onEdit: () => _openEditDialog(activity),
-
-                          onDelete: () => _deleteActivity(activity),
-                        );
-                      },
-                    ),
+        ),
+        CvSliverListSurface(
+          itemCount: n,
+          itemBuilder: (context, i) {
+            final activity = activities[i];
+            return ActivityListRow(
+              key: ValueKey('activity-${activity.id}'),
+              activity: activity,
+              onEdit: () => _openEditDialog(activity),
+              onChanged: _loadActivities,
+            );
+          },
         ),
       ],
     );
   }
 
-  Future<void> _openEditDialog(Map activity) async {
-
-    final result = await showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: "Editar actividad",
-      barrierColor: Colors.black.withOpacity(0.25),
-      transitionDuration: const Duration(milliseconds: 220),
-
-      pageBuilder: (_, __, ___) {
-        return Center(
-          child: EditActivityDialog(activity: activity),
-        );
-      },
-    );
-
-    if (result == true) {
-      _loadActivities();
-    }
-
+  Future<void> _createActivity() async {
+    final outcome = await openActivityForm(context);
+    if (outcome != null && mounted) _loadActivities();
   }
 
- Future<void> _deleteActivity(Map activity) async {
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 420),
-          child: Container(
-            width: 420,
-            padding: const EdgeInsets.all(26),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.18),
-                  blurRadius: 40,
-                  offset: const Offset(0, 20),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-
-                /// TITULO
-                const Text(
-                  "Eliminar actividad",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primary,
-                  ),
-                ),
-
-                const SizedBox(height: 14),
-
-                /// TEXTO
-                const Text(
-                  "¿Seguro que quieres eliminar esta actividad?",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.black87,
-                  ),
-                ),
-
-                const SizedBox(height: 26),
-
-                /// BOTONES
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text(
-                        "Cancelar",
-                        style: TextStyle(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(width: 16),
-
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text("Eliminar"),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-          );
-
-    if (confirm == true) {
-
-      final api = context.read<ApiService>();
-
-      await api.deleteActivity(activity["id"]);
-
-      _loadActivities();
-
-    }
-  }
-}
-
-Color getActivityColor(String type) {
-  switch (type.toLowerCase()) {
-
-    case "concertar reunión":
-      return const Color(0xFF3B82F6); // Azul moderno
-
-    case "enviar presupuesto":
-      return const Color(0xFFEC4899); // Rosa elegante
-
-    case "enviar oferta":
-      return const Color(0xFFF97316); // Naranja moderno
-
-    case "registrar visita comercial":
-      return const Color(0xFFEAB308); // Amarillo sofisticado
-
-    case "realizar llamada de seguimiento":
-      return const Color(0xFF22C55E); // Verde limpio
-
-    default:
-      return AppColors.primary;
-   }
-}
-
-class ActivityHistoryCard extends StatelessWidget {
-
-  final Map activity;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-
-  const ActivityHistoryCard({
-    super.key,
-    required this.activity,
-    required this.onEdit,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-
-    final type = activity["accion"] ?? "Actividad";
-    final color = getActivityColor(type);
-
-    final client = activity["cliente"] ?? "";
-    final contact = activity["contacto"] ?? "";
-
-    final date = DateTime.tryParse(activity["fecha"] ?? "");
-
-    final time = date != null
-        ? "${date.day}/${date.month}/${date.year} · "
-          "${date.hour.toString().padLeft(2,'0')}:"
-          "${date.minute.toString().padLeft(2,'0')}"
-        : "";
-
-    final products = activity["products"] ?? [];
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 18),
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 14,
-            offset: const Offset(0,6),
-          )
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          /// BARRA COLOR
-          Container(
-            width: 4,
-            height: 90,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(6),
-            ),
-          ),
-
-          const SizedBox(width: 16),
-
-          /// CONTENIDO
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-
-                /// HEADER
-                Row(
-                  children: [
-
-                    Expanded(
-                      child: Text(
-                        type,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ),
-
-                    Text(
-                      time,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
-                /// CLIENTE
-                if (client.isNotEmpty)
-                  Text(
-                    client,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                      color: Colors.black87,
-                    ),
-                  ),
-
-                /// CONTACTO
-                if (contact.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      contact,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ),
-
-                const SizedBox(height: 8),
-
-                /// PRODUCTOS
-                if (products.isNotEmpty)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: products.map<Widget>((p) {
-
-                      final name =
-                          p["product_raw"] ??
-                          p["name"] ??
-                          "";
-
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: color.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          name,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: color,
-                          ),
-                        ),
-                      );
-
-                    }).toList(),
-                  ),
-              ],
-            ),
-          ),
-
-          const SizedBox(width: 12),
-
-          /// ACCIONES
-          Column(
-            children: [
-
-              IconButton(
-                icon: const Icon(Icons.edit_outlined),
-                tooltip: "Editar",
-                onPressed: onEdit,
-              ),
-
-              IconButton(
-                icon: const Icon(Icons.delete_outline),
-                tooltip: "Eliminar",
-                onPressed: onDelete,
-              ),
-
-            ],
-          )
-        ],
-      ),
-    );
+  Future<void> _openEditDialog(CrmActivity activity) async {
+    final outcome = await openActivityForm(context, activity: activity);
+    if (outcome != null && mounted) _loadActivities();
   }
 }

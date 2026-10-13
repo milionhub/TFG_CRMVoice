@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Configuración local de --dart-define-from-file (ver dart_defines.example.json)
+/dart_defines.json
+
 # Symbolication related
 app.*.symbols
 

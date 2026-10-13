@@ -7,7 +7,21 @@
 __pycache__/
 *.pyc
 venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Variables de entorno y credenciales locales (la plantilla sí se versiona)
 .env
+.env.*
+!.env.example
+
+# Grabaciones de audio locales (pruebas manuales de voz)
+*.wav
 
 # Flutter
 **/build/
@@ -19,5 +33,8 @@ venv/
 Thumbs.db
 .DS_Store
 
-# SQLite DB
+# SQLite DB (y sus ficheros temporales -journal/-wal/-shm)
 backend/crm.db
+backend/crm.db-*
+# Copias de seguridad automáticas antes de migrar (migrations.py)
+backend/crm.db.bak-*

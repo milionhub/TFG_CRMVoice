@@ -1,0 +1,11 @@
+# Tests del backend. No incluye Whisper ni PyTorch: los tests nunca
+# transcriben audio real (Whisper se sustituye por un doble de prueba).
+#
+# Uso (desde backend/):
+#   pip install -r requirements-dev.txt
+#   pytest
+
+-r requirements-core.txt
+
+pytest==9.1.1
+httpx==0.28.1                   # lo usa fastapi.testclient.TestClient

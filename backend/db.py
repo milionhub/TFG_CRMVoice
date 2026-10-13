@@ -1,7 +1,27 @@
+import logging
+import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "crm.db"
+import migrations
+
+# Por defecto backend/crm.db. CRMVOICE_DB_PATH permite usar otra base de
+# datos (los tests la apuntan a una SQLite temporal).
+DB_PATH = Path(os.getenv("CRMVOICE_DB_PATH") or Path(__file__).parent / "crm.db")
+
+logger = logging.getLogger("crmvoice")
+
+# Datos de referencia (no de demostración): los tipos de actividad que el
+# Action Engine sabe interpretar. Si se cambia uno, cambiar también
+# schemas.actions.ActivityTypeName (un test comprueba que coinciden).
+ACTIVITY_TYPES = (
+    "Concertar reunión",
+    "Enviar presupuesto",
+    "Enviar oferta",
+    "Registrar visita comercial",
+    "Realizar llamada de seguimiento",
+)
 
 
 def get_connection():
@@ -11,7 +31,40 @@ def get_connection():
     return conn
 
 
-def init_db():
+@contextmanager
+def connection():
+    """
+    Conexión transaccional: commit si el bloque termina bien, rollback si
+    lanza una excepción, y cierre siempre.
+
+        with connection() as conn:
+            conn.execute(...)
+    """
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        # Si el rollback también falla, se propaga la excepción original
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception("Error haciendo rollback de la transacción")
+        raise
+    finally:
+        conn.close()
+
+
+def init_db(now=None):
+    """
+    Esquema base (versión 0: CREATE ... IF NOT EXISTS, como antes de H.2) y
+    después las migraciones versionadas pendientes (migrations.py). Seguro de
+    llamar varias veces. `now` fija la fecha de referencia de las migraciones
+    que la necesitan (tests); por defecto, la hora local actual.
+    """
+    # Antes de tocar nada: ¿es una base existente con datos? (solo esas se copian)
+    backup = migrations.needs_backup(Path(DB_PATH))
+
     conn = get_connection()
     cur = conn.cursor()
 
@@ -68,7 +121,7 @@ def init_db():
         );
     """)
 
-    # NUEVA TABLA: alias de productos
+    # Alias de productos
     cur.execute("""
         CREATE TABLE IF NOT EXISTS product_aliases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +138,15 @@ def init_db():
             accion TEXT NOT NULL UNIQUE
         );
     """)
+
+    # Idempotente: solo inserta los tipos que falten (si están todos, no escribe nada)
+    existing_types = {row[0] for row in cur.execute("SELECT accion FROM activity_types")}
+    missing_types = [(accion,) for accion in ACTIVITY_TYPES if accion not in existing_types]
+    if missing_types:
+        cur.executemany(
+            "INSERT OR IGNORE INTO activity_types (accion) VALUES (?)",
+            missing_types
+        )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS salespeople (
@@ -133,7 +195,7 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_activities_client ON activities(client_id);")
 
     # =====================================================
-    # NUEVA TABLA: RELACIÓN N:M ACTIVIDAD-PRODUCTO
+    # Relación N:M actividad-producto
     # =====================================================
 
     cur.execute("""
@@ -205,5 +267,49 @@ def init_db():
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_lines_invoice ON invoice_lines(invoice_id);")
 
+    # =====================================================
+    # CHAT (G.3): conversaciones persistentes por comercial
+    # =====================================================
+
+    # El cliente/contacto activo es estado de confianza que fija el backend
+    # a partir de resultados de herramientas; si se borra, queda en NULL.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            salesperson_id INTEGER NOT NULL,
+            active_client_id INTEGER,
+            active_contact_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (salesperson_id) REFERENCES salespeople(id) ON DELETE CASCADE,
+            FOREIGN KEY (active_client_id) REFERENCES clients(id) ON DELETE SET NULL,
+            FOREIGN KEY (active_contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_conversations_salesperson
+        ON chat_conversations(salesperson_id);
+    """)
+
+    # Solo turnos user/assistant. metadata (JSON, assistant): herramientas
+    # usadas y error; nunca copias de los resultados del CRM.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            metadata TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (conversation_id) REFERENCES chat_conversations(id) ON DELETE CASCADE
+        );
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation
+        ON chat_messages(conversation_id, id);
+    """)
+
     conn.commit()
     conn.close()
+
+    migrations.apply_migrations(Path(DB_PATH), backup=backup, now=now)
